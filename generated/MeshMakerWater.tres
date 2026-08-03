@@ -1,0 +1,7 @@
+[gd_resource type="StandardMaterial3D" format=3 uid="uid://3eqtwjrwdc64"]
+
+[resource]
+resource_name = "MeshMakerWater"
+cull_mode = 2
+albedo_color = Color(0.3491902, 0.54685426, 0.6651851, 1)
+roughness = 0.08

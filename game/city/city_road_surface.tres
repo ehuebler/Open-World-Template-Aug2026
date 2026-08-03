@@ -1,0 +1,33 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_surface.gdshader" id="1_surface"]
+
+; Every paved surface in Vacationer's Landing: carriageways, footways, junction
+; pads, viaduct decks and their piers. One material for the lot, because the
+; tone of each is a vertex colour rather than a parameter — see CityLayout's
+; ASPHALT, PAVING, DECK and PIER.
+;
+; The region wheel is switched off. It is what gives the planet its bands of
+; hue, and concrete that picks up a rainbow is not grey concrete.
+
+[resource]
+resource_name = "CityRoadSurface"
+shader = ExtResource("1_surface")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/base_uv_scale = Vector2(0.35, 0.35)
+shader_parameter/use_vertex_color = true
+shader_parameter/saturation = 0.85
+shader_parameter/brightness = 1.0
+shader_parameter/roughness = 0.88
+shader_parameter/metallic = 0.0
+shader_parameter/specular = 0.18
+shader_parameter/roughness_variation = 0.3
+shader_parameter/detail_scale = 3.2
+shader_parameter/detail_amount = 0.1
+shader_parameter/bump_scale = 14.0
+shader_parameter/bump_strength = 0.12
+shader_parameter/macro_scale = 0.3
+shader_parameter/macro_amount = 0.14
+shader_parameter/region_albedo = 0.0
+shader_parameter/region_sheen = 0.0
+shader_parameter/region_rim = 0.05

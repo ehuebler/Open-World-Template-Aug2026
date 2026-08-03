@@ -1,0 +1,9 @@
+[gd_resource type="ShaderMaterial" load_steps=3 format=3]
+
+[ext_resource type="Shader" path="res://shaders/pencil/pencil_surface.gdshader" id="1_surface"]
+[ext_resource type="ShaderMaterial" path="res://shaders/pencil/outline_passes.tres" id="2_outlines"]
+
+[resource]
+resource_name = "Pencil"
+next_pass = ExtResource("2_outlines")
+shader = ExtResource("1_surface")

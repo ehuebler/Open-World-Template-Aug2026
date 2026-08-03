@@ -1,0 +1,49 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://ca6j3jpxgkqxi"]
+
+[ext_resource type="Shader" uid="uid://bnyqv30g6rbg1" path="res://shaders/vivid/vivid_water.gdshader" id="1_water"]
+
+[resource]
+resource_name = "PlanetWater"
+render_priority = 0
+shader = ExtResource("1_water")
+shader_parameter/deep_color = Color(0.03, 0.16, 0.38, 1)
+shader_parameter/shallow_color = Color(0.1, 0.48, 0.6, 1)
+shader_parameter/water_alpha = 0.72
+shader_parameter/fresnel_power = 4.0
+shader_parameter/glint_sharpness = 180.0
+shader_parameter/glint_strength = 2.4
+shader_parameter/ripple_scale = 0.35
+shader_parameter/ripple_speed = 0.7
+shader_parameter/ripple_strength = 0.0
+shader_parameter/ripple_near = 80.0
+shader_parameter/ripple_far = 500.0
+shader_parameter/region_tint = 0.0
+shader_parameter/night_light = 0.14
+shader_parameter/swell_height = 0.55
+shader_parameter/swell_length = 24.0
+shader_parameter/swell_speed = 0.85
+shader_parameter/swell_near = 500.0
+shader_parameter/swell_far = 3000.0
+shader_parameter/caustic_scale = 0.25
+shader_parameter/caustic_speed = 0.6
+shader_parameter/twinkle = 3.2
+shader_parameter/underlight = 0.55
+shader_parameter/caustic_near = 60.0
+shader_parameter/caustic_far = 700.0
+shader_parameter/floe_edge = 0.9
+shader_parameter/floe_solid = 0.99
+shader_parameter/foam_color = Color(0.93, 0.97, 1, 1)
+shader_parameter/surf_strength = 1.0
+shader_parameter/wash_depth = 0.6
+shader_parameter/break_depth = 3.5
+shader_parameter/wave_spacing = 0.9
+shader_parameter/crest_width = 0.35
+shader_parameter/surf_speed = 0.22
+shader_parameter/surf_mottle = 0.45
+shader_parameter/surf_mottle_scale = 0.02
+shader_parameter/crest_near = 120.0
+shader_parameter/crest_far = 700.0
+shader_parameter/surf_near = 600.0
+shader_parameter/surf_far = 2500.0
+shader_parameter/surf_caustic = 0.7
+shader_parameter/surf_swell = 0.6

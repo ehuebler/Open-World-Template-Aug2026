@@ -1,0 +1,7 @@
+[gd_resource type="StandardMaterial3D" format=3 uid="uid://ciexiwct0qscs"]
+
+[resource]
+resource_name = "MeshMakerSurface"
+cull_mode = 2
+vertex_color_use_as_albedo = true
+roughness = 0.9

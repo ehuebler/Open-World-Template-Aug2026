@@ -1,0 +1,46 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_surface.gdshader" id="1_surface"]
+
+; The template SurfaceSkin copies per imported mesh surface, with that surface's
+; albedo colour and texture written over the top.
+;
+; Every one of the shader's manufactured-relief terms is off here, and that is
+; the point. They exist to keep a large flat-albedo panel from reading as
+; plastic, and they earn it on a wall — but the noise scales are cycles per metre
+; and a body is 1.45 m tall, so on a character the macro field is blotches the
+; size of a torso, the bump is centimetre lumps over a face, and the roughness
+; variation breaks every highlight into patches. Together they read as unfired
+; clay. A character is small, close, and almost always moving, which is what
+; gives it shape instead; it does not need relief invented for it.
+;
+; The wardrobe station is the one prop borrowing this, and it is flat-albedo and
+; clean rather than lumpy for the same reason. A prop that does want relief
+; should carry its own material, not turn these back on here.
+
+[resource]
+resource_name = "PlayerSuitVivid"
+shader = ExtResource("1_surface")
+shader_parameter/base_color = Color(0.85, 0.86, 0.87, 1)
+shader_parameter/base_uv_scale = Vector2(1, 1)
+shader_parameter/use_vertex_color = false
+shader_parameter/saturation = 1.3
+shader_parameter/brightness = 1.0
+shader_parameter/roughness = 0.62
+shader_parameter/metallic = 0.0
+shader_parameter/specular = 0.5
+shader_parameter/roughness_variation = 0.0
+shader_parameter/texture_relief = 0.0
+shader_parameter/relief_width = 1.5
+shader_parameter/detail_scale = 14.0
+shader_parameter/detail_amount = 0.0
+shader_parameter/bump_scale = 22.0
+shader_parameter/bump_strength = 0.0
+shader_parameter/macro_scale = 1.6
+shader_parameter/macro_amount = 0.0
+shader_parameter/detail_near = 6.0
+shader_parameter/detail_far = 26.0
+shader_parameter/region_albedo = 0.3
+shader_parameter/region_sheen = 0.4
+shader_parameter/region_rim = 0.45
+shader_parameter/emission_energy = 0.0

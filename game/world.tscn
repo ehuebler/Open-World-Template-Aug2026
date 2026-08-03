@@ -1,0 +1,240 @@
+[gd_scene format=3 uid="uid://b3ewv22uo3dq8"]
+
+[ext_resource type="Script" uid="uid://bmg3lchftaqya" path="res://game/world.gd" id="1_world"]
+[ext_resource type="Theme" uid="uid://doqmws24gmodf" path="res://ui/themes/main_theme.tres" id="2_theme"]
+[ext_resource type="Shader" uid="uid://7m3l1iy781o6" path="res://shaders/vivid/vivid_space.gdshader" id="4_space"]
+[ext_resource type="Script" uid="uid://cu1df0e0ghlru" path="res://game/planet/planet.gd" id="5_planet"]
+[ext_resource type="PackedScene" uid="uid://dtw7sv6v54iii" path="res://generated/rainbowscraper.glb" id="6_ibklf"]
+[ext_resource type="Script" uid="uid://camcec60nn5bi" path="res://game/planet/planet_shape.gd" id="6_shape"]
+[ext_resource type="PackedScene" uid="uid://d0d5q625rjxs4" path="res://generated/floating-island-mossy-with-cobble-stone.glb" id="7_6ib04"]
+[ext_resource type="Script" uid="uid://bfw3ak0dy0xh1" path="res://game/planet/surface_anchor.gd" id="7_anchor"]
+[ext_resource type="Script" uid="uid://cxyl1llbkxjek" path="res://game/city/city_builder.gd" id="9_city"]
+[ext_resource type="Script" uid="uid://pi0ekedlrp0k" path="res://game/planet/landmark.gd" id="10_landmark"]
+
+[sub_resource type="ShaderMaterial" id="SkyMaterial"]
+shader = ExtResource("4_space")
+shader_parameter/zenith_color = Color(0.07, 0.26, 0.72, 1)
+shader_parameter/horizon_color = Color(0.6, 0.84, 0.97, 1)
+shader_parameter/haze_color = Color(0.44, 0.58, 0.62, 1)
+shader_parameter/horizon_falloff = 3.4
+shader_parameter/atmosphere_height = 2400.0
+shader_parameter/sky_region_tint = 0.85
+shader_parameter/sky_region_lift = 0.2
+shader_parameter/sun_color = Color(1, 0.94, 0.82, 1)
+shader_parameter/sun_size_degrees = 1.6
+shader_parameter/sun_intensity = 2.6
+shader_parameter/sun_glow = 0.45
+shader_parameter/sun_glow_falloff = 14.0
+shader_parameter/dusk_low = -0.3
+shader_parameter/dusk_high = 0.14
+shader_parameter/night_air = 0.05
+shader_parameter/space_color = Color(0.012, 0.016, 0.038, 1)
+shader_parameter/star_brightness = 1.4
+shader_parameter/star_densities = Vector3(110, 240, 520)
+shader_parameter/star_size = 0.26
+shader_parameter/star_fill = 0.62
+shader_parameter/star_beacons = 0.055
+shader_parameter/star_haze = 0.22
+shader_parameter/star_haze_scale = 130.0
+shader_parameter/galaxy_axis = Vector3(0.32, 0.86, -0.4)
+shader_parameter/galaxy_band = 0.85
+shader_parameter/nebula_amount = 0.3
+shader_parameter/nebula_scale = 2.1
+shader_parameter/nebula_hue = 0.14
+shader_parameter/nebula_hue_spread = 0.45
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("SkyMaterial")
+process_mode = 2
+
+[sub_resource type="Environment" id="Environment_world"]
+background_mode = 2
+sky = SubResource("Sky")
+ambient_light_source = 3
+ambient_light_energy = 0.38
+reflected_light_source = 2
+tonemap_mode = 3
+tonemap_white = 2.0
+glow_enabled = true
+glow_intensity = 0.7
+glow_hdr_threshold = 0.95
+
+[sub_resource type="Resource" id="PlanetShape_world"]
+script = ExtResource("6_shape")
+
+[node name="World" type="Node3D" unique_id=111020355]
+script = ExtResource("1_world")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=876704567]
+environment = SubResource("Environment_world")
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=1310562230]
+; The same sun, in the other hemisphere's summer. It was 17.3 degrees south of
+; the equator, and the pole's horizon *is* the equatorial plane, so the arctic sat
+; in permanent polar night: a black disc from orbit and a blue dusk on the ground,
+; however white PlanetShape painted it. Mirrored rather than raised, so the sun is
+; exactly as high as the rest of the world was lit and tuned under — only its
+; declination changed sign. `dev/_arctic_test.gd` reports the angle.
+;
+; Godot writes a Transform3D's basis as **rows**, so the declination is the third
+; number of the second triple and not of the third. Two attempts at this went the
+; wrong way for want of knowing that.
+transform = Transform3D(0.92202, -0.11511, 0.3695, 0, 0.95466, 0.29744, -0.38701, -0.27425, 0.8803, 0, 0, 0)
+light_color = Color(1, 0.96, 0.9, 1)
+light_energy = 1.05
+; How far the shadow lookup steps along the surface normal before reading the
+; map, in texels of whichever cascade it lands in.
+;
+; The engine default of 2 is set for rooms and props. The smallest thing here is
+; the player, and it is the one thing in the game narrower than a handful of
+; shadow texels: a head is about a dozen of them across, so the depth the map
+; holds for it is a coarse staircase, and wherever the body faces the sun
+; obliquely it reads back as being behind its own recorded depth and shades
+; itself in hard black patches — the crown under the hair, the gap between an
+; arm and the ribs, the top of a boot. Flying is where it shows worst, because
+; the field of view opens to 81 degrees and every cascade widens with it, and
+; because the patches then crawl over the body as the camera moves.
+;
+; 4 is the smallest value that clears it: measured by flying past the ground and
+; differencing consecutive frames over the body, which at 2 changes across whole
+; limbs and at 4 only along the silhouette, matching a body that casts no shadow
+; at all. Going further would start pulling contact shadows off their casters,
+; and buys nothing.
+shadow_normal_bias = 4.0
+shadow_enabled = true
+shadow_blur = 0.0
+; Where the four cascades hand over, as fractions of the 150 m below. Pulling
+; the first break in from the default 0.1 spends the nearest cascade on the 5 m
+; around the camera rather than on 15 m, which is a third of the texel size over
+; the player and is what lets the bias above stay as low as 4.
+;
+; The cost is a seam where one cascade meets the next, and at 5 m that seam
+; lands about where a third-person camera is pointed, so they are blended.
+directional_shadow_split_1 = 0.035
+directional_shadow_split_2 = 0.12
+directional_shadow_split_3 = 0.4
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 150.0
+
+[node name="Planet" type="Node3D" parent="." unique_id=1088204411]
+script = ExtResource("5_planet")
+shape = SubResource("PlanetShape_world")
+; Left unset, the planet publishes no sun_direction at all and every shader that
+; wants a day/night term falls back to the value declared in project.godot —
+; which is a static guess and had the declination above already reversed under
+; it. What that bought was a game where the sea glinted, the clouds lit and the
+; air's limb glowed on the hemisphere facing away from the light, while Godot's
+; own shading of the ground got it right, so the two disagreed by a hemisphere.
+; The harnesses never saw it because each of them assigns this itself.
+sun = NodePath("../Sun")
+
+[node name="SurfaceAnchor" type="Node3D" parent="Planet" unique_id=1597429631]
+transform = Transform3D(-0.9997214, 0.023402292, 0.0030863807, 0.022417346, 0.9822242, -0.18636784, -0.007392953, -0.18624672, -0.9824752, 187.93507, 7887.876, -1495.6777)
+script = ExtResource("7_anchor")
+direction = Vector3(0.023402292, 0.9822242, -0.18624671)
+facing = -0.43113247938604743
+metadata/_custom_type_script = "uid://bfw3ak0dy0xh1"
+
+[node name="rainbowscraper" parent="Planet/SurfaceAnchor" unique_id=2140594908 instance=ExtResource("6_ibklf")]
+
+[node name="floating-island-mossy-with-cobble-stone" parent="Planet/SurfaceAnchor" unique_id=1143117164 instance=ExtResource("7_6ib04")]
+transform = Transform3D(1, 2.910383e-09, 0, 3.3760443e-09, 1, 1.4901161e-08, 4.656613e-10, -2.9802322e-08, 1.0000002, 0.59100723, 43.382324, -137.50562)
+
+; One of these per town, each naming the settlement it builds. The pads themselves
+; are the PlanetShape's, so a builder here with a name the shape does not carry
+; will say so and build nothing.
+[node name="City" type="Node3D" parent="Planet" unique_id=1704339827]
+script = ExtResource("9_city")
+site = &"landing"
+metadata/_custom_type_script = "uid://cxyl1llbkxjek"
+
+; Meridian Flats, on the sunlit plateau 38 degrees round from the Landing. It puts
+; up its own waypoints from MeridianLayout.WAYPOINTS, so there are no landmark
+; nodes for it below.
+[node name="MeridianCity" type="Node3D" parent="Planet" unique_id=1704339833]
+script = ExtResource("9_city")
+site = &"meridian"
+metadata/_custom_type_script = "uid://cxyl1llbkxjek"
+
+[node name="VacationersLanding" type="Node3D" parent="Planet" unique_id=1704339828]
+script = ExtResource("10_landmark")
+direction = Vector3(-0.2958888, -0.013925, 0.9551209)
+facing = -95.0
+title = "Vacationer's Landing"
+metadata/_custom_type_script = "uid://pi0ekedlrp0k"
+
+; The four below are places rather than built things: nothing stands at any of
+; them yet, and the marker is the whole of what is there. Their directions come
+; from dev/_waypoint_sites.gd, which searched the height field for ground that
+; is dry, out of the ice cap and low enough to be the coast it is called — the
+; exact pole and the exact antipode both land in water.
+
+; The far side, at the antipode of the spawn markers, so it is the one place the
+; planet always hides: the marker for it is only ever drawn from orbit.
+[node name="Farlands" type="Node3D" parent="Planet" unique_id=1704339829]
+script = ExtResource("10_landmark")
+direction = Vector3(0.059413, -0.0345, -0.9976372)
+title = "Farlands"
+tint = Color(0.784314, 0.752941, 0.564706, 1)
+metadata/_custom_type_script = "uid://pi0ekedlrp0k"
+
+[node name="Iceland" type="Node3D" parent="Planet" unique_id=1704339830]
+script = ExtResource("10_landmark")
+direction = Vector3(0, 1, 0)
+title = "Iceland"
+tint = Color(0.988235, 0.964706, 0.694118, 1)
+metadata/_custom_type_script = "uid://pi0ekedlrp0k"
+
+; The south pole is 13 m of open sea, and the pin is wanted on the pole rather
+; than on the nearest dry ground, so it is lifted clear of the water instead of
+; moved off it.
+[node name="Goblinworld" type="Node3D" parent="Planet" unique_id=1704339831]
+script = ExtResource("10_landmark")
+direction = Vector3(0, -1, 0)
+clearance = 24.0
+title = "Goblinworld"
+tint = Color(0.435294, 0.682353, 0.517647, 1)
+metadata/_custom_type_script = "uid://pi0ekedlrp0k"
+
+; Coast, on the hemisphere the one directional light never reaches. The planet
+; does not turn, so that is a permanent night side and not a time of day.
+[node name="Nightcity" type="Node3D" parent="Planet" unique_id=1704339832]
+script = ExtResource("10_landmark")
+direction = Vector3(-0.3330431, -0.5285, -0.7808778)
+title = "Nightcity"
+tint = Color(0.662745, 0.898039, 0.733333, 1)
+metadata/_custom_type_script = "uid://pi0ekedlrp0k"
+
+[node name="LandingSite" type="Node3D" parent="Planet" unique_id=1704339826]
+transform = Transform3D(-0.20546882, -0.8841464, -0.4196042, -0.9786637, 0.18562508, 0.088095225, -1.5051018e-08, 0.4287522, -0.9034221, -7104.485, 1491.575, 3445.203)
+script = ExtResource("7_anchor")
+direction = Vector3(-0.8841464, 0.18562508, 0.4287522)
+
+; The wardrobe station stood on the landing site. Apparel is changed from the
+; Inventory tab now and items are conjured from the Admin tab, so walking to a
+; cupboard was the only thing it added. `blender_assets/wardrobe.glb` is still
+; authored if a station is ever wanted again.
+
+[node name="SpawnPoints" type="Node3D" parent="." unique_id=1562299310]
+
+[node name="Spawn1" type="Marker3D" parent="SpawnPoints" unique_id=2116493695]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3, 17000)
+
+[node name="Spawn2" type="Marker3D" parent="SpawnPoints" unique_id=419610820]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -12, 3, 17000)
+
+[node name="Spawn3" type="Marker3D" parent="SpawnPoints" unique_id=1536631553]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12, 3, 17000)
+
+[node name="Spawn4" type="Marker3D" parent="SpawnPoints" unique_id=412251098]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -3, 17000)
+
+[node name="Spawn5" type="Marker3D" parent="SpawnPoints" unique_id=1115909841]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -12, -3, 17000)
+
+[node name="Spawn6" type="Marker3D" parent="SpawnPoints" unique_id=405611330]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12, -3, 17000)
+
+; The pause overlay stood here. Escape now opens GameMenu on its Settings tab,
+; which carries LEAVE GAME, so a card of the world's own would be a second pause
+; screen reached by the same key.

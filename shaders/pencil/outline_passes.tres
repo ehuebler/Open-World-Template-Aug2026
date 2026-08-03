@@ -1,0 +1,20 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://0ovjsyd1q7bq"]
+
+[ext_resource type="Shader" uid="uid://bvk13rs3jfkq7" path="res://shaders/pencil/sketch_outline.gdshader" id="1_outline"]
+
+[sub_resource type="ShaderMaterial" id="Outline_C"]
+resource_name = "OutlinePassC"
+render_priority = 0
+shader = ExtResource("1_outline")
+
+[sub_resource type="ShaderMaterial" id="Outline_B"]
+resource_name = "OutlinePassB"
+render_priority = 0
+next_pass = SubResource("Outline_C")
+shader = ExtResource("1_outline")
+
+[resource]
+resource_name = "OutlinePasses"
+render_priority = 0
+next_pass = SubResource("Outline_B")
+shader = ExtResource("1_outline")

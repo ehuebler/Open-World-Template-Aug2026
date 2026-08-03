@@ -1,0 +1,23 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_atmosphere.gdshader" id="1_atmosphere"]
+
+; The shell Planet raises around itself. shell_height must match the sky's
+; atmosphere_height in vivid_space.gdshader: one fades in exactly where the other
+; fades out, and a gap between them shows as a band of altitude with no air at
+; all while an overlap shows as a band with twice as much.
+;
+; render_priority puts the air last of the three transparent shells, above the
+; clouds and the sea. See planet_clouds.tres for why the order is written down
+; rather than left to Godot's own sort.
+
+[resource]
+resource_name = "PlanetAtmosphere"
+render_priority = 2
+shader = ExtResource("1_atmosphere")
+shader_parameter/glow_color = Color(0.32, 0.62, 1, 1)
+shader_parameter/glow_strength = 1.4
+shader_parameter/glow_falloff = 4.0
+shader_parameter/region_tint = 0.55
+shader_parameter/sun_side = 0.8
+shader_parameter/shell_height = 2400.0

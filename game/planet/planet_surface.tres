@@ -1,0 +1,58 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_terrain.gdshader" id="1_terrain"]
+
+; Shared by every terrain chunk. One material for the lot, because everything
+; that varies across the surface either rides on the mesh's vertices (the biome
+; colour and how wet it is) or is worked out from the planet frame in the shader
+; (which region of the colour wheel this ground sits in).
+;
+; The detail fade is set for a person on foot rather than for the screenshot
+; tour: past ~300 m one bump is smaller than a pixel, and keeping it on buys
+; shimmer at the horizon and three noise fields per pixel for the whole visible
+; hemisphere.
+
+[resource]
+resource_name = "PlanetSurfaceVivid"
+shader = ExtResource("1_terrain")
+shader_parameter/saturation = 1.5
+shader_parameter/brightness = 0.6
+shader_parameter/ground_roughness = 0.9
+shader_parameter/ground_specular = 0.16
+shader_parameter/detail_scale = 0.35
+shader_parameter/detail_amount = 0.3
+shader_parameter/macro_scale = 0.014
+shader_parameter/macro_amount = 0.4
+shader_parameter/bump_scale = 0.9
+shader_parameter/bump_strength = 0.35
+shader_parameter/detail_near = 40.0
+shader_parameter/detail_far = 300.0
+shader_parameter/macro_near = 1500.0
+shader_parameter/macro_far = 9000.0
+shader_parameter/ground_texture_scale = 0.25
+shader_parameter/ground_texture_blend = 0.0
+shader_parameter/cliff_color = Color(0.42, 0.35, 0.34, 1)
+shader_parameter/cliff_start = 0.22
+shader_parameter/cliff_end = 0.55
+shader_parameter/cliff_roughness = 0.95
+shader_parameter/water_roughness = 0.06
+shader_parameter/water_specular = 0.9
+shader_parameter/water_deep_tint = Color(0.05, 0.32, 0.62, 1)
+shader_parameter/wave_scale = 1.6
+shader_parameter/wave_strength = 0.0
+shader_parameter/wave_speed = 0.09
+shader_parameter/caustic_color = Color(0.62, 0.95, 1, 1)
+shader_parameter/caustic_scale = 0.25
+shader_parameter/caustic_speed = 0.6
+shader_parameter/caustic_strength = 0.7
+shader_parameter/caustic_depth = 14.0
+shader_parameter/caustic_near = 60.0
+shader_parameter/caustic_far = 700.0
+shader_parameter/shaft_strength = 0.8
+shader_parameter/shaft_reach = 90.0
+shader_parameter/shaft_depth = 40.0
+shader_parameter/region_albedo = 0.45
+shader_parameter/region_sheen = 0.18
+shader_parameter/sheen_falloff = 8.0
+shader_parameter/region_rim = 0.0
+shader_parameter/region_polar = 0.12

@@ -1,0 +1,144 @@
+[gd_scene load_steps=14 format=3]
+
+[ext_resource type="Script" path="res://dev/shader_lab.gd" id="1_lab"]
+[ext_resource type="Theme" path="res://ui/themes/main_theme.tres" id="2_theme"]
+[ext_resource type="PackedScene" path="res://blender_assets/cute_astronaut_player.glb" id="3_astronaut"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_prop"]
+radius = 0.9
+height = 1.8
+
+[sub_resource type="BoxMesh" id="BoxMesh_prop"]
+size = Vector3(1.6, 1.6, 1.6)
+
+[sub_resource type="TorusMesh" id="TorusMesh_prop"]
+inner_radius = 0.4
+outer_radius = 1.0
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_prop"]
+top_radius = 0.7
+bottom_radius = 0.7
+height = 1.8
+
+[sub_resource type="CapsuleMesh" id="CapsuleMesh_prop"]
+radius = 0.6
+height = 2.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor"]
+size = Vector3(26, 0.5, 26)
+
+; The shared theme leaves panels empty for the pencil shader to draw. The lab's
+; sliders sit straight on the 3D view, so they get a plain sheet behind them here.
+[sub_resource type="StyleBoxFlat" id="LabPanel"]
+bg_color = Color(0.937, 0.906, 0.835, 0.93)
+border_width_right = 2
+border_color = Color(0.184, 0.153, 0.212, 0.5)
+content_margin_left = 12.0
+content_margin_top = 12.0
+content_margin_right = 12.0
+content_margin_bottom = 12.0
+
+[sub_resource type="ProceduralSkyMaterial" id="SkyMaterial_paper"]
+sky_top_color = Color(0.94, 0.91, 0.83, 1)
+sky_horizon_color = Color(0.89, 0.86, 0.77, 1)
+sky_curve = 0.2
+ground_bottom_color = Color(0.86, 0.83, 0.74, 1)
+ground_horizon_color = Color(0.89, 0.86, 0.77, 1)
+sun_angle_max = 1.0
+sun_curve = 1.0
+
+[sub_resource type="Sky" id="Sky_paper"]
+sky_material = SubResource("SkyMaterial_paper")
+
+[sub_resource type="Environment" id="Environment_lab"]
+background_mode = 2
+sky = SubResource("Sky_paper")
+ambient_light_source = 1
+reflected_light_source = 0
+
+[node name="ShaderLab" type="Node3D"]
+script = ExtResource("1_lab")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_lab")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-42, -38, 0)
+light_color = Color(1, 0.97, 0.9, 1)
+light_energy = 1.1
+shadow_enabled = true
+shadow_blur = 0.0
+directional_shadow_max_distance = 60.0
+
+[node name="CameraRig" type="Node3D" parent="."]
+transform = Transform3D(0.939693, -0.116978, 0.321394, 0, 0.939693, 0.34202, -0.34202, -0.321394, 0.883022, 0, 1.1, 0)
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 8)
+near = 0.05
+
+[node name="Props" type="Node3D" parent="."]
+
+[node name="Sphere" type="MeshInstance3D" parent="Props"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4.6, 1, 0)
+mesh = SubResource("SphereMesh_prop")
+
+[node name="Box" type="MeshInstance3D" parent="Props"]
+transform = Transform3D(0.939693, 0, 0.34202, 0, 1, 0, -0.34202, 0, 0.939693, -2.3, 0.9, 0)
+mesh = SubResource("BoxMesh_prop")
+
+[node name="Torus" type="MeshInstance3D" parent="Props"]
+transform = Transform3D(1, 0, 0, 0, 0.766044, 0.642788, 0, -0.642788, 0.766044, 0.1, 1.1, 0)
+mesh = SubResource("TorusMesh_prop")
+
+[node name="Cylinder" type="MeshInstance3D" parent="Props"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2.4, 1, 0)
+mesh = SubResource("CylinderMesh_prop")
+
+[node name="Capsule" type="MeshInstance3D" parent="Props"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.6, 1.1, 0)
+mesh = SubResource("CapsuleMesh_prop")
+
+[node name="Floor" type="MeshInstance3D" parent="Props"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
+mesh = SubResource("BoxMesh_floor")
+
+[node name="Astronaut" parent="Props" instance=ExtResource("3_astronaut")]
+transform = Transform3D(0.906308, 0, -0.422618, 0, 1, 0, 0.422618, 0, 0.906308, 0, 0, -3.4)
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="ControlsPanel" type="PanelContainer" parent="UI"]
+anchors_preset = 9
+anchor_bottom = 1.0
+offset_right = 286.0
+grow_vertical = 2
+theme = ExtResource("2_theme")
+theme_override_styles/panel = SubResource("LabPanel")
+
+[node name="Scroll" type="ScrollContainer" parent="UI/ControlsPanel"]
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="Controls" type="VBoxContainer" parent="UI/ControlsPanel/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 6
+
+[node name="Info" type="Label" parent="UI"]
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_top = -34.0
+offset_right = -12.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_colors/font_color = Color(0.16, 0.14, 0.18, 1)
+theme_override_colors/font_shadow_color = Color(1, 1, 1, 0.6)
+theme_override_constants/shadow_offset_x = 1
+theme_override_constants/shadow_offset_y = 1
+theme_override_font_sizes/font_size = 12
+horizontal_alignment = 2

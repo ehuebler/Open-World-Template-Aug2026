@@ -1,0 +1,530 @@
+# Godot Co-op Template
+
+A reusable Godot 4.7 starter for offline play and player-hosted online co-op. It includes a responsive colored-pencil menu, persistent settings, LAN lobby discovery, direct-IP joining, a networked test world, an animated first/third person character controller, a wardrobe the character can be dressed and armed at, and text and push-to-talk voice chat.
+
+This file explains how each system works and why. `AGENTS.md` is the companion map: which file owns each concern, what to edit to change it, and how to verify the change. Start there if you are picking the project up to build something new on it.
+
+## Run it
+
+Open `project.godot` in Godot 4.7 and press **F6/F5**.
+
+- **Start Game** launches the world with an offline multiplayer peer.
+- **Online > Create Lobby** creates a public lobby or a code-protected private lobby.
+- **Online > Find Lobby** lists available sessions; select one or use Direct Connect.
+- Press **Escape** in the world to resume or leave.
+
+Controls:
+
+| Input | Action |
+| --- | --- |
+| WASD, mouse | Move and look |
+| Space | Jump, with coyote time and input buffering. Pressed again in clear air, take off and fly |
+| Shift | Sprint, or boost a flight to over 200 m/s |
+| Ctrl | Crouch, or slide when held while already moving. Brake, while flying |
+| C | Cycle first person, third person close, third person far |
+| Q | Swap the camera to the other shoulder |
+| E | Use whatever the crosshair is on, within arm's reach |
+| Tab | Open your inventory, from anywhere |
+| 1 - 5, wheel | Draw a weapon. Numbers reach any slot, the wheel only stops on filled ones |
+| Left click | Swing the sword, or fire the carbine |
+| Right click, held | Sight down the carbine's optic |
+| Enter | Type a line of chat; Enter again sends it, Escape throws it away |
+| V, held | Talk to everyone in the session |
+| Escape | Pause |
+
+While flying, the mouse is the steering: hold forward and you go wherever you are looking, including straight down, which is how a flight is ended — there is no cancel key, a flight ends where it lands. Space climbs. The controls and the current speed are on a card in the bottom-left corner for as long as the feet are off the ground.
+
+**Tab** opens your inventory anywhere: what you are wearing, a live model of it, your rack of weapons, and your pockets. At the wardrobe in the test world, **E** opens the same screen with the wardrobe's rail added to it. Drag a garment onto a body slot to put it on, or shift-click it to send it straight to the slot it belongs in. Weapons work the same way and go to the rack of five slots that the HUD bar mirrors. Hovering a tile names the item and describes it.
+
+Sensitivity, invert-Y, and FOV can be changed under **Settings > Gameplay** and are saved in `user://settings.cfg`. Ledges up to about shin height are stepped over automatically; see `step_height` in `game/player/player.gd`.
+
+## Test with two local instances
+
+1. Run one instance and select **Online > Create Lobby**.
+2. Run a second instance and select **Online > Find Lobby > Refresh**.
+3. If local broadcast discovery is blocked, use **Direct Connect** with `127.0.0.1` and port `7777`.
+
+When testing exported builds, run the executable twice. The editor can also run the project while one exported copy acts as the other peer.
+
+Windows Firewall may prompt for network access. Allow private-network UDP traffic for the game port (default `7777`) and discovery port `45454`.
+
+## Optional local headless host
+
+Godot can start a local host without navigating the menus:
+
+```powershell
+godot --headless --path . -- --server --port=7777 --max-players=8 --lobby-name="Local Test"
+```
+
+Replace `godot` with the full path to your Godot 4.7 executable if it is not on `PATH`. Stop the server with Ctrl+C. This is a testing convenience; the intended Steam topology remains player-hosted.
+
+Add `--private --lobby-code=YOURCODE` to host a private headless lobby. Lobby codes are never included in discovery metadata and are checked by the host before a player is registered.
+
+## Customize the template
+
+- UI control styling, spacing, and typography: `ui/themes/main_theme.tres`. The menus are drawn by the same colored-pencil shader as the world, so the theme deliberately leaves the styleboxes empty for the surfaces `ui/themes/pencil_surface.gd` paints; see `shaders/pencil/README.md`.
+- Menu color tokens, i.e. the surfaces and the things drawn on them: `ui/themes/ui_palette.tres`. Five colors run the whole UI: Midnight Violet `#2d1e2f` is every panel, Vanilla Custard `#fcf6b1` is the type on those panels and the ring around whatever holds focus, Sunflower Gold `#f7b32b` is the default action of a screen and the color of its headings, Celadon `#a9e5bb` is every other button, and Burnt Tangerine `#e3170a` is reserved for leaving and for failing. The remaining tones — card and row sheets, secondary and muted type — are mixes of the first two, so recoloring the UI means editing those five and letting the mixes follow. Note that `main_theme.tres` cannot read the tokens and repeats them as floats, and that it owns the tab, popup, slider, and scrollbar fills as ordinary style boxes.
+
+  The scheme is dark-surface, and it is held together by one rule: a control is never the color of the surface behind it. Panels are violet with custard type; buttons are filled with one of the bright colors and carry violet type. Hover and press shade a fill further in without changing its hue, so color says what a thing *is* and shading says what state it is in.
+- Typeface: `fonts/Barrio-Regular.ttf`, set as the theme's default font and as `[gui] theme/custom_font` so anything outside the theme matches. It is an outline stencil face imported with antialiasing, hinting, and subpixel positioning on, and it is free of any size grid: the ladder is 15–17 for captions and the dense in-game panels, 26 for body and 28 for buttons, and 32–64 for headings. It has no bold weight, so weight comes from an outline in the text's own color — a trick the theme applies to buttons and tabs and `MenuWidgets.heading()` applies to headings. Swapping in another face mostly means editing those two references, but check the sizes afterwards — cap heights differ enough between faces that a ladder tuned for one comes out visibly wrong on another.
+- Game title, drawn top left of the home screen: `title` under `[game]` in `project.godot`
+- Home screen, camera poses and the hand-over into gameplay: `ui/menu/home_screen.gd`; the forms it puts up are `ui/menu/settings_panel.gd` and `ui/menu/lobby_panel.gd`
+- Settings defaults and persistence: `core/settings_manager.gd`
+- Test world: `game/world.tscn`. The round props deliberately collide as straight-sided cylinders: art that curves in under itself overhangs the player's feet, and a capsule character wedges under that instead of sliding off it.
+- Player tuning: exported values in `game/player/player.gd`, including the whole `Flight` group
+- Items and their descriptions: `ItemDB.ITEMS` in `game/items/item_db.gd`
+- What the wardrobe starts stocked with: `STOCK` in `game/props/wardrobe_station.gd`
+- Chat pacing, length limit and scrollback: constants in `core/chat_manager.gd`; the panel's size and how long it lingers: `ui/chat/chat_hud.gd`
+- Voice bandwidth against quality: `RATE`, `PACKET_SAMPLES` and `PREBUFFER` in `core/voice_chat.gd`
+- Colored pencil material and its test bed: `shaders/pencil/README.md`
+- Player character proportions: section tables in `blender_assets/source/build_character.py`
+- Character animation: pose tables in `blender_assets/source/build_animations.py`, arms via `arm_hang`
+- How a weapon is held, and the swing: `HOLDS` and `SWING` in `game/player/weapon_pose.gd`
+
+The settings file is intentionally stored outside the project at `user://settings.cfg`. Use **Reset Defaults** to restore template values.
+
+## Flight
+
+Press space in mid-air and the character takes off: it hovers upright with one knee drawn up, steers wherever the camera is pointing, climbs on space, and winds up past 200 m/s on a held shift while the body goes over from that hover into a flat-out flying line. Ctrl hauls it back down again. `dev/_player_test.tscn -- --flight` runs the whole arc and writes each pose to `dev/captures/`.
+
+Flight is a fourth `Stance`, not a flag beside the other three. That one decision pays for most of the feature: the stance is already synced to every peer and already indexes the collider and eye-height tables, so a remote player animates and leans correctly with nothing added to the wire, and the host already knows which stance a submitted packet claims to be in. It borrows the standing capsule, which is why taking off and landing never have to ask whether there is room the way standing up out of a crouch does.
+
+Three things are worth knowing before retuning it.
+
+**The boost is a target, not an acceleration.** `_cruise` is the speed the player is asking for; `boost_time`, `ease_time` and `brake_time` move it across the whole range, and the velocity chases it with an acceleration that grows with it. Keeping the two apart is what lets the boost read as a long wind-up while a turn at 200 m/s stays a wide arc and a turn at hovering speed stays a pivot. Steering comes off the **camera's** basis rather than the body's, so looking down and holding forward is a dive; only the head pitches, so the camera's own X stays level and a strafe never rolls the flight path.
+
+**The lean is the animation.** The two clips only cover the ends; everything between them is `character.rotation.x`, driven by one smoothed `_fly_blend` that also opens the field of view and picks the clip. It turns about the hips rather than the feet, because pitching about the feet would swing the head most of a body length forward and bury the shoulders. Pointed straight up, the same formula stands the body back upright; straight down, it goes head first.
+
+**Space in clear air and space about to land are the same press.** The jump buffer exists to catch a press made just before touchdown, and a take-off would eat exactly those presses, so take-off additionally requires `TAKEOFF_CLEARANCE` of clear air below the feet. Under a metre, space is still asking to jump on landing. `dev/_player_test.gd` checks both halves, because getting one right silently breaks the other.
+
+Two limits are deliberate. The host's teleport check and speed clamp are worked out from the stance in the packet, so a flying player is allowed the hundred-odd metres they can honestly cover between two 20 Hz updates — which means the ceiling on a client lying about its position is that much higher while it claims to be flying. And remote players are now dead-reckoned forward on their last known velocity for up to two packets, because sitting on a 50 ms-old position leaves a flying peer a building behind; a peer that goes quiet coasts to a stop rather than flying off on its last heading.
+
+The test world's floor is 32 m across, which a boosted flight leaves in well under a second. That is fine for trying flight out and is not a bug to fix in `player.gd` — a game that keeps the player flying wants a world with something in it to fly over.
+
+## Player character asset
+
+`blender_assets/player_character.glb` is the rigged stylised character, bare. It imports in Godot as `Node3D > CharacterRig > Skeleton3D > Character`, and garments are added under that same skeleton at runtime.
+
+- 1.45 m tall, feet on `y = 0`, faces Godot forward (`-Z`), so it can be dropped straight under a `CharacterBody3D`. The collider and eye heights in `player.gd` are derived from this height, so they need revisiting if the proportions change. Clothes deliberately do not change them: a hat is not a reason to stop fitting through a gap.
+- One continuous 20.5k-quad body skin, decimated on export. There are no separate head/arm/leg objects and no seams to hide.
+- 23 bones named to match Godot's `SkeletonProfileHumanoid` (`Hips`, `Spine`, `Chest`, `UpperChest`, `Neck`, `Head`, `Left/RightShoulder`, `UpperArm`, `LowerArm`, `Hand`, `UpperLeg`, `LowerLeg`, `Foot`, `Toes`), so retargeting and `BoneMap` work without renaming. `Root` is a transport handle and carries no weights.
+- Modelled in an A-pose with at most four bone influences per vertex.
+- One material, `CharacterBody`. `PencilSkin` gives every imported surface its own copy of `player_suit.tres` and copies that surface's albedo colour and texture into the pencil shader, so recolouring anything in Blender needs no script change. The body, its garments, the wardrobe prop and the menu's model preview all go through it.
+- The `Apparel` collection in the `.blend` is **excluded from this export**, because `build_apparel.py` writes each garment as its own `.glb` for the wardrobe to put on and take off. Exporting them into the body would weld the clothes to the character.
+- Thirteen baked clips, imported as an `AnimationPlayer` beside the rig.
+
+### Animation clips
+
+| Clip | Loops | Driven by |
+| --- | --- | --- |
+| `Idle` | yes | Standing still |
+| `Walk`, `Run` | yes | Ground speed, resampled with `speed_scale` so the feet keep up |
+| `CrouchIdle`, `CrouchWalk` | yes | Crouch stance |
+| `JumpRise`, `Fall` | rise no, fall yes | Airborne, split on the sign of vertical velocity |
+| `Land` | no | Touchdown, skipped if you land still running |
+| `Slide` | no | Slide stance; eases into the pose and holds it |
+| `Float`, `Fly` | yes | Flight stance, split on how much of the boost is in |
+| `Tread`, `Swim` | yes | Swim stance, split the same way on how fast the stroke is going |
+
+`player.gd` picks a clip from stance, speed and ground contact in `_update_animation()` and crossfades with `CLIP_BLEND`. glTF carries no loop flag, so the looping set is marked in `LOOPING_CLIPS` at load.
+
+Two of those pairs are authored **upright**, and the game pitches the whole body forward as speed builds, so in the `.blend` "up" is the direction of travel: `Fly`'s arms swept behind the hips become a pair streaming off the shoulders, and its straight legs a trailing line, the moment the body leans over. `Swim` is the same trick under water — a front crawl written vertically, which is why its arms sweep the whole way round the shoulder rather than reaching forward. That split is what makes the hover and the flight one continuum rather than two unrelated poses, and the tread and the crawl likewise: the lean carries the change, and the clips only have to be right at each end of it. Authoring either flat-out clip lying down would fight the rig's rest pose and leave nothing usable at the hovering end.
+
+The three poses the body holds at speed — `Run`, `JumpRise` and `Fly` — all sweep the arms **back**. Every one of them carried the arms forward first, which is what a body really does; the arm swing is where a third of a jump's height comes from. But at the top of that swing the palms are up and the elbows are bent, and with nothing else in the pose doing any work it reads as somebody feeling their way along a dark corridor. Arms back with the chest driven forward is the posture that says speed, and the legs then carry what separates the three: a stride, a split tuck, and a straight line. `Fly` spent a while on one arm up and one back as well, which reads at any size but dates the whole thing and is the one pose a held weapon cannot survive.
+
+The clips are authored as code in `blender_assets/source/build_animations.py`, which opens the `.blend`, replaces every action, pushes each into its own NLA track and re-exports the `.glb`:
+
+```powershell
+& $blender --background --factory-startup blender_assets/source/player_character.blend --python blender_assets/source/build_animations.py
+```
+
+Each clip is a function of cycle phase returning per-bone rotations in **world** axes (X pitch, Y roll, Z yaw) rather than bone-local ones, because bone-local axes depend on whatever roll the rig builder calculated. Crouch, land and slide depths run through `leg_fold()`, a two-link solve that folds the legs by exactly as much as the hips drop, which is what keeps the soles on the floor; changing the depth of one of those poses is a single number. `dev/_player_test.gd` measures foot bone heights across every clip so a pose that sinks the boots shows up as a number rather than needing to be spotted by eye.
+
+Arms go through `arm_hang()` for a similar reason. The rig rests in a wide A — 42 degrees out from vertical at the shoulder — so a clip that wants hands at the hips has to bring the arms most of the way down, and the forearm inherits the shoulder's part of that and would otherwise be adducted twice and end up across the body. So a pose names the angles the finished arm should read as, out from vertical and bent at the elbow, and the helper works out the rotations. It also matters that the drop is listed before the swing: rotations apply in order, and swinging an arm that is still held out sideways twists it rather than swinging it.
+
+`blender_assets/source/_arm_check.py` reports the rest angles those numbers are relative to, and, for every clip, how close the arms come to the body:
+
+```powershell
+& $blender --background --factory-startup blender_assets/source/player_character.blend --python blender_assets/source/_arm_check.py
+```
+
+It compares the deformed mesh, not the bones, so an arm that has been brought in far enough to sink into a hip is a number in the output. Every clip currently clears by at least 7 mm.
+
+### Regenerating the mesh
+
+Everything under `blender_assets/source/` is the authoring side and is hidden from Godot by a `.gdignore`. The character is generated by script rather than hand-sculpted, so proportions are edited as numbers and rebuilt:
+
+```powershell
+$blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+& $blender --background --factory-startup --python blender_assets/source/build_character.py
+& $blender --background --factory-startup blender_assets/source/player_character.blend --python blender_assets/source/render_previews.py
+```
+
+The first command rewrites `source/player_character.blend` and exports `player_character.glb`. The second writes orthographic, three-quarter, wireframe, and posed previews to `source/previews/` for eyeballing changes.
+
+### Re-exporting after editing the .blend by hand
+
+`build_character.py` **overwrites the .blend**, discarding hand edits to the mesh and every baked action with it. Use the export-only script to pick up manual edits, which reads the file and writes the `.glb` without modifying or saving anything:
+
+```powershell
+& $blender --background blender_assets/source/player_character.blend --python blender_assets/source/export_glb.py
+```
+
+Run it with the Blender version that last saved the file; opening a newer `.blend` in an older Blender drops data silently. It prints the mesh and bone counts, modifier settings, bounds, floor offset, and the object list it is about to export, so a change that would break the Godot import is visible in the output.
+
+Prefer it over Blender's **File > Export > glTF** dialog. The dialog defaults to the "Actions" animation mode, which writes nothing for the slotted actions Blender 4.4+ produces and so ships a `.glb` with no `AnimationPlayer` at all; `export_glb.py` exports the NLA tracks the clips actually live in.
+
+Silhouette lives in the section tables at the top of `build_character.py`: `TORSO`, `ARM`, `LEG`, and `BOOT` are control points holding a centre plus a width and depth radius. They are resampled along a Catmull-Rom spline, lofted into closed tubes, then fused into a single watertight surface by a voxel remesh and a relaxation pass, which is what rounds the shoulders and hips instead of leaving intersecting primitives. `source/reference.png` is the concept sketch the proportions target.
+
+Run `dev/_check_character.gd` to re-verify the export after a rebuild:
+
+```powershell
+godot --headless --path . --script dev/_check_character.gd
+```
+
+It prints the imported node tree, the bone list, the mesh bounds, and whether the character still faces `-Z`.
+
+## Wardrobe prop
+
+`blender_assets/wardrobe.glb` is the changing-room prop the apparel is meant to be picked from. It imports as `Node3D > Wardrobe`, `WardrobeDoorL`, `WardrobeDoorR` — three sibling `MeshInstance3D` nodes, no skeleton and no animation.
+
+- 1.00 m wide, 0.54 m deep, 1.88 m tall, base on `y = 0`, doors facing Godot forward (`-Z`), so it drops straight into a room and matches the character's own orientation. That is 1.3x the character's height, which is what makes it read as furniture rather than a locker.
+- Each door is a **separate object whose origin sits on its hinge line** at floor level, so swinging one is a single property set with no offset node in between. Positive `rotation.y` opens the left leaf, negative opens the right; the geometry clears the carcass at any angle because the pivot is the door's own outer front corner.
+
+```gdscript
+var wardrobe := preload("res://blender_assets/wardrobe.glb").instantiate()
+wardrobe.get_node("WardrobeDoorL").rotation.y = deg_to_rad(100.0)
+wardrobe.get_node("WardrobeDoorR").rotation.y = deg_to_rad(-100.0)
+```
+
+- Four materials (`WardrobeWood`, `WardrobeTrim`, `WardrobeInterior`, `WardrobeMetal`) so the carcass, the plinth and cornice mouldings, the lining, and the brass rail and handles can each be tinted separately. The carcass carries all four surfaces, each door carries wood and metal.
+- The interior is modelled: lining board, one shelf, and a hanging rail with 1.20 m of clear hanging height, which is enough for the character's garments to be displayed inside once the doors are open.
+- 1.4k faces across the three objects, with a 6 mm bevel on every edge and edges above 32° marked sharp, so the turned rail and handles stay round while the joinery stays crisp.
+
+Built by script like the character, so dimensions are edited as numbers at the top of `build_wardrobe.py` (`WIDTH`, `DEPTH`, `HEIGHT`, `PANEL`, the plinth and cornice heights) and rebuilt. It needs no input `.blend`:
+
+```powershell
+$blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+& $blender --background --factory-startup --python blender_assets/source/build_wardrobe.py
+& $blender --background blender_assets/source/wardrobe.blend --python blender_assets/source/render_wardrobe.py
+```
+
+The first command writes `source/wardrobe.blend` and exports `wardrobe.glb`. The second writes previews to `source/previews/`: front elevation, three-quarter, doors swung open, and `wardrobe_scale`, which imports `player_character.glb` alongside — the only reliable way to judge a prop's size against a 1.446 m character.
+
+Run `dev/_check_wardrobe.gd` after a rebuild. It prints the node tree, per-object origins and surface names, the combined bounds, and swings each door to confirm the hinge edge stays put while the leading edge travels forward:
+
+```powershell
+godot --headless --path . --script dev/_check_wardrobe.gd
+```
+
+## Wardrobe, items and getting dressed
+
+`game/props/wardrobe_station.tscn` is the prop made usable: the `.glb` above, a box collider around the carcass, and a rail stocked from `ItemDB`. Looking at it puts a prompt on the HUD, and **E** swings the doors open and puts `WardrobeScreen` on the player's HUD.
+
+Each line of HUD text — the prompt, the name of whoever you are aiming at, the camera and stance readout — is drawn on a `PencilSurface.Style.HUD` plate sized to its text, because the world behind it can be any color at all. See `shaders/pencil/README.md` for the node arrangement a plate needs.
+
+Four pieces move the clothes around, and only the last one knows anything about menus:
+
+| Script | Holds |
+| --- | --- |
+| `game/items/item_db.gd` | Every item: title, description, the slot it occupies, and its `.glb` |
+| `game/items/item_container.gd` | A run of slots holding item ids, with per-slot filters and the move rules |
+| `game/player/wardrobe.gd` | Putting a garment `.glb` onto a character's skeleton, and taking it off |
+| `ui/inventory/wardrobe_screen.gd` | The screen: tiles, drag and drop, shift-click, tooltips, and a live model |
+
+Every grid on the screen is an `ItemContainer`: the player's `equipment`, `weapons` and `backpack`, and the station's `storage`. That is what keeps equipping from being a special case. An equipment slot carries a filter naming its body slot, so it refuses a pair of shoes on the head; dropping a hat there is an ordinary move, and the player, watching its own equipment container, is what turns that into a garment on the skeleton. The same change drives the model in the menu, so the preview cannot drift from the body in the world.
+
+Where a crafting bench would go there is a rack of five weapon slots, filtered to `ItemDB.WEAPON`. It is the same container the HUD bar along the bottom of the screen shows, so a weapon dropped on the rack is on the bar without anything being copied between the two, and the numbers on the tiles are the keys that draw them.
+
+Adding a garment is an entry in `ItemDB.ITEMS` plus its `.glb`. Nothing else needs editing: the item's icon is rendered from its own mesh by `ui/inventory/item_icons.gd`, so there is no second copy of the art to keep in step, and `WardrobeStation.STOCK` decides what is on the rail at the start.
+
+Two things about the 3D bits inside a menu are worth knowing before changing them. The icons and the model preview are rendered well above the size they are drawn at and scaled down, because the outline pass measures its strokes in pixels and would otherwise ring a 44-pixel icon in strokes as thick as the garment. And neither viewport is given an `Environment`: the pencil material ignores ambient light, so the only thing one could do there is escape into the world's own lighting.
+
+Over the network, a player owns their own look: equipment changes are broadcast, other peers apply them to that player's skeleton, and a peer joining later is told what everyone has on with the rest of the world state. Container **contents** are local, so two players raiding one wardrobe each see their own copy of the rail. Shared, contested storage would need a host-owned inventory, which this template deliberately does not have yet.
+
+`dev/_wardrobe_test.gd` drives the whole thing the way a player would and photographs each step into `dev/captures/`:
+
+```powershell
+godot --path . dev/_wardrobe_test.tscn
+```
+
+It walks up to the prop, checks the prompt, opens it with the interact key, hovers a tile for its tooltip, equips by moving an item and by shift-clicking, takes a garment back off into a pocket, and confirms Escape shuts the wardrobe without also pausing the game behind it.
+
+## Weapons
+
+`blender_assets/sword.glb` and `blender_assets/laser_rifle.glb` are the two weapons. Each imports as a single `MeshInstance3D` with no skeleton and no animation. Both are held two-handed, with one hand on the grip and the other supporting.
+
+They share one mount convention, so either weapon works in either hand:
+
+| | |
+| --- | --- |
+| origin | the centre of the grip, i.e. the point that sits inside the fist |
+| `-Z` | the direction the weapon points — blade tip, muzzle |
+| `+Y` | the weapon's up — sword flat, rifle sight rail |
+
+That means a weapon parented to a hand with an identity basis points where the character faces, since `-Z` is Godot forward.
+
+- **Sword**, 0.823 m: a 0.61 m tapered blade with a hexagonal section and a drawn-out point, a brass crossguard, a waisted leather grip with four wrap ridges, and a brass pommel. 990 faces, 3 materials.
+- **Laser rifle**, 0.613 m: a 0.10 m calibre cylindrical barrel with cooling rings and glowing energy bands, a flared muzzle with an emitter lens, an underslung power cell, a sight rail and optic, and a raked pistol grip. 2014 faces, 4 materials, with the glow surfaces carrying emission.
+
+Sizes come out at 57% and 42% of the character's height, which are the same ratios a one-handed sword and a carbine have to a real person.
+
+### Fitting the hands
+
+Grips are **measured off `player_character.glb`**, not written down. `blender_assets/source/character_ref.py` finds the vertices weighted to each `Hand` bone and reports the fist's radius and where its centroid sits along the bone; grip thickness and length are ratios of that radius. Editing the character's hands and re-exporting is enough to keep the weapons fitting — there is no second copy of the character's dimensions anywhere.
+
+`game/player/weapons.gd` derives the same offset on the Godot side from the skeleton alone: the hand bone gives the direction and its rest translation gives the length. A weapon hangs off a `BoneAttachment3D` on the hand bone, so it follows the hand through every clip the body plays without its own skeleton or animations.
+
+```gdscript
+const WeaponsScript := preload("res://game/player/weapons.gd")
+WeaponsScript.dual_wield(character)                          # sword right, rifle left
+WeaponsScript.equip(character, "left", "sword")              # or one hand at a time
+WeaponsScript.unequip(character, "right")
+```
+
+`OnlinePlayer` builds its pencil materials by walking every `MeshInstance3D` under the character, so equip before that runs and weapons are shaded like the body, picking up the colours baked into their `.glb`.
+
+### Holding them
+
+A mount alone leaves a weapon pointing out of a hand that hangs at the side, because the rig's rest pose is an A-pose. The stance is not a clip: locomotion is full-body, so a hold clip would have to be authored per weapon per gait. `game/player/weapon_pose.gd` is a `SkeletonModifier3D` that solves the arms *after* the animation has been applied, which is why the same two holds work over idle, walk, run, crouch and mid-air alike.
+
+Each hold in `WeaponPose.HOLDS` is written as two points relative to the sternum — where each hand grips — and the weapon is then aimed **along the line through both hands**. That is the part worth keeping: the support hand is on the weapon by construction rather than by an angle that needs re-tuning whenever a pose moves, and a swing is just the two points travelling, with the blade following from them.
+
+The rest is bookkeeping the rig forces:
+
+- A two-link solve puts each elbow somewhere plausible, pushed away from the body by a pole vector, and clamps a target that is out of reach. Bone lengths come off the rest pose, so re-proportioning the character needs nothing changed here.
+- Targets are given in a frame that sits at the sternum and carries only what the animation *added* to it. Blender lays a bone's axes along the bone, which leaves this chest's `+X` pointing to the character's left, so targets written in the bone's own space come out mirrored.
+- A hand is turned to the rotation that lands the weapon on the aim, and solved to where its wrist has to be for its grip — not its wrist — to reach the target, using the same `GRIP_ALONG_HAND` fraction the mount uses.
+- `PITCH_FOLLOW` decides how much of the player's look angle a hold takes on: all of it for the carbine, so a shot aimed upwards does not leave a level barrel, and a quarter of it for the sword.
+
+The holds themselves: the sword is two-handed off the character's right, blade straight up, with the support hand reaching across for it, and a cut travels right to left through three keys with the torso leading. The carbine is held with the trigger hand in and the support hand forward under the barrel; sighting in raises both to the eye. Each pose's `twist` turns the chest, and because the targets ride the chest it also steers the weapon, so the twists are set to leave the carbine pointing where the character faces.
+
+Arms on this character reach about 0.385 m, which is what limits both holds: the support hand is the one that runs out of reach, and both poses sit at the edge of it.
+
+### Drawing and firing
+
+`ItemDB` carries three extra fields for a weapon — which hold takes it, whether the attack is a swing or a shot, and how many shots its cell holds — so arming the character is the same container move as putting on a hat. `OnlinePlayer.weapons` is the rack; selecting a slot equips what is in it and sets the hold, and selecting an empty slot puts the weapon away.
+
+- The **sword** cuts on left click and ignores further clicks until the swing is done. It has no hit detection: there is nothing in this template to hit yet.
+- The **carbine** fires `game/weapons/laser_bolt.gd`, which sweeps a ray over the ground it covered each frame rather than being a physics body, because a body at 74 m/s tunnels through walls. Bolts leave the muzzle but are aimed at the crosshair, so a shot lands where the player aimed instead of parallel to it. Its cell holds twelve and trickles one back every 0.85 s after a short pause, which paces the weapon without a reload key.
+- Sighting in narrows the field of view, halves mouse sensitivity, draws the crosshair in, and raises the hold.
+
+In first person the body is drawn as shadow only, but what is in the hands is not: a sword rising into view or a carbine held at the chest is most of the feedback there is. The exception is a weapon brought within 0.3 m of the eye, which is a wall of polygons rather than a weapon, so sighting in hides the model and leaves the zoom and the crosshair to say so.
+
+Over the network only the weapon **in hand** is broadcast, since nobody can see anyone else's rack, and a peer joining later is told it with the rest of the world state. Swings and shots are sent as events rather than derived from state: both are instants, and a peer that misses the packet should miss the swing rather than play it late.
+
+`dev/_weapon_test.gd` photographs every hold, the swing, and a bolt in flight into `dev/captures/`, and measures the parts that cannot be judged by eye:
+
+```powershell
+godot --path . dev/_weapon_test.tscn
+```
+
+For each pose it reports where the weapon points, how far the support hand sits off the weapon's axis, how far apart the two grips are, and the `cant` — how far off the character's facing the weapon points, which is what a rifle held across the chest shows up as. It also confirms the wheel skips empty slots, that a shot leaves along the crosshair and spends a charge, that the cell recovers, and that shift-clicking a weapon out of the wardrobe racks it. Hands are measured through `BoneAttachment3D` probes rather than `get_bone_global_pose()`, which reads a cache a frame behind the modifier that moved them.
+
+### Regenerating
+
+Both weapons and the wardrobe are built by script and share the bmesh primitives in `blender_assets/source/propkit.py`. The weapons build reads `player_character.glb`, so export the character first if you have changed it.
+
+```powershell
+$blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+& $blender --background --factory-startup --python blender_assets/source/build_weapons.py
+& $blender --background blender_assets/source/weapons.blend --python blender_assets/source/render_weapons.py
+```
+
+The first command writes `source/weapons.blend` and both `.glb` files, printing the measured fist and the grip it derived. The second writes previews to `source/previews/`: each weapon on its own, both dual wielded on the character, and `weapons_grip`, a close-up that shows the grip inside the mitten.
+
+Run `dev/_check_weapons.gd` after a rebuild:
+
+```powershell
+godot --headless --path . --script dev/_check_weapons.gd
+```
+
+It checks the surfaces and dimensions, confirms the grip it derives lands within a couple of millimetres of the fist `character_ref.py` measured, and swings each arm to confirm the weapon stays locked to the hand. It poses bones directly rather than playing a clip: an `AnimationPlayer` never applies a pose in a headless `SceneTree` script, and `Skeleton3D.get_bone_global_pose()` reads a cache that is only refreshed while processing frames, so a clip-driven check silently measures the rest pose and passes for the wrong reason.
+
+## Backpack
+
+`blender_assets/backpack.glb` is a soft-sided pack with a leather lid, a buckled closing tongue, a grab handle, side rivets and two padded shoulder straps. It imports as a single `MeshInstance3D` — 4,916 triangles, 3 materials — with no skeleton and no animation.
+
+The pack body is 0.245 m wide, 0.307 m tall and stands 0.147 m off the back, which is 21% of the character's height; the mesh as a whole is wider and deeper than that because the straps reach out to the shoulders and forward to the chest.
+
+It is a **rigid prop, not a skinned garment**. A pack does not deform, so it belongs on a bone rather than in the skin, and it uses the same convention as the weapons:
+
+| | |
+| --- | --- |
+| origin | the `UpperChest` bone, so a `BoneAttachment3D` there needs no offset of its own |
+| `-Z` | the direction the character faces, so the pack hangs off the `+Z` side |
+| `+Y` | up |
+
+Nothing in `game/` mounts it yet.
+
+### Fitting the back
+
+Every dimension is **measured off `player_character.glb`** by `character_ref.py` rather than written down, and two of those measurements are the difference between a pack that fits and one that does not.
+
+The back panel **follows the spine's contour** instead of being flat. `ray_to_surface()` casts at each cross-section and sets that section's front face on the surface it hits. A flat panel set at the deepest point of the back stands off everywhere the back is shallower, which leaves a visible gap under the shoulder blades.
+
+The straps **cross outboard of the head**. This character is a big head sitting almost straight on the body with no trapezius, so there is no gap beside the neck for a strap to pass through: the head reaches out to x ≈ 0.19 and the shoulder surface only begins at x ≈ 0.20. `shoulder_crossing()` walks outward casting downward and takes the first sharp drop, which finds that saddle. Two things follow from measuring it rather than assuming it:
+
+- Nearest-point projection is useless here — beside the head the top of the shoulder and the side of the head are nearly equidistant, so it is a coin toss which one a strap lands on. A downward ray can only hit the shoulder.
+- The pack hangs off the shoulder **surface**, not the shoulder **bone**, which sits 0.08 m below it. Placed off the bone the pack rides down by the whole difference and reads as a satchel on the mid-back.
+
+Straps are then splined through ten ray hits along the route. Fewer waypoints and the curve cuts the corner and stands off the shoulder in a loop, and the run up the back is pinned just under the shoulder's rear slope — that slope is lower than the top of the pack, so letting the strap climb to the pack's top first makes it rise, dip and rise again in a visible kink.
+
+### Regenerating
+
+```powershell
+$blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+& $blender --background --factory-startup --python blender_assets/source/build_backpack.py
+& $blender --background blender_assets/source/backpack.blend --python blender_assets/source/render_backpack.py
+```
+
+The first command writes `source/backpack.blend` and the `.glb`, printing the span it fitted, where the back surface put the front face, and where it found the shoulder crossing. The second writes previews to `source/previews/`: the pack alone, worn from three angles, and `backpack_strap`, a close-up that shows whether the strap lies on the shoulder or through it.
+
+Render scripts share the camera, world and light rig in `blender_assets/source/previewkit.py`.
+
+## Workbench
+
+`blender_assets/workbench.glb` is a joiner's bench: a thick top with a tool well along the back, a pegged backboard, a slatted lower shelf, and a face vice at one end. It imports as two `MeshInstance3D` nodes — 5,292 triangles, 4 materials — with no skeleton and no animation.
+
+| | |
+| --- | --- |
+| footprint | 1.28 m long by 0.56 m deep |
+| work surface | 0.639 m, with the backboard reaching 0.859 m |
+| origin | the centre of the footprint at floor level |
+| `-Z` | the working side you stand at, matching the other props |
+| `+Y` | up |
+
+The vice's sliding half is a second object, `WorkbenchViceJaw`, on the same convention the wardrobe's doors use: its origin sits on the screw axis where the jaws close, so Godot winds the vice open by moving it along `-Z` with no offset node in between. It is modelled 0.030 m open and has about 0.085 m of useful travel. There is no collision shape; a box per leg and one for the top is enough, and cheaper than a trimesh.
+
+Nothing in `game/` places it yet.
+
+### Bench height comes from the elbow, not the height
+
+Bench height is ergonomic rather than architectural — it is set by the arms — so scaling a real 0.90 m bench down by this character's height gets it wrong. The character is 1.447 m tall but its head is a fifth of that, which puts the shoulders at 0.68 of standing height where an adult's are at 0.82. Working from stature would stand the top near mid-chest.
+
+`character_ref.arm_drop()` measures it properly. The rest pose holds the arms out in an A-pose, about 55° below horizontal, so no arm joint's rest position is where it sits on a standing figure; the heights have to be derived by dropping the bone lengths from the shoulder. That gives a shoulder at 0.982 m, elbow at 0.722 m and wrist at 0.597 m. A general-purpose bench sits a hand's width below the elbow, so the top lands at **0.639 m** — 0.082 m under the elbow and 0.042 m over the wrist, which `workbench_scale` confirms is right where the character's hands hang.
+
+That works out at 44% of standing height where a real bench is 51%, which is the character's short arms showing up rather than a mistake.
+
+### Two things that did not work first time
+
+**The tool well's depth is not a free parameter.** It is fixed at the thickness of the top, because the trough floor has to sit flush with the underside of the slabs either side of it. Dropping the floor lower to deepen the well opens a slot running the whole length of the bench along both sides of the trough — between the floor and the slabs above it there is nothing left to bound the well with. The ends need closing separately, or three slabs and a floor leave a trough that reads as a slot sawn through the bench.
+
+**A vice made of two iron plates does not read as a vice.** Nearly shut, it renders as a black box bolted to the bench, indistinguishable from a drawer. Three changes fixed it: a wooden liner over each jaw so the colour breaks up the mass, a gap wide enough to see the screw and guide rods crossing it, and the tommy bar hung vertically rather than across the bench, where it lay over the jaw and merged with it into one dark shape.
+
+The jaws are also kept wholly below the underside of the top. Bringing them up level with the front edge, which is where a real vice sits, puts the jaw plate's faces exactly on the top's front face, and two coincident coplanar faces z-fight.
+
+### Regenerating
+
+```powershell
+$blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+& $blender --background --factory-startup --python blender_assets/source/build_workbench.py
+& $blender --background blender_assets/source/workbench.blend --python blender_assets/source/render_workbench.py
+```
+
+The first writes `source/workbench.blend` and the `.glb`, printing the arm measurements it worked from and where they put the top. The second writes previews to `source/previews/`: front, three-quarter, a high angle for the tool well and shelf, `workbench_open` with the vice wound out to check the jaw really slides along its screw, and two character shots — `workbench_scale` stands the character beside the bench for a straight height comparison and `workbench_use` puts them at it.
+
+`previewkit.Preview.ground()` provides the floor. Furniture reads as floating without one, and more to the point there is no contact shadow, which is the only cue that tells you whether the legs reach the ground.
+
+## Cave entry room
+
+`blender_assets/cave_room.glb` is an enclosed cave chamber with a tunnel mouth broken through one wall and glowing crystal clusters for light. It imports as three `MeshInstance3D` nodes and six `OmniLight3D` nodes — 18,470 triangles, 4 materials, no skeleton and no animation.
+
+| | |
+| --- | --- |
+| chamber | ~10.5 m nominal radius, bulging to 11.7 m where the rock swells; 9.6 m to the highest point of the ceiling |
+| tunnel | roughly 5 m wide by 4.7 m tall at the mouth, running 24 m out from the centre and bending as it narrows |
+| origin | the centre of the floor, so the room drops straight in at the world origin |
+| `+X` | the direction the tunnel leads |
+| `+Y` | up |
+
+The floor is uneven but deliberately kept walkable, dipping to −0.45 m and rising to about +0.5 m. **There is no collision shape** — add a trimesh collider on import, or rename the shell to `CaveRoom-col` in the build script to have Godot generate one.
+
+### Turning the rock inside out
+
+The shell is authored as a **solid volume and inverted at the end**, which is what `flip_normals` on `propkit.new_object()` is for. Carving a room out of nothing is far more awkward than modelling the rock it displaces, and it makes the tunnel a plain boolean union of two lathed volumes rather than a hole that has to be cut and stitched. The build asserts both halves of that: the shell must have zero open edges, and rays cast outward from inside must all hit faces looking back at them. Get the winding backwards and the room renders as nothing at all once backface culling is on.
+
+Displacement is a function of **position, not surface normal**. Two coincident vertices either side of the boolean seam carry different normals, so displacing along normals tears the shell open along the join. It is also applied *after* the union — displacing first gives the exact solver two noisy surfaces to intersect and it starts producing slivers.
+
+Three things had to be true before the room read as a cave rather than as a smooth dome:
+
+- **Noise frequency has to be a fraction of the room.** `mathutils.noise` has a feature size of about one unit, so a frequency of 0.085 puts the whole 21 m chamber inside a single noise feature and the displacement flattens into a uniform offset. Features of a few metres are what break up the walls.
+- **The rock has to facet.** Smoothing the shell across its own lumps turns metres of displacement into soft gradients that read as fog. A 24° smoothing angle lets the facets show.
+- **Surface noise alone is not enough.** The dripstone is what says "cave". Stalagmites and stalactites are placed by casting rays at the finished shell, so each one stands on the displaced rock instead of hovering over where a smooth dome would have been, and rays that land on a steep face are rejected rather than left sliding off the silhouette.
+
+`mathutils.noise` seeds itself from the clock and its vector variants read that seed, so an unseeded build produces a different cave every run — and because the dripstone and crystals are positioned by raycasting at the rock, they all move too. `noise.seed_set()` makes the build reproducible; three consecutive builds now agree to the last decimal place.
+
+### Keeping the hole dark and still visible
+
+The tunnel's faces keep their own near-black material through the boolean, which is what makes the passage read as dark rather than as a lit alcove, and it bends away from the chamber so none of its capped far end is ever in view.
+
+That alone is not enough to see it, though. The wall around the mouth was originally as unlit as the mouth itself, and a dark hole in dark rock is not a hole — it needs lit rock around it to read against. Two small crystal clusters flank the opening at roughly ±40°, far enough to either side that their light grazes the wall rather than reaching down the passage.
+
+The crystals are emissive, but **emission lights nothing on its own** without ray-traced GI, so each significant cluster carries a point light. Those export through `KHR_lights_punctual`, which Godot imports as real `OmniLight3D` nodes. Their energies are in the low hundreds of watts: a point light falls off as the inverse square, and lighting a 20 m chamber from 5 m away takes a few hundred watts, not the few thousand that sounds reasonable for a lamp in a small room. At 2,400 W every surface clipped to flat saturated colour and the geometry disappeared entirely.
+
+### Regenerating
+
+```powershell
+$blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
+& $blender --background --factory-startup --python blender_assets/source/build_cave.py
+& $blender --background blender_assets/source/cave_room.blend --python blender_assets/source/render_cave.py
+```
+
+The first writes `source/cave_room.blend` and the `.glb`, printing the chamber's measured size, the polygon budget per object, how much dripstone was placed, and the two shell integrity checks. The second writes previews to `source/previews/`: the chamber, the tunnel mouth from across the room, the arrival view from inside the passage, the ceiling, the crystals, and `cave_scale`, which stands the character in the room.
+
+Unlike the prop previews, `render_cave.py` sets up **no light rig** — the room's own crystals are the subject and a three-point rig would flood out the only thing worth looking at. The world is left nearly, but not quite, black: at zero, every surface the crystals do not reach renders as a flat silhouette and the dripstone in front of a glow turns into a paper cut-out.
+
+## Chat and voice
+
+Both work anywhere a session is live. There is no separate waiting room in this template — hosting drops you straight into the world — so the two pieces live as autoloads rather than in a scene, show themselves whenever `NetworkManager.in_multiplayer_session()` is true, and go away again when you leave. They are on screen in the world, over the pause card, and would ride along into a lobby screen a project added later without being wired up again.
+
+| Script | Holds |
+| --- | --- |
+| `core/chat_manager.gd` | The wire and the scrollback: sending, host validation, join and leave lines |
+| `core/voice_chat.gd` | Push-to-talk: capture, compression, and a stream per talker |
+| `ui/chat/chat_hud.gd` | The panel: the log, the line being typed, and who is talking |
+
+**Enter** opens the line. Enter sends it, Escape throws it away — and Escape belongs to the field while it is open, so a half-typed message is not paid for with the pause menu. While the field has the keyboard the local player's controls are switched off: movement is polled rather than read from events, so a focused text field on its own would let W walk you away mid-sentence. Controls go back to what they were rather than to on, because chat can be opened over a wardrobe or a pause card that was already holding them.
+
+The host is the authority on who said what. A client offers its line to the host, which paces it, moderates it with the same `core/text_moderation.gd` the lobby names use, and only then stamps it with the name from its own roster and sends it on, so a peer cannot put words in someone else's mouth. Someone arriving mid-conversation is handed the tail of the log; a blocked line is reported to its sender alone rather than repeated to the room.
+
+**V**, held, talks. Godot ships no voice codec, so the compression here is deliberately plain: downmix, resample to 12 kHz, and one companded byte per sample on a square-law curve that spends its resolution on the quiet half of the range where speech lives. That costs 12 KB/s per talker for about 44 dB of signal to noise, and no dependencies. Packets are `unreliable_ordered`: a packet that arrives late is worth less than nothing, because waiting for it would delay everything behind it, so a lost one is left as a gap and the talker stays in real time.
+
+Two details are load-bearing on the audio side. Capture runs on its own bus where the **order of the effects** keeps the microphone out of the speakers: the capture tap comes first and an amplifier at -80 dB comes after it, since muting that bus or pulling its volume down would silence the tap along with the output. And each talker is played through an `AudioStreamGenerator` fed from a short queue that holds back 100 ms before it starts — that prebuffer is what absorbs network jitter, and re-arming it when a talker goes quiet is what stops the next word arriving as a stutter. Voice plays on its own bus, so **Settings > Audio > Voice chat** rides on top of the master volume; the microphone needs `[audio] driver/enable_input` in `project.godot`, which is already set.
+
+Voice is not positional: everyone in the session is heard at the same level wherever they are, which is what a co-op session usually wants. Making it spatial means moving the per-talker player to an `AudioStreamPlayer3D` on that peer's body, and deciding what should happen to a talker who has no body yet.
+
+`dev/_comms_test.gd` drives both halves the way a player does, and measures the parts a screenshot cannot show:
+
+```powershell
+godot --path . dev/_comms_test.tscn
+```
+
+It types a line with real keystrokes and sends it, checks the body stays put while typing and walks again afterwards, checks V is a letter rather than the talk key while the field is open, and checks Escape closes the field without pausing — and, with the game already paused, that Escape closes the field and leaves it paused. Then it reports what the compression costs, plays a tone into the microphone bus to see it arrive at the capture tap at full level, holds the talk key over that tone to confirm audio is packetised at real time, feeds packets in as a second peer to watch a stream prime and drain, drives the real join and leave signals, and confirms leaving a session takes the panel, the scrollback and everyone's voice with it. Run it windowed: both halves need real devices.
+
+That harness is one process with an offline peer, which makes it both ends of the wire at once and so cannot see the host doing its job. `dev/_chat_net_test.gd` is the other half, as a real client of a host in another process:
+
+```powershell
+godot --headless --path . -- --server --port=7777 --lobby-name="Chat Test"
+godot --path . dev/_chat_net_test.tscn
+```
+
+It joins, waits for the announcement of its own arrival, says something, and checks the line comes back attributed to the name the **host** holds rather than one the client chose. Then it sends a burst to see the pacing drop most of it, and a line the moderation should stop, which comes back as a refusal addressed to nobody else.
+
+## Multiplayer architecture
+
+`NetworkManager` owns session state, ENet setup, player metadata, scene changes, and the host-owned roster. `LanDiscovery` only handles local UDP advertisement and browsing. `ChatManager` and `VoiceChat` are session-scoped in the same way, and follow `NetworkManager`'s signals rather than the scene tree. Gameplay code talks to `NetworkManager`, not directly to the menu.
+
+The host owns player spawning and validates/relays client movement snapshots. This starter is suitable for cooperative prototyping, but competitive games should replace snapshot validation with fully server-simulated input.
+
+## Steam migration
+
+Steam does not supply dedicated game servers automatically. The selected target is player-hosted Steam P2P/Relay:
+
+1. Add GodotSteam and initialize Steam before entering the online menu.
+2. Replace LAN lobby creation/browsing with Steam Lobby APIs.
+3. Replace the ENet peer creation inside `NetworkManager` with a Steam MultiplayerPeer/Networking Sockets peer.
+4. Keep the existing menu calls, roster, world spawning, and gameplay RPCs unchanged.
+5. Map Steam persona names and lobby metadata into the existing player/lobby dictionaries.
+
+Keeping discovery and transport behind the two autoload managers is the seam that makes this migration possible.

@@ -1,0 +1,15 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Shader lab screenshots
+/dev/captures/
+
+# Baked planet meshes, tens of megabytes and regenerable in seconds
+/dev/exports/
+
+# Blender auto-backups
+*.blend1
+
+# Python bytecode from the Blender authoring scripts
+__pycache__/
