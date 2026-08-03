@@ -29,6 +29,10 @@ signal name_entered(value: String)
 
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
 const GAP := 6
+## Between the stacked rows — the name, the figure, the pockets, the colour strip.
+## There are four of these down the page and each is height the strip is trying to
+## stay above, which is why they are the slot gap plus two and not a round ten.
+const ROW_GAP := 8
 ## Columns of the pockets grid — wide and shallow rather than square, and this is
 ## the value the whole page is sized around. The card has width going spare and none
 ## of its height, because the figure, the equipment column and the colour strip
@@ -191,7 +195,7 @@ func _get_minimum_size() -> Vector2:
 func _build() -> void:
 	var column := VBoxContainer.new()
 	column.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	column.add_theme_constant_override(&"separation", 10)
+	column.add_theme_constant_override(&"separation", ROW_GAP)
 	add_child(column)
 	_column = column
 
@@ -207,7 +211,7 @@ func _build() -> void:
 	column.add_child(middle)
 
 	var left := VBoxContainer.new()
-	left.add_theme_constant_override(&"separation", 10)
+	left.add_theme_constant_override(&"separation", ROW_GAP)
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	middle.add_child(left)
@@ -215,7 +219,14 @@ func _build() -> void:
 	left.add_child(_pockets_block())
 	left.add_child(_tint_strip())
 
-	middle.add_child(_reserve("Reserved", 168.0, 0.0))
+	# In game the middle row's right-hand side is the stats and the weapon bar, so
+	# this is the only reserve on it. The editor has neither and its figure row
+	# already reserves that whole side, and two wells side by side describe the same
+	# empty room twice. It is also 180 px the colour strip needs: with every garment
+	# worn, a target button per garment and ten chips come to more than what is left
+	# beside this, and the card ends up wider than the window.
+	if not _editing:
+		middle.add_child(_reserve("Reserved", 168.0, 0.0))
 
 	_build_tooltip()
 
@@ -239,7 +250,7 @@ func _name_plate() -> Control:
 	panel.custom_minimum_size = Vector2(260.0, 0.0)
 	PencilSurface.add_to(panel, PencilSurface.Style.INPUT if _editing \
 		else PencilSurface.Style.ROW)
-	var padding := _padded(10)
+	var padding := _padded(8 if _editing else 10)
 	panel.add_child(padding)
 	if not _editing:
 		var label := Label.new()
@@ -249,11 +260,15 @@ func _name_plate() -> Control:
 		padding.add_child(label)
 		return panel
 
+	# Body size rather than the 24 the in-game plate uses, which is what the row was
+	# drawn for: the reserve beside it is 38 tall and a 24 px field with 10 px of
+	# padding made the row 72. The editor is the page with 136 px of title band over
+	# it and the least height to spend, and this row is where it was going.
 	var field := LineEdit.new()
 	field.text = _player_name
 	field.placeholder_text = "Your name"
 	field.max_length = 24
-	field.add_theme_font_size_override(&"font_size", 24)
+	field.add_theme_font_size_override(&"font_size", 16)
 	field.text_submitted.connect(func(value: String) -> void: name_entered.emit(value))
 	field.focus_exited.connect(func() -> void: name_entered.emit(field.text))
 	padding.add_child(field)
@@ -270,7 +285,7 @@ func _figure_row() -> Control:
 	row.add_child(_reserve("", 42.0, 0.0))
 
 	var right := VBoxContainer.new()
-	right.add_theme_constant_override(&"separation", 10)
+	right.add_theme_constant_override(&"separation", ROW_GAP)
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(right)
 	# Nothing has stats or weapons before the world starts, so the editor gets the
@@ -398,7 +413,7 @@ func _bar(share: float) -> Control:
 func _tint_strip() -> Control:
 	var panel := PanelContainer.new()
 	PencilSurface.add_to(panel, PencilSurface.Style.ROW)
-	var padding := _padded(14)
+	var padding := _padded(10)
 	panel.add_child(padding)
 
 	var row := HBoxContainer.new()

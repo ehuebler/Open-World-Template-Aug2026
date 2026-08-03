@@ -124,6 +124,7 @@ func _run_character_bodies() -> void:
 		push_error("_menu_shot: the character view came up with no editor")
 		return
 	var page := pages[0] as InventoryPage
+	_report_fit(page, "undressed")
 	# The editor writes every pick straight to settings.cfg, which is the point of
 	# it — but a screenshot run is not a choice, so the look is put back after.
 	var saved := CharacterDB.load_look()
@@ -132,6 +133,7 @@ func _run_character_bodies() -> void:
 	for item_id in CharacterDB.apparel_ids(body_id):
 		ItemContainer.quick_move(spare, spare.find(item_id), page.worn_slots())
 	await _wait(0.35)
+	_report_fit(page, "dressed")
 	await _capture("menu_character_%s" % body_id)
 	print("_menu_shot: %s wearing %s" % [body_id, page.worn_slots().items()])
 	# Twice over on one target, because a tint multiplies what it lands on and the
@@ -143,6 +145,31 @@ func _run_character_bodies() -> void:
 	await _wait(0.35)
 	await _capture("menu_character_tinted")
 	CharacterDB.save_look(saved)
+
+
+## Whether the editor's card is inside the room the home screen gave it, which is
+## the one thing about this screen a shot of it does not show: a control cannot be
+## smaller than its contents, so a card that wants more than the host drags the
+## host past its own anchors instead of being clipped by it. Every frame still
+## looks plausible and the window quietly loses the bottom row — the colour strip,
+## which is the last one down and the thing the editor is for.
+##
+## Measured against the room the anchors allow and not against `host.size`, which
+## is the stretched figure and would report every overflow as a fit. Checked
+## dressed as well as undressed because a target button per worn garment is width
+## the strip demands on one line, and that is the axis that goes first.
+func _report_fit(page: InventoryPage, when: String) -> void:
+	var card := page.get_parent().get_parent() as Control
+	var host := card.get_parent() as Control
+	var wanted := card.get_combined_minimum_size()
+	var room := (host.get_parent() as Control).size \
+		+ Vector2(host.offset_right - host.offset_left, host.offset_bottom - host.offset_top)
+	var over := (wanted - room).maxf(0.0)
+	print("_menu_shot: editor %s room %.0fx%.0f card wants %.0fx%.0f, over by %.0fx%.0f" % [
+		when, room.x, room.y, wanted.x, wanted.y, over.x, over.y])
+	if over != Vector2.ZERO:
+		push_error("_menu_shot: the %s editor card is %.0fx%.0f px bigger than its host" % [
+			when, over.x, over.y])
 
 
 ## The settings shot above only ever catches the first section. The others are

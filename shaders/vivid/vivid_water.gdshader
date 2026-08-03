@@ -6,15 +6,12 @@
 // is looking at it and lands on the exact radius the height field calls zero. So
 // there is no seam, no LOD, and no chunk to keep in step with the terrain's.
 //
-// Where it stops and where it breaks are the two things it has to know about the
-// land, and it finds both out by reading the depth the opaque pass already wrote
-// rather than by being told: a fragment's water column is the sea-level radius
-// less the radius of whatever is behind it. The waterline and every scrap of foam
-// are then functions of that one number, so both follow the coast exactly without
-// anything, on the CPU or the GPU, ever working out where the coast is — and the
-// sea's edge is cut from the same surface the land is drawn from, which is what
-// stops the two disagreeing. See "the chord gap" below for what happens when they
-// do.
+// The surf is the one part of it that has to know about the land, and it finds
+// out by reading the depth the opaque pass already wrote rather than by being
+// told: a fragment's water column is the sea-level radius less the radius of
+// whatever is behind it. Everything white is then a function of that one number,
+// which means the foam follows the coastline exactly without anything, on the
+// CPU or the GPU, ever working out where the coastline is.
 //
 // [code]cull_disabled[/code] because a swimmer looks up at it.
 // [code]depth_draw_always[/code] because the surface has to hide itself: a
@@ -188,55 +185,7 @@ uniform float surf_swell : hint_range(0.0, 2.0) = 0.6;
 // nothing at it, and filtering would ring every rock and headland with foam.
 uniform sampler2D depth_buffer : hint_depth_texture, filter_nearest;
 
-// --- The chord gap ------------------------------------------------------------
-//
-// The disc is flat triangles bent onto a sphere at their corners, so between the
-// corners the surface is a chord and it cuts *inside* the sphere — by
-// (edge^2)/(8R) at the middle of a cell, which is millimetres under a swimmer
-// and about four metres out at the rings the disc covers the horizon with.
-//
-// That gap is small in metres and enormous on a coast, because these shelves
-// shelve very gently: four metres of depth is hundreds of metres of ground. So
-// wherever the bed passes within the gap of sea level — which is every shore on
-// the planet — the sea and the ground swapped places from cell to cell, and what
-// that drew was a saw of whole disc cells along every coastline, alternating
-// with the spokes. Seen from orbit it was the most visible thing on the planet.
-//
-// It cannot be tessellated away: halving the gap costs four times the mesh, and
-// the gap grows with the disc's reach, so there is no size that settles it. It is
-// fixed in two halves instead, and both are needed:
-//
-//  - the vertex stage lifts every vertex by its own cell's gap, so the surface
-//    never falls *below* the sphere and the ground can no longer win a cell it
-//    should have lost. On its own this floods the shore instead of notching it.
-//  - the fragment stage cuts the sea back to the waterline using the bed's own
-//    depth, read out of the buffer the opaque pass already wrote. The shoreline
-//    is then decided by the one surface the land is also drawn from, at pixel
-//    resolution, and the two cannot disagree.
-//
-// The lift is what a swimmer feels: it is at most a couple of centimetres at
-// wading depth, where the disc is at its smallest, against a swell of half a
-// metre and a buoyancy bob larger than either. `PlanetWater.depth_at` is still
-// the exact radius and nothing here moves it.
-//
-// [code]SHORE_MARGIN[/code] covers the lift being interpolated across a cell
-// while the dip it answers is not: at the middle of a cell the lift has fallen
-// to the average of the corners just as the chord is at its deepest.
-const float SHORE_MARGIN = 2.0;
-// How far above sea level the bed is still cut from, as a multiple of the gap.
-// It has to clear the lift and the terrain's own chords; past that it must stop,
-// because a bed sampled *above* sea level is also what anything standing out of
-// the water looks like from behind, and cutting the sea away from those would
-// punch a hole in it around every pier and swimmer's head.
-const float SHORE_WINDOW = 4.0;
-
 varying vec3 v_world_position;
-// How deep this vertex's own cell cuts inside the sphere, in metres. Read in the
-// fragment stage as the width of the band the shoreline is cut from.
-varying float v_shore_gap;
-varying float v_reach;
-varying float v_slope;
-varying float v_span;
 // Where this fragment's water sits before the swell lifts it, which is the one
 // coordinate every field here is sampled at. Using the lifted position instead
 // would let the waves modulate their own phase, and a wave that steepens itself
@@ -248,19 +197,6 @@ void vertex() {
 	// the tangent plane lands two thirds of the way to the horizon; one at the
 	// centre barely moves.
 	vec3 up = vivid_up(VERTEX);
-	// Taken before the projection, off the flat disc: the tangent plane touches
-	// the sphere under the viewer, so a vertex `r` out across it sits at
-	// sqrt(R^2 + r^2) from the centre and this ratio is the cosine of the angle
-	// it lands at. Which is all that is needed to turn the mesh's own spacing,
-	// measured across the plane, into arc along the sphere: a radial step
-	// foreshortens by that cosine twice and a step round the ring once.
-	float slope = planet_radius / length(VERTEX - planet_center);
-	vec2 arc = UV2 * length(MODEL_MATRIX[0].xyz) * vec2(slope * slope, slope);
-	v_shore_gap = dot(arc, arc) / (8.0 * planet_radius) * SHORE_MARGIN;
-	v_reach = length(MODEL_MATRIX[0].xyz);
-	v_slope = slope;
-	v_span = UV2.y;
-
 	vec3 at = planet_center + up * planet_radius;
 	v_sea_level = at;
 	float lift = 0.0;
@@ -270,9 +206,7 @@ void vertex() {
 		lift *= swell_height * (1.0 - smoothstep(swell_near, swell_far,
 			distance(at, CAMERA_POSITION_WORLD)));
 	}
-	// The swell rides on top of the lift, not instead of it: one is a wave and the
-	// other is the mesh apologising for being flat.
-	VERTEX = at + up * (lift + v_shore_gap);
+	VERTEX = at + up * lift;
 	NORMAL = up;
 	v_world_position = VERTEX;
 }
@@ -287,33 +221,6 @@ void fragment() {
 	}
 	vec3 to_eye = CAMERA_POSITION_WORLD - v_world_position;
 	float range = length(to_eye);
-
-	// The bed behind this pixel, as a depth of water rather than as a distance:
-	// the sea-level radius less the radius of whatever the opaque pass left here.
-	// Taken as a difference of radii, not as a length along the view ray, because
-	// a slant path through shallow water is long and the ray version reads every
-	// grazing pixel as shallow.
-	//
-	// This one number does both jobs the sea needs the land for — where it ends,
-	// and where it breaks — and neither of them ever works out where the coastline
-	// is. Depth clears to zero under reverse-Z, so a zero is open sky past the
-	// limb: no bed behind the water at all.
-	float under = 0.0;
-	bool bedded = false;
-	vec3 bed = vec3(0.0);
-	float raw = texture(depth_buffer, SCREEN_UV).x;
-	if (raw > 0.0) {
-		vec4 probe = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, raw, 1.0);
-		bed = (INV_VIEW_MATRIX * vec4(probe.xyz / probe.w, 1.0)).xyz;
-		under = planet_radius - length(bed - planet_center);
-		bedded = true;
-	}
-	// The waterline, and the second half of what the chord gap above is about: the
-	// lift put the whole surface above the sphere, and this takes back the ground
-	// it flooded on the way. Only within the window, for the reason written there.
-	if (false && bedded && under < 0.0 && -under < v_shore_gap * SHORE_WINDOW) {
-		discard;
-	}
 
 	// The swell's own tilt, taken per pixel from the same field the vertex stage
 	// displaced by. Interpolating the vertex normal instead would give the outer
@@ -380,42 +287,55 @@ void fragment() {
 
 	float foam = 0.0;
 	float reach = 1.0 - smoothstep(surf_near, surf_far, range);
-	if (surf_strength > 0.0 && reach > 0.0 && bedded) {
-		float shoal = 1.0 - smoothstep(0.0, break_depth, under);
-		if (shoal > 0.0) {
-			float wash = 1.0 - smoothstep(0.0, wash_depth, under);
-			// Everything with a wavelength, faded as one: the crests, the swell
-			// riding them, and the mottle that breaks them up along the shore.
-			// What is left past this is the waterline.
-			float rolling = 1.0 - smoothstep(crest_near, crest_far, range);
-			float crest = 0.0;
-			if (rolling > 0.0) {
-				// One pulse of white water per wave, marching shoreward as TIME
-				// advances. Overdriven so the middle of a crest saturates and
-				// only its edges are a blend — a crest that merely peaks at
-				// white is never actually white anywhere. It reaches zero at
-				// both ends of the cycle, so the wrap needs no special care.
-				float phase = fract(under / max(wave_spacing, 0.01)
-					+ TIME * surf_speed);
-				crest = clamp(1.7 * smoothstep(0.0, crest_width, phase)
-					* (1.0 - smoothstep(crest_width, 1.0, phase)), 0.0, 1.0);
-				// A crest riding the face of the swell breaks harder than one in
-				// the trough, which is what ties the two together: without it
-				// the surf marches up the beach on its own schedule while the
-				// water it is made of moves to another.
-				crest = clamp(crest * (1.0 + max(heave, 0.0) * surf_swell),
-					0.0, 1.0) * rolling;
+	if (surf_strength > 0.0 && reach > 0.0) {
+		float raw = texture(depth_buffer, SCREEN_UV).x;
+		// Depth clears to zero under reverse-Z, so this is open sky past the
+		// limb: no bed behind the water, and nothing to break on.
+		if (raw > 0.0) {
+			vec4 probe = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, raw, 1.0);
+			vec3 bed = (INV_VIEW_MATRIX * vec4(probe.xyz / probe.w, 1.0)).xyz;
+			// Taken as a difference of radii, not as a length along the view
+			// ray. A slant path through shallow water is long, so the ray
+			// version reads every grazing pixel as shallow and lays a band of
+			// foam along the whole horizon.
+			float under = planet_radius - length(bed - planet_center);
+			float shoal = 1.0 - smoothstep(0.0, break_depth, under);
+			if (shoal > 0.0) {
+				float wash = 1.0 - smoothstep(0.0, wash_depth, under);
+				// Everything with a wavelength, faded as one: the crests, the
+				// swell riding them, and the mottle that breaks them up along
+				// the shore. What is left past this is the waterline.
+				float rolling = 1.0 - smoothstep(crest_near, crest_far, range);
+				float crest = 0.0;
+				if (rolling > 0.0) {
+					// One pulse of white water per wave, marching shoreward as
+					// TIME advances. Overdriven so the middle of a crest
+					// saturates and only its edges are a blend — a crest that
+					// merely peaks at white is never actually white anywhere.
+					// It reaches zero at both ends of the cycle, so the wrap
+					// needs no special care.
+					float phase = fract(under / max(wave_spacing, 0.01)
+						+ TIME * surf_speed);
+					crest = clamp(1.7 * smoothstep(0.0, crest_width, phase)
+						* (1.0 - smoothstep(crest_width, 1.0, phase)), 0.0, 1.0);
+					// A crest riding the face of the swell breaks harder than
+					// one in the trough, which is what ties the two together:
+					// without it the surf marches up the beach on its own
+					// schedule while the water it is made of moves to another.
+					crest = clamp(crest * (1.0 + max(heave, 0.0) * surf_swell),
+						0.0, 1.0) * rolling;
+				}
+				foam = max(wash, crest * shoal);
+				float mottle = vivid_fbm3(v_world_position * surf_mottle_scale, 3);
+				foam *= mix(1.0, clamp(2.1 * mottle - 0.2, 0.0, 1.4),
+					surf_mottle * rolling);
+				// The net into the crests and not into the wash. Bubbles are lit
+				// by the same focused light that draws the net on the sand under
+				// them, which is why real surf glitters; the wash along the
+				// waterline has to stay solid white or the shoreline dissolves.
+				foam *= 1.0 + web * surf_caustic * (1.0 - wash);
+				foam = clamp(foam * surf_strength * reach, 0.0, 1.0);
 			}
-			foam = max(wash, crest * shoal);
-			float mottle = vivid_fbm3(v_world_position * surf_mottle_scale, 3);
-			foam *= mix(1.0, clamp(2.1 * mottle - 0.2, 0.0, 1.4),
-				surf_mottle * rolling);
-			// The net into the crests and not into the wash. Bubbles are lit by
-			// the same focused light that draws the net on the sand under them,
-			// which is why real surf glitters; the wash along the waterline has
-			// to stay solid white or the shoreline dissolves.
-			foam *= 1.0 + web * surf_caustic * (1.0 - wash);
-			foam = clamp(foam * surf_strength * reach, 0.0, 1.0);
 		}
 	}
 
@@ -438,18 +358,6 @@ void fragment() {
 	// of it — always brighter than the water down toward the bed, however dark
 	// either gets. Without it the sea a hundred metres down was drawn in the same
 	// wash as the sea at the beach, and a dive had no bottom and no top.
-	// R: the lift this fragment's water was given, over 40 m. G: how far the bed
-	// behind it stands above sea level, same scale. B is pinned at one so a sample
-	// can be told from the ground and the weather, which are also in the frame.
-	// R: the sine of the angle between the view ray to this fragment and the view
-	// ray to the point the depth sample was reconstructed at, times a hundred. A
-	// reconstruction that landed on the right ray reads zero. G: whether that
-	// sample is nearer than the fragment, half being equal and above half meaning
-	// the sample is in front of water that was drawn anyway.
-	ALBEDO = vec3(clamp(length(cross(normalize(bed - CAMERA_POSITION_WORLD),
-		normalize(-to_eye))) * 100.0, 0.0, 1.0),
-		clamp((raw - FRAGCOORD.z) * 25000000.0 + 0.5, 0.0, 1.0), 1.0);
-	ALPHA = 1.0;
 	if (submerged) {
 		vec3 murk = vec3(1.0) - exp(-vec3(range) / (murk_visibility * murk_channels));
 		// Weighted toward the near end of the run, for the reason written where the
