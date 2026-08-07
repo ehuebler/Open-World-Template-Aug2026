@@ -96,7 +96,7 @@ mouse_filter = 2
 layout_mode = 2
 mouse_filter = 2
 
-; PencilSurface.BLEED of every margin is spent on the gap between the panel edge
+; AuroraSurface.BLEED of every margin is spent on the gap between the panel edge
 ; and the drawn plate, so these are that much larger than the padding they look
 ; like: 20/15 here reads as 14/9 around the text.
 [node name="Padding" type="MarginContainer" parent="HUD/Prompts/TargetPlate/Panel"]

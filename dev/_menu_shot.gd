@@ -27,9 +27,16 @@ const VIEWS := [
 
 var _world: GameWorld
 var _home: HomeScreen
+## The look as it was before the run, put back on the way out. The editor writes
+## every pick straight to settings.cfg, which is the point of it — but a
+## screenshot run is not a choice, and the handover deliberately re-saves the
+## look that is on screen, so restoring inside the character section is not
+## enough and a sword racked for a screenshot stayed racked across launches.
+var _saved_look: Dictionary
 
 
 func _ready() -> void:
+	_saved_look = CharacterDB.load_look()
 	_world = WORLD.instantiate() as GameWorld
 	add_child(_world)
 	await _settle(SETTLE_FRAMES)
@@ -55,6 +62,7 @@ func _ready() -> void:
 	# own: dev/_menu_test.tscn.
 	if "--handover" in OS.get_cmdline_user_args():
 		await _run_handover()
+	CharacterDB.save_look(_saved_look)
 	get_tree().quit()
 
 
@@ -99,14 +107,20 @@ func _run_handover() -> void:
 		"on" if player != null and player.controls_enabled else "OFF",
 		"gone" if not is_instance_valid(_home) else "STILL UP",
 	])
-	# The body the editor chose has to be the body that spawns, garments and all.
-	# It is the one thing about the handover that no frame of the sweep shows,
-	# since the preview and the player are meant to look identical by then.
+	# The body the editor chose has to be the body that spawns, garments, weapons
+	# and all. It is the one thing about the handover that no frame of the sweep
+	# shows, since the preview and the player are meant to look identical by then
+	# — and the rack it never showed at all, because nothing puts a weapon in the
+	# figure's hand.
 	if player != null:
 		var wanted := CharacterDB.load_look()
 		print("_menu_shot: body wanted=%s got=%s, worn wanted=%s got=%s" % [
 			wanted["body"], player.body_id(),
 			CharacterDB.worn_items(wanted), player.worn_items(),
+		])
+		print("_menu_shot: rack wanted=%s got=%s" % [
+			CharacterDB.racked_items(wanted, player.weapons.size()),
+			player.weapons.items(),
 		])
 
 
@@ -125,8 +139,6 @@ func _run_character_bodies() -> void:
 		return
 	var page := pages[0] as InventoryPage
 	_report_fit(page, "undressed")
-	# The editor writes every pick straight to settings.cfg, which is the point of
-	# it — but a screenshot run is not a choice, so the look is put back after.
 	var saved := CharacterDB.load_look()
 	var body_id := CharacterDB.sanitize_body(saved["body"])
 	await _run_character_pockets(body_id)
@@ -176,8 +188,33 @@ func _run_character_pockets(body_id: String) -> void:
 	await _click(page, wardrobe[0])
 	print("_menu_shot: catalogue after one toggle %s" % _catalogue_state(page))
 	await _click(page, wardrobe[0])
+	await _rack_a_weapon(page)
 	_report_fit(page, "pockets")
 	await _capture("menu_character_pockets")
+
+
+## The catalogue lists weapons as well, and a click puts one on the rack rather
+## than on the body. Reached through the Weapons filter and not by finding the
+## tile directly, because a weapon that cannot be *seen* on this tab is a weapon
+## nobody can pick however well the click behind it works.
+func _rack_a_weapon(page: InventoryPage) -> void:
+	if not _press("Weapons"):
+		push_error("_menu_shot: the catalogue has no Weapons filter")
+		return
+	await _wait(0.2)
+	var weapons := ItemDB.weapon_ids()
+	if weapons.is_empty():
+		return
+	# From an empty rack, or a click on the weapon a previous run left racked
+	# takes it off again and the handover check below reads as a rack that never
+	# filled. The dressing pass clears the body for the same reason.
+	page.rack_slots().clear()
+	await _wait(0.1)
+	print("_menu_shot: weapons filter %s" % _catalogue_state(page))
+	await _click(page, weapons[0])
+	print("_menu_shot: racked %s -> %s" % [weapons[0], page.rack_slots().items()])
+	_press("Clothing")
+	await _wait(0.2)
 
 
 func _click(page: InventoryPage, item_id: String) -> void:
@@ -260,11 +297,78 @@ func _report_fit(page: InventoryPage, when: String) -> void:
 		parent.size.y * (host.anchor_bottom - host.anchor_top)
 			+ host.offset_bottom - host.offset_top)
 	var over := (wanted - room).maxf(0.0)
-	print("_menu_shot: editor %s room %.0fx%.0f card wants %.0fx%.0f, over by %.0fx%.0f" % [
-		when, room.x, room.y, wanted.x, wanted.y, over.x, over.y])
+	# The card no longer carries the page's height in its own minimum — the page
+	# host is a ScrollContainer, whose minimum is nothing — so the card fitting is
+	# necessary and no longer sufficient. The page's own ask against the viewport
+	# it was given is the other half, and it is a note rather than a failure:
+	# scrolling is the answer to a page that wants more, and reaching for it is
+	# the screen working rather than breaking.
+	var wants_page := page.get_combined_minimum_size().y
+	var scroll := page.get_parent() as ScrollContainer
+	var viewport := scroll.size.y if scroll != null else room.y
+	print("_menu_shot: editor %s room %.0fx%.0f card wants %.0fx%.0f, over by %.0fx%.0f%s" % [
+		when, room.x, room.y, wanted.x, wanted.y, over.x, over.y,
+		", page %.0f in %.0f%s" % [wants_page, viewport,
+			" (scrolls)" if wants_page > viewport + 1.0 else ""]])
 	if over != Vector2.ZERO:
 		push_error("_menu_shot: the %s editor card is %.0fx%.0f px bigger than its host" % [
 			when, over.x, over.y])
+	_report_spill(card, when)
+
+
+## What is actually drawn outside the card, which is a different question from the
+## one above and the one the screenshots kept losing.
+##
+## A minimum size is what a control **asks** for, and the sum of those asks can
+## fit inside the card while a particular control still ends up hanging over its
+## edge — a shrink-centred child of an over-tall row, a tooltip placed against the
+## mouse, anything positioned rather than laid out. The card reported 0x0 over for
+## as long as the colour wheel was being clipped by it. So this walks what was
+## laid out rather than what was asked for, and names the worst offender: a number
+## nobody has to interpret, against a screenshot that has to be squinted at.
+func _report_spill(card: Control, when: String) -> void:
+	var inside := Rect2(card.global_position, card.size).grow(-AuroraSurface.BLEED)
+	var worst := 0.0
+	var culprit := ""
+	for node in card.find_children("*", "Control", true, false):
+		var control := node as Control
+		if not control.visible or control.size == Vector2.ZERO:
+			continue
+		# The surfaces are grown past their Control by AuroraSurface.BLEED on
+		# purpose, and the shader insets the drawn shape by the same amount, so
+		# every one of them overhangs by exactly that and none of them draws
+		# anything out there.
+		if control is AuroraSurface:
+			continue
+		# A ScrollContainer clips, so its contents cannot draw outside it however
+		# far their rects reach — that overhang is the scrollbar's reason to
+		# exist and is reported as such by _report_fit.
+		if _scrolled(control, card):
+			continue
+		var rect := Rect2(control.global_position, control.size)
+		var spill := maxf(
+			maxf(inside.position.x - rect.position.x, rect.end.x - inside.end.x),
+			maxf(inside.position.y - rect.position.y, rect.end.y - inside.end.y))
+		if spill > worst:
+			worst = spill
+			culprit = "%s (%s)" % [control.name, control.get_class()]
+	# Up to the bleed is not a spill. The card's own padding container fills the
+	# card exactly, so it clears the inset rim by precisely that much on all four
+	# sides, and a real overhang is tens of pixels rather than six.
+	if worst <= AuroraSurface.BLEED + 1.0:
+		print("_menu_shot: editor %s spill none" % when)
+		return
+	push_error("_menu_shot: the %s editor draws %.0f px outside its card, worst is %s" % [
+		when, worst, culprit])
+
+
+func _scrolled(control: Control, card: Control) -> bool:
+	var walk := control.get_parent()
+	while walk != null and walk != card:
+		if walk is ScrollContainer:
+			return true
+		walk = walk.get_parent()
+	return false
 
 
 ## The drawn card the page sits inside, found by walking up rather than by

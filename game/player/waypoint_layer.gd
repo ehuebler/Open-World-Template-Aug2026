@@ -10,7 +10,7 @@ extends Control
 ##
 ## A marker is a diamond and two lines of type in the landmark's own colour, with
 ## an ink outline behind the letters and nothing else — no plate. The plate was
-## the honest thing to draw while there was one waypoint, because [PencilSurface]
+## the honest thing to draw while there was one waypoint, because [AuroraSurface]
 ## is how everything else in this game keeps text legible over the world. With
 ## five of them it stopped being legibility and started being five opaque cards
 ## hanging in the sky, so the outline does that job instead: it costs no area,
@@ -46,10 +46,13 @@ const MARGIN := 46.0
 const EDGE := 10.0
 const TITLE_SIZE := 12
 const DISTANCE_SIZE := 10
-## Ink around the type, in pixels. Enough to close up under the pixel font's
-## one-pixel stems at these sizes, which is what stops the letters breaking up
-## against busy ground; more than this and the outlines of neighbouring glyphs
-## merge into a slab and the plate is back.
+## Ink around the type, in pixels. Enough to close up under the letterforms at
+## these sizes, which is what stops them breaking up against busy ground; more
+## than this and the outlines of neighbouring glyphs merge into a slab and the
+## plate is back. The two sizes above are left where they were through the change
+## of face: this type is not in a box that can run out, and Bungee sets about a
+## fifth larger and a good deal heavier than what it replaced, which over grass
+## and sea is the direction to be wrong in.
 const TITLE_OUTLINE := 4
 const DISTANCE_OUTLINE := 3
 ## Half-width of the diamond, in pixels.

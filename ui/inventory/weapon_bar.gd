@@ -95,7 +95,7 @@ func _build() -> void:
 	_cell_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_cell_plate.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	column.add_child(_cell_plate)
-	PencilSurface.add_to(_cell_plate, PencilSurface.Style.HUD)
+	AuroraSurface.add_to(_cell_plate, AuroraSurface.Style.HUD)
 
 	var padding := MarginContainer.new()
 	for side in [&"margin_left", &"margin_right"]:
@@ -104,7 +104,7 @@ func _build() -> void:
 	_cell_plate.add_child(padding)
 
 	_cell_label = Label.new()
-	_cell_label.add_theme_font_size_override(&"font_size", 16)
+	_cell_label.add_theme_font_size_override(&"font_size", 13)
 	_cell_label.add_theme_color_override(&"font_color", PALETTE.text_secondary)
 	_cell_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	padding.add_child(_cell_label)

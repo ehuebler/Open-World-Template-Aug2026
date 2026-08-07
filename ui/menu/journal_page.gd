@@ -68,7 +68,7 @@ func _build() -> void:
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	panel.size_flags_stretch_ratio = 1.0 - LIST_SHARE
 	add_child(panel)
-	PencilSurface.add_to(panel, PencilSurface.Style.ROW)
+	AuroraSurface.add_to(panel, AuroraSurface.Style.ROW)
 
 	var padding := MarginContainer.new()
 	for side in [&"margin_left", &"margin_right", &"margin_top", &"margin_bottom"]:
@@ -94,7 +94,7 @@ func _filter_row() -> Control:
 		picker.add_item(category)
 	picker.selected = maxi(Array(categories).find(_category), 0)
 	picker.custom_minimum_size.x = 130
-	PencilSurface.add_to(picker, PencilSurface.Style.BUTTON)
+	AuroraSurface.add_to(picker, AuroraSurface.Style.BUTTON)
 	picker.item_selected.connect(func(index: int) -> void:
 		_category = categories[index] if index < categories.size() else "All"
 		_fill_list()
@@ -104,7 +104,7 @@ func _filter_row() -> Control:
 	var search := LineEdit.new()
 	search.placeholder_text = "Search %s" % ("quests" if _kind == JournalDB.QUEST else "achievements")
 	search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	PencilSurface.add_to(search, PencilSurface.Style.INPUT)
+	AuroraSurface.add_to(search, AuroraSurface.Style.INPUT)
 	search.text_changed.connect(func(text: String) -> void:
 		_search = text.strip_edges().to_lower()
 		_fill_list()
@@ -138,10 +138,10 @@ func _fill_list() -> void:
 		var done := _journal != null and _journal.is_done(id)
 		var button := MenuWidgets.button(
 			"%s%s" % ["[done]  " if done else "", JournalDB.title_of(id)],
-			PencilSurface.Style.PRIMARY if id == _selected else PencilSurface.Style.BUTTON)
+			AuroraSurface.Style.PRIMARY if id == _selected else AuroraSurface.Style.BUTTON)
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.add_theme_font_size_override(&"font_size", 17)
+		button.add_theme_font_size_override(&"font_size", 14)
 		var chosen := id
 		button.pressed.connect(func() -> void: _select(chosen))
 		_list.add_child(button)
@@ -156,30 +156,30 @@ func _select(id: String) -> void:
 		_detail.add_child(MenuWidgets.caption("Pick something on the left."))
 		return
 
-	_detail.add_child(MenuWidgets.heading(JournalDB.title_of(id).to_upper(), 30))
+	_detail.add_child(MenuWidgets.heading(JournalDB.title_of(id).to_upper(), 24))
 	var done := _journal != null and _journal.is_done(id)
 	_detail.add_child(_status_line(JournalDB.category_of(id), done))
-	_detail.add_child(PencilSurface.rule())
-	_detail.add_child(_paragraph(JournalDB.summary_of(id), 20, PALETTE.text_primary))
+	_detail.add_child(AuroraSurface.rule())
+	_detail.add_child(_paragraph(JournalDB.summary_of(id), 16, PALETTE.text_primary))
 	var detail := JournalDB.detail_of(id)
 	if not detail.is_empty():
-		_detail.add_child(_paragraph(detail, 17, PALETTE.text_secondary))
+		_detail.add_child(_paragraph(detail, 14, PALETTE.text_secondary))
 
 	var landmark := JournalDB.landmark_of(id)
 	if not landmark.is_empty():
 		_detail.add_child(_paragraph(
 			"Get within %d m of the %s waypoint." % [
 				roundi(JournalDB.within_of(id)), JournalDB.title_of(id)],
-			16, PALETTE.text_muted))
+			13, PALETTE.text_muted))
 	var reward := JournalDB.reward_of(id)
 	if not reward.is_empty():
-		_detail.add_child(_paragraph("Reward: %s" % reward, 16, PALETTE.text_muted))
+		_detail.add_child(_paragraph("Reward: %s" % reward, 13, PALETTE.text_muted))
 
 
 func _status_line(category: String, done: bool) -> Control:
 	var label := Label.new()
 	label.text = "%s    %s" % [category, "COMPLETE" if done else "IN PROGRESS"]
-	label.add_theme_font_size_override(&"font_size", 16)
+	label.add_theme_font_size_override(&"font_size", 13)
 	label.add_theme_color_override(&"font_color",
 		PALETTE.secondary if done else PALETTE.text_muted)
 	return label

@@ -40,6 +40,9 @@ const DEFAULTS := {
 		"name": "Player",
 		"body": "settler",
 		"worn": {},
+		## The weapon bar, one entry per slot. A list rather than a map because a
+		## rack slot means nothing except which number key draws it.
+		"rack": [],
 		"tints": {},
 	},
 	## Quests and achievements finished, as a list of [JournalDB] ids. Local to

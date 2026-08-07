@@ -27,7 +27,7 @@ const WIDTH := 520.0
 const BOTTOM_MARGIN := 112.0
 const SIDE_MARGIN := 16.0
 const FADE_TIME := 0.25
-## PencilSurface.BLEED of each margin is spent on the gap between the panel edge
+## AuroraSurface.BLEED of each margin is spent on the gap between the panel edge
 ## and the drawn plate, so these read as 8 less than they say, the same way the
 ## HUD prompts in player.tscn are set up.
 const PAD_SIDE := 20
@@ -165,7 +165,7 @@ func _line(entry: Dictionary) -> RichTextLabel:
 	line.scroll_active = false
 	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	line.add_theme_font_size_override(&"normal_font_size", 16)
+	line.add_theme_font_size_override(&"normal_font_size", 13)
 	# Told its width up front, because a label that fits its content has to know
 	# how wide it is to know how tall it is, and one waiting on the container to
 	# say gets its last line clipped for a frame or two.
@@ -229,7 +229,7 @@ func _build() -> void:
 	_talkers.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_column.add_child(_talkers)
 	_talkers_label = Label.new()
-	_talkers_label.add_theme_font_size_override(&"font_size", 16)
+	_talkers_label.add_theme_font_size_override(&"font_size", 13)
 	_talkers_label.add_theme_color_override(&"font_color", PALETTE.accent)
 	_talkers.get_node(^"Padding").add_child(_talkers_label)
 
@@ -245,8 +245,8 @@ func _build() -> void:
 	_entry.placeholder_text = "say something"
 	_entry.max_length = ChatManager.MAX_LENGTH
 	_entry.visible = false
-	_entry.add_theme_font_size_override(&"font_size", 16)
-	PencilSurface.add_to(_entry, PencilSurface.Style.INPUT)
+	_entry.add_theme_font_size_override(&"font_size", 13)
+	AuroraSurface.add_to(_entry, AuroraSurface.Style.INPUT)
 	_entry.text_submitted.connect(_on_submitted)
 	# Losing focus any other way — a menu opening over the top — closes the line
 	# rather than leaving a field that swallows keys nobody can see going in.
@@ -261,7 +261,7 @@ func _build() -> void:
 func _plate() -> PanelContainer:
 	var plate := PanelContainer.new()
 	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	PencilSurface.add_to(plate, PencilSurface.Style.HUD)
+	AuroraSurface.add_to(plate, AuroraSurface.Style.HUD)
 	var padding := MarginContainer.new()
 	padding.name = "Padding"
 	padding.mouse_filter = Control.MOUSE_FILTER_IGNORE

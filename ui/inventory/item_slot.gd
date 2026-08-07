@@ -20,10 +20,14 @@ signal hover_ended(slot: ItemSlot)
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
 
 const SIZE := 52.0
-## Segments per edge of the drawn border, and how far each joint wanders.
-const EDGE_SEGMENTS := 5
-const EDGE_WANDER := 1.1
+## Corner of the drawn tile, and the segments each one is drawn with.
+const CORNER := 7.0
+const CORNER_STEPS := 4
 const ICON_INSET := 4.0
+## How far inside the rim the second ring of a selected tile sits. It is what
+## makes "worn" read as a box around the item rather than as a slightly brighter
+## edge, which at 1.6 px against a dark tile is not a difference anyone sees.
+const RING_INSET := 3.5
 
 var container: ItemContainer
 var index := 0
@@ -44,7 +48,8 @@ var selected := false
 
 var _hovered := false
 var _drop_target := false
-var _outlines: Array[PackedVector2Array] = []
+## The rounded outline, rebuilt only when the tile is resized.
+var _outline := PackedVector2Array()
 
 
 func _init() -> void:
@@ -75,7 +80,7 @@ func item_id() -> String:
 func _notification(what: int) -> void:
 	match what:
 		NOTIFICATION_RESIZED:
-			_outlines.clear()
+			_outline.clear()
 			queue_redraw()
 		NOTIFICATION_MOUSE_ENTER:
 			_hovered = true
@@ -164,15 +169,20 @@ func _drag_preview() -> Control:
 
 func _draw() -> void:
 	var rect := Rect2(Vector2.ZERO, size)
-	draw_rect(rect, _fill_color())
-	if _outlines.is_empty():
-		_build_outlines()
-	# Outlined in a light pencil, not the dark one: a tile is a well cut into the
-	# card, so its edge has to read against violet rather than against paper.
+	if _outline.is_empty():
+		_outline = _rounded(rect.grow(-1.0), CORNER)
+	draw_colored_polygon(_outline, _fill_color())
+	# A tile is a well cut into the pane, so its rim has to read against the pane
+	# rather than against the tile.
 	var ink: Color = PALETTE.accent if (_drop_target or selected) else PALETTE.text_muted
-	var weight := 2.4 if (_drop_target or _hovered or selected) else 1.6
-	for outline in _outlines:
-		draw_polyline(outline, Color(ink, 0.9), weight, true)
+	var weight := 2.4 if (_drop_target or _hovered or selected) else 1.4
+	draw_polyline(_outline, Color(ink, 0.9), weight, true)
+	if selected or _drop_target:
+		# The box that says this item is on the body. Two rings rather than one
+		# heavier ring: a grid of tiles is read at a glance and a doubled edge is
+		# the only weight difference that survives being 44 px across.
+		draw_polyline(_rounded(rect.grow(-RING_INSET), CORNER - 2.0),
+			Color(PALETTE.accent, 0.55), 1.6, true)
 	_draw_badge()
 
 	var id := item_id()
@@ -215,7 +225,7 @@ func _draw_badge() -> void:
 	# Full-strength rather than muted: the number is the one thing on a HUD tile
 	# that has to be read at a glance, and it is the smallest type in the game.
 	var color: Color = PALETTE.accent if selected else PALETTE.text_primary
-	draw_string(font, Vector2(5.0, 17.0), badge, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, color)
+	draw_string(font, Vector2(5.0, 15.0), badge, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, color)
 
 
 func _draw_placeholder() -> void:
@@ -224,35 +234,29 @@ func _draw_placeholder() -> void:
 	var font := get_theme_default_font()
 	if font == null:
 		return
-	var font_size := 15
+	var font_size := 12
 	var baseline := (size.y + float(font_size)) * 0.5 - 1.0
 	draw_string(font, Vector2(0.0, baseline), placeholder, HORIZONTAL_ALIGNMENT_CENTER,
 		size.x, font_size, Color(PALETTE.text_muted, 0.85))
 
 
-## Two passes of a wandering rectangle, so a grid of tiles looks pencilled rather
-## than printed. Held rather than rebuilt per frame: the wander is meant to sit
-## still, not to boil.
-func _build_outlines() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = hash(Vector3i(int(size.x), int(size.y), get_instance_id() % 4096))
-	var corners := [
-		Vector2(1.0, 1.0),
-		Vector2(size.x - 1.0, 1.0),
-		Vector2(size.x - 1.0, size.y - 1.0),
-		Vector2(1.0, size.y - 1.0),
+## A closed rounded rectangle, corners first. Returned as a path rather than
+## drawn, because the fill and the rim are the same shape and a tile whose fill
+## and outline disagree about its corners shows a bright pip at each one.
+func _rounded(rect: Rect2, radius: float) -> PackedVector2Array:
+	var limit := clampf(radius, 0.0, minf(rect.size.x, rect.size.y) * 0.5)
+	var centres := [
+		rect.position + Vector2(limit, limit),
+		rect.position + Vector2(rect.size.x - limit, limit),
+		rect.end - Vector2(limit, limit),
+		rect.position + Vector2(limit, rect.size.y - limit),
 	]
-	for pass_index in 2:
-		var path := PackedVector2Array()
-		for corner_index in corners.size():
-			var from: Vector2 = corners[corner_index]
-			var to: Vector2 = corners[(corner_index + 1) % corners.size()]
-			for step in EDGE_SEGMENTS:
-				var point := from.lerp(to, float(step) / float(EDGE_SEGMENTS))
-				if step > 0:
-					point += Vector2(
-						rng.randf_range(-EDGE_WANDER, EDGE_WANDER),
-						rng.randf_range(-EDGE_WANDER, EDGE_WANDER))
-				path.append(point)
-		path.append(path[0])
-		_outlines.append(path)
+	var path := PackedVector2Array()
+	for corner in 4:
+		# Anticlockwise from the top-left corner's own quarter turn.
+		var from := PI + float(corner) * TAU * 0.25
+		for step in CORNER_STEPS + 1:
+			var angle := from + TAU * 0.25 * float(step) / float(CORNER_STEPS)
+			path.append(centres[corner] + Vector2(cos(angle), sin(angle)) * limit)
+	path.append(path[0])
+	return path

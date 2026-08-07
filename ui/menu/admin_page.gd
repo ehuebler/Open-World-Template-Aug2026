@@ -49,7 +49,7 @@ func _build() -> void:
 	_build_items()
 	_build_stats()
 	_notice = Label.new()
-	_notice.add_theme_font_size_override(&"font_size", 16)
+	_notice.add_theme_font_size_override(&"font_size", 13)
 	_notice.add_theme_color_override(&"font_color", PALETTE.accent)
 	add_child(_notice)
 
@@ -72,7 +72,7 @@ func _build_items() -> void:
 		picker.add_item(String(ItemDB.SLOT_LABELS.get(slot, slot)).capitalize() \
 			if slot != "All" else "All slots")
 	picker.custom_minimum_size.x = 150
-	PencilSurface.add_to(picker, PencilSurface.Style.BUTTON)
+	AuroraSurface.add_to(picker, AuroraSurface.Style.BUTTON)
 	picker.item_selected.connect(func(index: int) -> void:
 		_item_slot = slots[index] if index < slots.size() else "All"
 		_fill_items()
@@ -82,7 +82,7 @@ func _build_items() -> void:
 	var search := LineEdit.new()
 	search.placeholder_text = "Search items"
 	search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	PencilSurface.add_to(search, PencilSurface.Style.INPUT)
+	AuroraSurface.add_to(search, AuroraSurface.Style.INPUT)
 	search.text_changed.connect(func(text: String) -> void:
 		_item_search = text.strip_edges().to_lower()
 		_fill_items()
@@ -93,12 +93,23 @@ func _build_items() -> void:
 	_fill_items()
 
 
+## Only what this body can actually wear, plus every weapon, since a weapon is
+## held rather than skinned and fits anyone.
+##
+## Garments cut for the other skeleton used to be listed and marked instead, on
+## the grounds that this is the admin tab and hiding a real item is a lie. That
+## was the wrong call twice over: [method OnlinePlayer._dress] refuses a mismatch
+## outright, so the ADD beside them could not do anything, and with one playable
+## body the retired one's wardrobe was most of the list — five dead rows above
+## the four that work.
 func _fill_items() -> void:
 	for child in _item_list.get_children():
 		child.queue_free()
 	var shown := 0
 	for id: String in ItemDB.ITEMS:
 		var slot := ItemDB.slot_of(id)
+		if not (ItemDB.is_weapon(id) or CharacterDB.apparel_fits(_body_id, id)):
+			continue
 		if _item_slot != "All" and slot != _item_slot:
 			continue
 		if not _item_search.is_empty() \
@@ -117,27 +128,19 @@ func _item_row(id: String, slot: String) -> Control:
 	var title := Label.new()
 	title.text = ItemDB.title(id)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override(&"font_size", 17)
+	title.add_theme_font_size_override(&"font_size", 14)
 	row.add_child(title)
 
 	var where := Label.new()
 	where.text = String(ItemDB.SLOT_LABELS.get(slot, slot))
 	where.custom_minimum_size.x = 80
-	where.add_theme_font_size_override(&"font_size", 15)
+	where.add_theme_font_size_override(&"font_size", 12)
 	where.add_theme_color_override(&"font_color", PALETTE.text_muted)
 	row.add_child(where)
 
-	var fits := CharacterDB.apparel_fits(_body_id, id) or ItemDB.is_weapon(id)
-	if not fits:
-		# Offered anyway rather than hidden: it is a real item and this is the
-		# admin tab. Marked, because a garment cut for the other body will attach
-		# to this skeleton looking wrong rather than failing.
-		where.text = "other body"
-		where.add_theme_color_override(&"font_color", PALETTE.danger)
-
 	var add := MenuWidgets.button("ADD")
 	add.custom_minimum_size.x = 90
-	add.add_theme_font_size_override(&"font_size", 15)
+	add.add_theme_font_size_override(&"font_size", 12)
 	add.pressed.connect(func() -> void: _give(id))
 	row.add_child(add)
 	return row
@@ -184,13 +187,13 @@ func _stat_row(id: StringName) -> Control:
 	var title := Label.new()
 	title.text = PlayerStats.title_of(id)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override(&"font_size", 17)
+	title.add_theme_font_size_override(&"font_size", 14)
 	row.add_child(title)
 
 	var now := Label.new()
 	now.text = PlayerStats.format(id, _stats.base_of(id))
 	now.custom_minimum_size.x = 90
-	now.add_theme_font_size_override(&"font_size", 15)
+	now.add_theme_font_size_override(&"font_size", 12)
 	now.add_theme_color_override(&"font_color", PALETTE.text_muted)
 	row.add_child(now)
 
@@ -200,12 +203,12 @@ func _stat_row(id: StringName) -> Control:
 	field.step = 0.1
 	field.value = _stats.base_of(id)
 	field.custom_minimum_size.x = 120
-	PencilSurface.add_to(field, PencilSurface.Style.INPUT)
+	AuroraSurface.add_to(field, AuroraSurface.Style.INPUT)
 	row.add_child(field)
 
 	var apply := MenuWidgets.button("APPLY")
 	apply.custom_minimum_size.x = 90
-	apply.add_theme_font_size_override(&"font_size", 15)
+	apply.add_theme_font_size_override(&"font_size", 12)
 	apply.pressed.connect(func() -> void:
 		_stats.set_base(id, field.value)
 		now.text = PlayerStats.format(id, _stats.base_of(id))
@@ -225,7 +228,7 @@ func _well(title: String) -> VBoxContainer:
 	var panel := PanelContainer.new()
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	add_child(panel)
-	PencilSurface.add_to(panel, PencilSurface.Style.ROW)
+	AuroraSurface.add_to(panel, AuroraSurface.Style.ROW)
 	var padding := MarginContainer.new()
 	for side in [&"margin_left", &"margin_right", &"margin_top", &"margin_bottom"]:
 		padding.add_theme_constant_override(side, 18)
@@ -233,7 +236,7 @@ func _well(title: String) -> VBoxContainer:
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override(&"separation", 10)
 	padding.add_child(box)
-	box.add_child(MenuWidgets.heading(title, 24))
+	box.add_child(MenuWidgets.heading(title, 19))
 	return box
 
 

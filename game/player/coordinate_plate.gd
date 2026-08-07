@@ -21,8 +21,8 @@ extends PanelContainer
 
 ## Gap from the top and right edges of the screen, in pixels.
 const MARGIN := 20.0
-const LINE_SIZE := 14
-## [constant PencilSurface.BLEED] of each of these is spent on the gap between
+const LINE_SIZE := 11
+## [constant AuroraSurface.BLEED] of each of these is spent on the gap between
 ## the panel's edge and the drawn plate, so they read as 6 px less than they say.
 const PAD_X := 20
 const PAD_Y := 15
@@ -65,7 +65,7 @@ func _ready() -> void:
 	offset_right = -MARGIN
 	offset_top = MARGIN
 	theme = load("res://ui/themes/main_theme.tres") as Theme
-	PencilSurface.add_to(self, PencilSurface.Style.HUD)
+	AuroraSurface.add_to(self, AuroraSurface.Style.HUD)
 
 	var padding := MarginContainer.new()
 	padding.mouse_filter = Control.MOUSE_FILTER_IGNORE

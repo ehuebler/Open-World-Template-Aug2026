@@ -127,8 +127,10 @@ func _filter() -> void:
 			await _wait(10)
 		counts.append("%s=%d" % [label if not label.is_empty() else "all",
 			_showing(page)])
-	# Back to everything, or the tabs are photographed mid-search below.
-	_press(page, "Items")
+	# Back to the clothes, or the tabs are photographed mid-search below. Not to
+	# "everything": the catalogue has no such state, since it opens on Clothing
+	# and pressing the lit category again leaves it lit.
+	_press(page, "Clothing")
 	await _wait(10)
 	_report("pockets filter", ", ".join(counts))
 

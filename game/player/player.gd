@@ -624,7 +624,7 @@ func _ready() -> void:
 		$HUD/Prompts/StancePlate/Panel,
 		$HUD/Prompts/FlightPlate/Panel,
 	]:
-		PencilSurface.add_to(panel, PencilSurface.Style.HUD)
+		AuroraSurface.add_to(panel, AuroraSurface.Style.HUD)
 	flight_plate.visible = false
 
 	var is_local := peer_id == multiplayer.get_unique_id()
@@ -931,6 +931,11 @@ func apply_look(look: Dictionary) -> void:
 	if worn.is_empty() and look.get("worn", null) == null:
 		worn = equipment.items()
 	apply_worn(worn)
+	# Only when the look actually carries a rack. A remote peer's spawn metadata
+	# does not, and clearing the bar on every apply_look would take the weapon out
+	# of a player's hands whenever anything else about them was refreshed.
+	if look.get("rack", null) != null:
+		apply_rack(CharacterDB.racked_items(look, weapons.size()))
 	_apply_tints()
 
 
@@ -1015,6 +1020,14 @@ func apply_worn(worn: PackedStringArray) -> void:
 	# only one function ever adds or removes a garment.
 	for index in mini(worn.size(), equipment.size()):
 		equipment.set_item(index, worn[index])
+
+
+## Fills the weapon bar, positionally, from what the character editor chose. What
+## ends up *in hand* is left to `select_weapon`, which the bar drives — arriving in
+## orbit already swinging a sword is not the opening move.
+func apply_rack(rack: PackedStringArray) -> void:
+	for index in mini(rack.size(), weapons.size()):
+		weapons.set_item(index, rack[index])
 
 
 func _on_equipment_changed() -> void:

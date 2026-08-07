@@ -6,33 +6,30 @@ extends RefCounted
 ## the same labelled dropdown and the same card, and a second copy of a row is a
 ## second place for it to drift.
 ##
-## Everything here is drawn on paper by PencilSurface, so it is only legible over
-## the starfield once it is sitting on a card. Bare text over space is the home
-## screen's own job (see home_screen.gd), not this file's.
+## Everything here is drawn on a lit pane by AuroraSurface, so it is only legible
+## over the starfield once it is sitting on a card. Bare text over space is the
+## home screen's own job (see home_screen.gd), not this file's.
 
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
 
 
-static func button(label: String, style := PencilSurface.Style.BUTTON) -> Button:
+static func button(label: String, style := AuroraSurface.Style.BUTTON) -> Button:
 	var control := Button.new()
 	control.text = label
 	dress(control, style)
 	return control
 
 
-## Gives a button its fill and the type colour that goes with it. Split out from
-## [method button] because the pause card's buttons come from a scene rather than
-## from here, and the pairing has to hold for both.
+## Gives a button its fill. Split out from [method button] because the pause
+## card's buttons come from a scene rather than from here, and the pairing has to
+## hold for both.
 ##
-## Celadon and gold take the theme's violet type. Tangerine is the one fill dark
-## enough to need the opposite, so it is stated here rather than left to callers.
-static func dress(control: Button, style: PencilSurface.Style) -> void:
-	PencilSurface.add_to(control, style)
-	if style != PencilSurface.Style.DANGER:
-		return
-	for slot: String in ["font_color", "font_hover_color", "font_pressed_color",
-			"font_focus_color", "font_outline_color"]:
-		control.add_theme_color_override(slot, PALETTE.text_primary)
+## All three fills take the theme's void-dark type, and that is a property of the
+## palette rather than a happy accident: cyan, periwinkle and rose are all light.
+## The set before this had one fill — a burnt tangerine — dark enough to need pale
+## type instead, and this function existed to remember it.
+static func dress(control: Button, style: AuroraSurface.Style) -> void:
+	AuroraSurface.add_to(control, style)
 
 
 ## Fills [param row] with one button per label, the open one carrying the gold
@@ -43,12 +40,12 @@ static func dress(control: Button, style: PencilSurface.Style) -> void:
 ## cheaper thing to get right — a strip that is redrawn from one integer cannot
 ## end up with two tabs both looking open.
 static func fill_tab_row(row: HBoxContainer, labels: Array[String], current: int,
-		on_pick: Callable, font_size := 19) -> void:
+		on_pick: Callable, font_size := 15) -> void:
 	for child in row.get_children():
 		child.queue_free()
 	for index in labels.size():
 		var control := button(labels[index],
-			PencilSurface.Style.PRIMARY if index == current else PencilSurface.Style.BUTTON)
+			AuroraSurface.Style.PRIMARY if index == current else AuroraSurface.Style.BUTTON)
 		control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		control.add_theme_font_size_override("font_size", font_size)
 		var chosen := index
@@ -71,7 +68,7 @@ static func card(parent: Control, padding := 26, fill := false) -> VBoxContainer
 	panel.size_flags_vertical = \
 		Control.SIZE_EXPAND_FILL if fill else Control.SIZE_SHRINK_BEGIN
 	parent.add_child(panel)
-	PencilSurface.add_to(panel, PencilSurface.Style.CARD)
+	AuroraSurface.add_to(panel, AuroraSurface.Style.CARD)
 	var margin := MarginContainer.new()
 	for side: String in ["left", "top", "right", "bottom"]:
 		margin.add_theme_constant_override("margin_%s" % side, padding)
@@ -82,26 +79,26 @@ static func card(parent: Control, padding := 26, fill := false) -> VBoxContainer
 	return box
 
 
-## Headings are gold on the violet card and carry a violet outline, which both
-## separates them from the body type and thickens a face that has no bold weight
-## of its own.
-static func heading(text: String, size := 32) -> Label:
+## Headings are cyan on the dark pane, over a thin ink outline. The outline is
+## legibility and not weight: Bungee has plenty of its own, but a pane has a
+## nebula drifting inside it and bright type on a moving field needs an edge.
+static func heading(text: String, size := 26) -> Label:
 	var label := Label.new()
 	label.text = text
 	label.add_theme_font_size_override("font_size", size)
 	label.add_theme_color_override("font_color", PALETTE.accent)
 	label.add_theme_color_override("font_outline_color", PALETTE.ink)
-	label.add_theme_constant_override("outline_size", 6)
+	label.add_theme_constant_override("outline_size", 4)
 	return label
 
 
 static func caption(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override("font_size", 17)
+	label.add_theme_font_size_override("font_size", 14)
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.add_theme_color_override("font_color", PALETTE.text_secondary)
-	label.add_theme_constant_override("outline_size", 3)
+	label.add_theme_constant_override("outline_size", 2)
 	return label
 
 
@@ -136,7 +133,7 @@ static func option_row(
 		option.add_item(String(item))
 	option.select(clampi(selected, 0, maxi(options.size() - 1, 0)))
 	option.item_selected.connect(callback)
-	PencilSurface.add_to(option, PencilSurface.Style.BUTTON)
+	AuroraSurface.add_to(option, AuroraSurface.Style.BUTTON)
 	group.add_child(option)
 	return group
 
@@ -189,7 +186,7 @@ static func field(parent: Control, label_text: String, value: String, placeholde
 	input.text = value
 	input.placeholder_text = placeholder
 	input.max_length = 64
-	PencilSurface.add_to(input, PencilSurface.Style.INPUT)
+	AuroraSurface.add_to(input, AuroraSurface.Style.INPUT)
 	group.add_child(input)
 	return input
 
@@ -207,7 +204,7 @@ static func number_field(
 	input.value = value
 	input.allow_greater = false
 	input.allow_lesser = false
-	PencilSurface.add_to(input, PencilSurface.Style.INPUT)
+	AuroraSurface.add_to(input, AuroraSurface.Style.INPUT)
 	group.add_child(input)
 	return input
 

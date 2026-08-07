@@ -48,7 +48,7 @@ title="Astraphel"
 
 [gui]
 
-theme/custom_font="res://fonts/Barrio-Regular.ttf"
+theme/custom_font="res://fonts/Bungee-Regular.ttf"
 
 [input]
 

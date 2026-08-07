@@ -58,11 +58,16 @@ const ROW_GAP := 8
 ## above the fold. Times its rows this has to come to the backpack's size, or the
 ## last row comes out ragged.
 const COLUMNS := 18
-## The catalogue's grid, which is the other shape entirely: a character owns a few
-## dozen garments at the outside and the card is its own, so the tiles are large
-## enough to tell one pair of goggles from another and there are few across.
-const CATALOGUE_COLUMNS := 5
+## The catalogue's tiles are the other shape entirely: a character owns a few
+## dozen things at the outside, so each one is large enough to tell one pair of
+## goggles from another. How many fit across is worked out from the width the grid
+## is actually given rather than fixed, because the same grid is shown in a card
+## half the window wide on the home screen and one nearly the whole window wide in
+## game — a count that suits either one wastes most of the other.
 const CATALOGUE_TILE := 84.0
+const CATALOGUE_MIN_COLUMNS := 4
+## Equipment tiles on a page with no figure on it. See [method _worn_column].
+const WORN_TILE := 74.0
 ## Height is the axis that runs out on this page: the figure, the pockets and the
 ## colour strip all want it and the card has to fit inside the window. Every value
 ## here that looks mean is paying for the strip staying above the fold.
@@ -151,6 +156,7 @@ var _category := ""
 var _slot_filter := ""
 var _category_row: HBoxContainer
 var _slot_row: HBoxContainer
+var _grid: GridContainer
 
 
 ## Called before the page enters the tree: it is built against these. `stats` may
@@ -197,14 +203,18 @@ func set_body(body_id: String) -> void:
 	_paint_model()
 
 
-## The containers the page was configured against, so a harness can move an item
-## without a mouse.
+## The three containers the page was configured against, so a harness can move an
+## item without a mouse.
 func worn_slots() -> ItemContainer:
 	return _equipment
 
 
 func spare_slots() -> ItemContainer:
 	return _pockets
+
+
+func rack_slots() -> ItemContainer:
+	return _weapons
 
 
 func _ready() -> void:
@@ -314,14 +324,14 @@ func _build_hero(column: VBoxContainer) -> void:
 func _name_plate() -> Control:
 	var panel := PanelContainer.new()
 	panel.custom_minimum_size = Vector2(260.0, 0.0)
-	PencilSurface.add_to(panel, PencilSurface.Style.INPUT if _editing \
-		else PencilSurface.Style.ROW)
+	AuroraSurface.add_to(panel, AuroraSurface.Style.INPUT if _editing \
+		else AuroraSurface.Style.ROW)
 	var padding := _padded(8 if _editing else 10)
 	panel.add_child(padding)
 	if not _editing:
 		var label := Label.new()
 		label.text = _player_name
-		label.add_theme_font_size_override(&"font_size", 24)
+		label.add_theme_font_size_override(&"font_size", 19)
 		label.add_theme_color_override(&"font_color", PALETTE.text_primary)
 		padding.add_child(label)
 		return panel
@@ -334,18 +344,28 @@ func _name_plate() -> Control:
 	field.text = _player_name
 	field.placeholder_text = "Your name"
 	field.max_length = 24
-	field.add_theme_font_size_override(&"font_size", 16)
+	field.add_theme_font_size_override(&"font_size", 13)
 	field.text_submitted.connect(func(value: String) -> void: name_entered.emit(value))
 	field.focus_exited.connect(func() -> void: name_entered.emit(field.text))
 	padding.add_child(field)
 	return panel
 
 
+## What is on the body, one tile per slot, head to feet.
+##
+## Centred down the row rather than sitting at the top of it, and larger wherever
+## there is no figure beside it. Without a preview this column *is* the left of
+## the card — the home screen's editor is the case, since its model is the figure
+## standing at the spawn behind it — and five 52 px tiles stranded against the top
+## edge of a 600 px row leave the whole lower half of the card blank.
 func _worn_column() -> Control:
 	var worn := VBoxContainer.new()
 	worn.add_theme_constant_override(&"separation", GAP)
+	worn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	for index in _equipment.size():
 		var slot := _new_slot(_equipment, index)
+		if not show_preview:
+			slot.set_edge(WORN_TILE)
 		slot.placeholder = String(ItemDB.SLOT_LABELS.get(_equipment.filter_of(index), ""))
 		worn.add_child(slot)
 	return worn
@@ -363,7 +383,10 @@ func _weapon_block() -> Control:
 		slot.badge = str(index + 1)
 		slots.add_child(slot)
 	block.add_child(slots)
-	block.add_child(_hint("Weapons you pick up are drawn from here" if _editing \
+	# The editor's line is short on purpose: a hint is the widest single control in
+	# the right-hand column, so it sets the card's width, and the editor's card is
+	# a share of the window with a figure standing in the rest of it.
+	block.add_child(_hint("What you start with" if _editing \
 		else "1 - 5 or the mouse wheel to draw"))
 	return block
 
@@ -373,17 +396,30 @@ func _pockets_block() -> Control:
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override(&"separation", GAP)
 	block.add_child(_filters())
-	var grid := GridContainer.new()
-	grid.columns = CATALOGUE_COLUMNS if catalogue else COLUMNS
-	grid.add_theme_constant_override(&"h_separation", GAP)
-	grid.add_theme_constant_override(&"v_separation", GAP)
+	_grid = GridContainer.new()
+	_grid.columns = CATALOGUE_MIN_COLUMNS if catalogue else COLUMNS
+	_grid.add_theme_constant_override(&"h_separation", GAP)
+	_grid.add_theme_constant_override(&"v_separation", GAP)
 	for index in _pockets.size():
 		var slot := _new_slot(_pockets, index)
 		if catalogue:
 			slot.set_edge(CATALOGUE_TILE)
-		grid.add_child(slot)
-	block.add_child(grid)
+		_grid.add_child(slot)
+	block.add_child(_grid)
+	if catalogue:
+		_grid.resized.connect(_fit_columns)
 	return block
+
+
+## As many tiles across as the grid has been given room for. A GridContainer wraps
+## on its column count and not on its width, so without this the catalogue is as
+## wide as the narrowest card it is ever shown in and the rest of the page is
+## blank to the right of it.
+func _fit_columns() -> void:
+	var across := maxi(CATALOGUE_MIN_COLUMNS,
+		int((_grid.size.x + GAP) / (CATALOGUE_TILE + GAP)))
+	if _grid.columns != across:
+		_grid.columns = across
 
 
 # --- Filtering the pockets --------------------------------------------------
@@ -440,8 +476,8 @@ func _fill_toggles(row: HBoxContainer, labels: Array[String], ids: Array,
 	for index in labels.size():
 		var id := String(ids[index])
 		var button := MenuWidgets.button(labels[index],
-			PencilSurface.Style.PRIMARY if id == current else PencilSurface.Style.BUTTON)
-		button.add_theme_font_size_override(&"font_size", 16)
+			AuroraSurface.Style.PRIMARY if id == current else AuroraSurface.Style.BUTTON)
+		button.add_theme_font_size_override(&"font_size", 13)
 		button.pressed.connect(func() -> void: on_pick.call(id))
 		row.add_child(button)
 
@@ -482,10 +518,17 @@ func _refresh_pockets() -> void:
 		# things: a filtered grid is a search result, and blanks are not results.
 		# A catalogue is nowhere to drop anything, so its blanks never show.
 		slot.visible = _matches(id) if filtering else true
-		var worn := catalogue and not id.is_empty() and _equipment.find(id) >= 0
+		var worn := catalogue and not id.is_empty() and _in_use(id)
 		if slot.selected != worn:
 			slot.selected = worn
 		slot.queue_redraw()
+
+
+## Whether a catalogue entry is on the body or on the rack. Both, because a
+## catalogue lists weapons beside garments and a ring that only ever meant "worn"
+## would leave every weapon looking unequipped while one of them is in hand.
+func _in_use(id: String) -> bool:
+	return _equipment.find(id) >= 0 or (_weapons != null and _weapons.find(id) >= 0)
 
 
 func _matches(id: String) -> bool:
@@ -508,7 +551,7 @@ func _category_of(id: String) -> String:
 func _stats_block() -> Control:
 	var panel := PanelContainer.new()
 	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	PencilSurface.add_to(panel, PencilSurface.Style.ROW)
+	AuroraSurface.add_to(panel, AuroraSurface.Style.ROW)
 	var padding := _padded(16)
 	panel.add_child(padding)
 	_stat_rows = VBoxContainer.new()
@@ -540,13 +583,13 @@ func _stat_row(row: Dictionary) -> Control:
 	var title := Label.new()
 	title.text = String(row["title"])
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title.add_theme_font_size_override(&"font_size", 17)
+	title.add_theme_font_size_override(&"font_size", 14)
 	title.add_theme_color_override(&"font_color", PALETTE.text_secondary)
 	line.add_child(title)
 
 	var value := Label.new()
 	value.text = String(row["text"])
-	value.add_theme_font_size_override(&"font_size", 17)
+	value.add_theme_font_size_override(&"font_size", 14)
 	value.add_theme_color_override(&"font_color", PALETTE.text_primary)
 	line.add_child(value)
 	box.add_child(line)
@@ -584,7 +627,7 @@ func _bar(share: float) -> Control:
 ## being duplicated.
 func _colour_block() -> Control:
 	var panel := PanelContainer.new()
-	PencilSurface.add_to(panel, PencilSurface.Style.ROW)
+	AuroraSurface.add_to(panel, AuroraSurface.Style.ROW)
 	var padding := _padded(10)
 	panel.add_child(padding)
 
@@ -628,11 +671,20 @@ func _on_slot_picked(slot: ItemSlot) -> void:
 	_set_tint_target(target)
 
 
-## Puts `id` on the body, or takes it off if that is what is already there. The
-## garment is not moved anywhere: a catalogue lists what exists, and the
-## equipment container is the only place a thing being worn is recorded.
+## Puts `id` on the body or on the rack, or takes it off if that is where it
+## already is. Nothing is moved between containers: a catalogue lists what
+## exists, and the equipment and weapon containers are the only places a thing
+## being carried is recorded.
+##
+## A garment goes to the one slot that accepts it, so wearing a second hat swaps
+## the first out. A weapon has five interchangeable slots instead, so it goes to
+## the first empty one and the rack fills up left to right the way the number keys
+## expect.
 func _wear(id: String) -> void:
 	if id.is_empty():
+		return
+	if ItemDB.is_weapon(id):
+		_rack(id)
 		return
 	var body_slot := ItemDB.slot_of(id)
 	for index in _equipment.size():
@@ -640,6 +692,18 @@ func _wear(id: String) -> void:
 			continue
 		_equipment.set_item(index, "" if _equipment.get_item(index) == id else id)
 		return
+
+
+func _rack(id: String) -> void:
+	if _weapons == null:
+		return
+	var held := _weapons.find(id)
+	if held >= 0:
+		_weapons.set_item(held, "")
+		return
+	var free := _weapons.first_accepting(id)
+	if free >= 0:
+		_weapons.set_item(free, id)
 
 
 ## Puts the selection ring, the caption, the wheel and [member _tint_target] in
@@ -799,7 +863,7 @@ func _padded(inset: int) -> MarginContainer:
 func _caption(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override(&"font_size", 17)
+	label.add_theme_font_size_override(&"font_size", 14)
 	label.add_theme_color_override(&"font_color", PALETTE.text_secondary)
 	return label
 
@@ -807,7 +871,7 @@ func _caption(text: String) -> Label:
 func _hint(text: String) -> Label:
 	var label := Label.new()
 	label.text = text
-	label.add_theme_font_size_override(&"font_size", 14)
+	label.add_theme_font_size_override(&"font_size", 11)
 	label.add_theme_color_override(&"font_color", PALETTE.text_muted)
 	return label
 
@@ -818,7 +882,7 @@ func _build_tooltip() -> void:
 	_tooltip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_tooltip.custom_minimum_size = Vector2(TOOLTIP_WIDTH, 0.0)
 	add_child(_tooltip)
-	PencilSurface.add_to(_tooltip, PencilSurface.Style.ROW)
+	AuroraSurface.add_to(_tooltip, AuroraSurface.Style.ROW)
 
 	var padding := _padded(10)
 	_tooltip.add_child(padding)
@@ -828,12 +892,12 @@ func _build_tooltip() -> void:
 	padding.add_child(column)
 
 	_tooltip_title = Label.new()
-	_tooltip_title.add_theme_font_size_override(&"font_size", 21)
+	_tooltip_title.add_theme_font_size_override(&"font_size", 17)
 	_tooltip_title.add_theme_color_override(&"font_color", PALETTE.text_primary)
 	column.add_child(_tooltip_title)
 
 	_tooltip_body = Label.new()
-	_tooltip_body.add_theme_font_size_override(&"font_size", 17)
+	_tooltip_body.add_theme_font_size_override(&"font_size", 14)
 	_tooltip_body.add_theme_color_override(&"font_color", PALETTE.text_secondary)
 	_tooltip_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_tooltip_body.custom_minimum_size = Vector2(TOOLTIP_WIDTH - 20.0, 0.0)
@@ -913,12 +977,24 @@ func _paint_model() -> void:
 
 ## Shift-clicking sends an item where it most obviously wants to go: onto the body
 ## or the rack if it can be equipped, and off either into your pockets.
+##
+## Against a catalogue there is nowhere to send it, because the grid holds every
+## item whether it is carried or not — so the shortcut means take it off, which is
+## the same thing clicking the tile does. Moving it would be worse than useless:
+## the rail is sized to its own contents and has no free slot, so the item would
+## land on top of another entry or vanish.
 func _on_quick_move(slot: ItemSlot) -> void:
 	var id := slot.item_id()
 	if id.is_empty():
 		return
 	var from := slot.container
 	var equipped: Array[ItemContainer] = [_equipment, _weapons]
+	if catalogue:
+		if equipped.has(from):
+			from.set_item(slot.index, "")
+		else:
+			_wear(id)
+		return
 	if equipped.has(from):
 		ItemContainer.quick_move(from, slot.index, _pockets)
 		return

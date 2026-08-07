@@ -54,6 +54,12 @@ var _tab := Tab.INVENTORY
 var _tab_row: HBoxContainer
 var _page_host: MarginContainer
 var _pages: Dictionary = {}
+## Everything this character owns, one item per slot, worn or not. See
+## [method _stock_catalogue].
+var _catalogue: ItemContainer
+## Stocking a container fires the same signal a player moving an item fires, and
+## the restock is driven off that signal. Without this it restocks itself forever.
+var _stocking := false
 
 
 ## Called before the menu enters the tree. The player is what every page is built
@@ -75,6 +81,11 @@ func _ready() -> void:
 	# Swallows clicks, so rummaging in a menu cannot also swing the camera.
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_build()
+	# Before the first page, which is built against the catalogue.
+	_stock_catalogue()
+	if _player != null:
+		for source: ItemContainer in [_player.backpack, _player.weapons, _player.equipment]:
+			source.changed.connect(_stock_catalogue)
 	show_tab(_tab)
 
 
@@ -145,7 +156,7 @@ func _build() -> void:
 		minf(window.x * WIDTH_SHARE, WIDTH_CAP),
 		maxf(window.y - TAB_ROW_ROOM, MIN_HEIGHT))
 	column.add_child(card)
-	PencilSurface.add_to(card, PencilSurface.Style.CARD)
+	AuroraSurface.add_to(card, AuroraSurface.Style.CARD)
 
 	var padding := MarginContainer.new()
 	for side in [&"margin_left", &"margin_right", &"margin_top", &"margin_bottom"]:
@@ -186,20 +197,60 @@ func _page_for(tab: Tab) -> Control:
 
 ## Both halves of the character screen come from here, against the same
 ## containers: Hero Design is the figure and its colours, Inventory is the
-## pockets. Two instances rather than two classes, because an item moving in
+## catalogue. Two instances rather than two classes, because an item moving in
 ## either one has to redraw the tiles in the other, and sharing the container is
 ## what already does that.
 func _character_page(section: InventoryPage.Section) -> Control:
 	var page := InventoryPage.new()
 	page.section = section
+	page.catalogue = true
 	if _player == null:
 		return page
-	page.configure(_player.equipment, _player.weapons, _player.backpack,
+	page.configure(_player.equipment, _player.weapons, _catalogue,
 		_player.stats, _player.body_id())
 	page.set_player_name(NetworkManager.local_player_name)
 	page.set_tints(_player.tints())
 	page.tint_picked.connect(_player.set_tint)
 	return page
+
+
+## Everything this character owns, listed whether it is on the body, in hand or
+## put away, with what is in use ringed and a click to equip or unequip.
+##
+## The tab used to draw the backpack straight, and for a player who has picked
+## nothing up that is 36 empty squares — which is the whole of what "the inventory
+## isn't showing the items" was. A wardrobe cut for your own skeleton is not
+## something you can lose, so listing it is honest, and it makes this tab the same
+## screen as the home screen's second tab rather than a different idea about what
+## an inventory is.
+##
+## Rebuilt whole on every change rather than patched: it is a few dozen strings
+## against a container that only exists while the menu is open, and the
+## alternative is keeping two lists in step.
+##
+## **The container itself is made once and never replaced.** Every tile on the
+## page holds a reference to it, so handing the page a new one of a different size
+## would leave the whole grid pointing at a container nothing writes to any more.
+## It is therefore sized to the most it could ever hold and the tail left empty,
+## which costs nothing: a catalogue hides its blanks, because a filtered grid is a
+## search result and an empty square is not a result.
+func _stock_catalogue() -> void:
+	if _stocking or _player == null:
+		return
+	var owned := PackedStringArray()
+	for id in CharacterDB.apparel_ids(_player.body_id()):
+		owned.append(id)
+	for source: ItemContainer in [_player.backpack, _player.weapons, _player.equipment]:
+		for id in source.items():
+			if not id.is_empty() and not owned.has(id):
+				owned.append(id)
+	if _catalogue == null:
+		_catalogue = ItemContainer.new(owned.size()
+			+ _player.backpack.size() + _player.weapons.size())
+	_stocking = true
+	for index in _catalogue.size():
+		_catalogue.set_item(index, owned[index] if index < owned.size() else "")
+	_stocking = false
 
 
 func _journal_page(kind: StringName) -> Control:

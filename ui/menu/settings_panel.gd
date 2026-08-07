@@ -87,9 +87,9 @@ func _build() -> void:
 	if not _in_game:
 		var card := MenuWidgets.card(self, 24, true)
 		card.custom_minimum_size = Vector2(MenuWidgets.panel_width(self, 0.84, 1240.0), 0)
-		card.add_child(MenuWidgets.heading("SETTINGS", 44))
+		card.add_child(MenuWidgets.heading("SETTINGS", 35))
 		card.add_child(MenuWidgets.caption("Changes are saved as you make them."))
-		card.add_child(PencilSurface.rule())
+		card.add_child(AuroraSurface.rule())
 		box = card
 
 	_section_row = HBoxContainer.new()
@@ -113,9 +113,9 @@ func _fill_section_row() -> void:
 		child.queue_free()
 	for index in SECTIONS.size():
 		var button := MenuWidgets.button(SECTIONS[index],
-			PencilSurface.Style.PRIMARY if index == _section else PencilSurface.Style.BUTTON)
+			AuroraSurface.Style.PRIMARY if index == _section else AuroraSurface.Style.BUTTON)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.add_theme_font_size_override("font_size", 18)
+		button.add_theme_font_size_override("font_size", 14)
 		var chosen := index
 		button.pressed.connect(func() -> void: show_section(chosen))
 		_section_row.add_child(button)
@@ -152,7 +152,7 @@ func _footer() -> Control:
 		var spacer := Control.new()
 		spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		actions.add_child(spacer)
-		var leave := MenuWidgets.button("LEAVE GAME", PencilSurface.Style.DANGER)
+		var leave := MenuWidgets.button("LEAVE GAME", AuroraSurface.Style.DANGER)
 		leave.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		leave.pressed.connect(func() -> void:
 			_settings.save_settings()
@@ -161,7 +161,7 @@ func _footer() -> Control:
 		actions.add_child(leave)
 		return actions
 
-	var back := MenuWidgets.button("BACK", PencilSurface.Style.PRIMARY)
+	var back := MenuWidgets.button("BACK", AuroraSurface.Style.PRIMARY)
 	back.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	back.pressed.connect(func() -> void:
 		_settings.save_settings()
@@ -301,14 +301,14 @@ func _controls_section() -> VBoxContainer:
 		tab.add_child(MenuWidgets.caption(
 			"Input actions appear here after they are added to the Input Map."))
 
-	tab.add_child(PencilSurface.rule())
+	tab.add_child(AuroraSurface.rule())
 	var about := Label.new()
 	about.text = "Godot %s    %s" % [
 		Engine.get_version_info().get("string", "?"),
 		"multiplayer" if NetworkManager != null and NetworkManager.in_multiplayer_session() \
 			else "single player",
 	]
-	about.add_theme_font_size_override("font_size", 16)
+	about.add_theme_font_size_override("font_size", 13)
 	about.add_theme_color_override("font_color", PALETTE.text_muted)
 	tab.add_child(about)
 	return tab

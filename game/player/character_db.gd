@@ -106,12 +106,15 @@ static func sanitize_body(id: String) -> String:
 
 
 ## Look dictionary written by the home-screen editor and read when a body is
-## previewed or spawned. `worn` is slot → item id; `tints` is "body" or a slot
-## → HTML colour. Both are sparse.
+## previewed or spawned. `worn` is slot → item id and `tints` is "body" or a slot
+## → HTML colour, both sparse; `rack` is the weapon bar, positional because a
+## rack slot is addressed by the number key over it and an item's place in it is
+## the whole of what the slot means.
 static func default_look() -> Dictionary:
 	return {
 		"body": DEFAULT_BODY,
 		"worn": {},
+		"rack": [],
 		"tints": {},
 	}
 
@@ -132,6 +135,15 @@ static func load_look() -> Dictionary:
 			if ItemDB.has_item(item_id) and apparel_fits(str(look["body"]), item_id):
 				worn[str(slot)] = item_id
 		look["worn"] = worn
+	var rack_raw: Variant = SettingsManager.get_setting(&"appearance", &"rack", [])
+	if rack_raw is Array:
+		var rack: Array = []
+		# Blanks are kept, because the rack is positional: dropping them would
+		# shuffle every weapon after a cleared slot onto a different number key.
+		for entry: Variant in rack_raw:
+			var item_id := str(entry)
+			rack.append(item_id if ItemDB.is_weapon(item_id) else "")
+		look["rack"] = rack
 	var tint_raw: Variant = SettingsManager.get_setting(&"appearance", &"tints", {})
 	if tint_raw is Dictionary:
 		look["tints"] = (tint_raw as Dictionary).duplicate(true)
@@ -144,6 +156,7 @@ static func save_look(look: Dictionary) -> void:
 	var body_id := sanitize_body(str(look.get("body", DEFAULT_BODY)))
 	SettingsManager.set_setting(&"appearance", &"body", body_id, false)
 	SettingsManager.set_setting(&"appearance", &"worn", look.get("worn", {}), false)
+	SettingsManager.set_setting(&"appearance", &"rack", look.get("rack", []), false)
 	SettingsManager.set_setting(&"appearance", &"tints", look.get("tints", {}), false)
 	SettingsManager.save_settings()
 
@@ -158,6 +171,19 @@ static func worn_items(look: Dictionary) -> PackedStringArray:
 		var slot: String = ItemDB.SLOT_ORDER[index]
 		var item_id := str(worn.get(slot, ""))
 		out[index] = item_id if apparel_fits(body_id, item_id) else ""
+	return out
+
+
+## The weapon bar, one entry per rack slot, for the weapons container. Not
+## filtered by body the way [method worn_items] is: a weapon is held rather than
+## skinned, so every body can carry every one of them.
+static func racked_items(look: Dictionary, slots: int) -> PackedStringArray:
+	var rack: Array = look.get("rack", [])
+	var out := PackedStringArray()
+	out.resize(slots)
+	for index in slots:
+		var item_id := str(rack[index]) if index < rack.size() else ""
+		out[index] = item_id if ItemDB.is_weapon(item_id) else ""
 	return out
 
 

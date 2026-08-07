@@ -140,6 +140,19 @@ static func is_weapon(id: String) -> bool:
 	return slot_of(id) == WEAPON
 
 
+## Every weapon in the catalogue, in table order. Derived rather than listed, so a
+## weapon added to [constant ITEMS] is offered by the character editor with no
+## second table to remember. The wardrobe's equivalent is
+## [method CharacterDB.apparel_ids], which cannot be derived the same way: a
+## garment belongs to one skeleton and a weapon is held by anybody.
+static func weapon_ids() -> PackedStringArray:
+	var ids := PackedStringArray()
+	for id: String in ITEMS:
+		if is_weapon(id):
+			ids.append(id)
+	return ids
+
+
 ## Which WeaponPose hold the arms take this in, or "" for something not held.
 static func hold_of(id: String) -> String:
 	return String(_field(id, "hold", ""))

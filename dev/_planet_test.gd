@@ -222,7 +222,7 @@ func _build_scene() -> void:
 	padding.add_theme_constant_override("margin_top", 14)
 	padding.add_theme_constant_override("margin_bottom", 14)
 	_readout = Label.new()
-	_readout.add_theme_font_size_override("font_size", 17)
+	_readout.add_theme_font_size_override("font_size", 14)
 	padding.add_child(_readout)
 	plate.add_child(padding)
 	var anchor := MarginContainer.new()
@@ -233,7 +233,7 @@ func _build_scene() -> void:
 	_hud = CanvasLayer.new()
 	_hud.add_child(anchor)
 	add_child(_hud)
-	PencilSurface.add_to(plate, PencilSurface.Style.HUD)
+	AuroraSurface.add_to(plate, AuroraSurface.Style.HUD)
 
 
 ## Sky, ambient and tonemapping. There is one background for the whole flight:

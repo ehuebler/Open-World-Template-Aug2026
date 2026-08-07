@@ -1,17 +1,17 @@
 [gd_resource type="Theme" format=3 uid="uid://doqmws24gmodf"]
 
-[ext_resource type="FontFile" uid="uid://dmcgqar5wa7a" path="res://fonts/Barrio-Regular.ttf" id="1_font"]
+[ext_resource type="FontFile" uid="uid://oe4q3yytdw7l" path="res://fonts/Bungee-Regular.ttf" id="1_font"]
 
 [sub_resource type="StyleBoxEmpty" id="ButtonPad"]
-content_margin_left = 22.0
-content_margin_top = 14.0
-content_margin_right = 22.0
-content_margin_bottom = 14.0
+content_margin_left = 20.0
+content_margin_top = 12.0
+content_margin_right = 20.0
+content_margin_bottom = 12.0
 
 [sub_resource type="StyleBoxFlat" id="ScrollGrabber"]
 content_margin_left = 3.0
 content_margin_right = 3.0
-bg_color = Color(0.624, 0.584, 0.467, 0.75)
+bg_color = Color(0.498, 0.525, 0.706, 0.75)
 corner_radius_top_left = 4
 corner_radius_top_right = 4
 corner_radius_bottom_right = 4
@@ -20,7 +20,7 @@ corner_radius_bottom_left = 4
 [sub_resource type="StyleBoxFlat" id="ScrollTrack"]
 content_margin_left = 3.0
 content_margin_right = 3.0
-bg_color = Color(0.133, 0.086, 0.141, 0.7)
+bg_color = Color(0.051, 0.043, 0.133, 0.7)
 corner_radius_top_left = 4
 corner_radius_top_right = 4
 corner_radius_bottom_right = 4
@@ -29,12 +29,12 @@ corner_radius_bottom_left = 4
 [sub_resource type="StyleBoxFlat" id="Separator"]
 content_margin_top = 1.0
 content_margin_bottom = 1.0
-bg_color = Color(0.624, 0.584, 0.467, 0.55)
+bg_color = Color(0.498, 0.525, 0.706, 0.55)
 
 [sub_resource type="StyleBoxFlat" id="SliderFill"]
 content_margin_top = 4.0
 content_margin_bottom = 4.0
-bg_color = Color(0.969, 0.702, 0.169, 1)
+bg_color = Color(0.435, 0.863, 0.949, 1)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -43,7 +43,7 @@ corner_radius_bottom_left = 3
 [sub_resource type="StyleBoxFlat" id="SliderTrack"]
 content_margin_top = 4.0
 content_margin_bottom = 4.0
-bg_color = Color(0.133, 0.086, 0.141, 0.9)
+bg_color = Color(0.051, 0.043, 0.133, 0.9)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -51,14 +51,14 @@ corner_radius_bottom_left = 3
 
 [sub_resource type="StyleBoxEmpty" id="InputPad"]
 content_margin_left = 14.0
-content_margin_top = 12.0
+content_margin_top = 10.0
 content_margin_right = 14.0
-content_margin_bottom = 12.0
+content_margin_bottom = 10.0
 
 [sub_resource type="StyleBoxEmpty" id="CardPad"]
 
 [sub_resource type="StyleBoxFlat" id="PopupHover"]
-bg_color = Color(0.969, 0.702, 0.169, 0.85)
+bg_color = Color(0.435, 0.863, 0.949, 0.85)
 corner_radius_top_left = 5
 corner_radius_top_right = 5
 corner_radius_bottom_right = 5
@@ -69,68 +69,68 @@ content_margin_left = 8.0
 content_margin_top = 8.0
 content_margin_right = 8.0
 content_margin_bottom = 8.0
-bg_color = Color(0.235, 0.165, 0.247, 1)
+bg_color = Color(0.09, 0.078, 0.212, 1)
 border_width_left = 2
 border_width_top = 2
 border_width_right = 2
 border_width_bottom = 2
-border_color = Color(0.784, 0.753, 0.565, 0.9)
+border_color = Color(0.69, 0.714, 0.886, 0.9)
 corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
 [sub_resource type="StyleBoxFlat" id="TabHovered"]
-content_margin_left = 20.0
-content_margin_top = 12.0
-content_margin_right = 20.0
-content_margin_bottom = 12.0
-bg_color = Color(0.663, 0.898, 0.733, 1)
+content_margin_left = 18.0
+content_margin_top = 10.0
+content_margin_right = 18.0
+content_margin_bottom = 10.0
+bg_color = Color(0.702, 0.647, 0.969, 1)
 corner_radius_top_left = 7
 corner_radius_top_right = 7
 
 [sub_resource type="StyleBoxFlat" id="TabSelected"]
-content_margin_left = 20.0
-content_margin_top = 12.0
-content_margin_right = 20.0
-content_margin_bottom = 12.0
-bg_color = Color(0.969, 0.702, 0.169, 1)
+content_margin_left = 18.0
+content_margin_top = 10.0
+content_margin_right = 18.0
+content_margin_bottom = 10.0
+bg_color = Color(0.435, 0.863, 0.949, 1)
 border_width_bottom = 3
-border_color = Color(0.988, 0.965, 0.694, 1)
+border_color = Color(0.918, 0.953, 1, 1)
 corner_radius_top_left = 7
 corner_radius_top_right = 7
 
 [sub_resource type="StyleBoxFlat" id="TabUnselected"]
-content_margin_left = 20.0
-content_margin_top = 12.0
-content_margin_right = 20.0
-content_margin_bottom = 12.0
-bg_color = Color(0.133, 0.086, 0.141, 0.9)
+content_margin_left = 18.0
+content_margin_top = 10.0
+content_margin_right = 18.0
+content_margin_bottom = 10.0
+bg_color = Color(0.051, 0.043, 0.133, 0.9)
 border_width_top = 2
 border_width_left = 2
 border_width_right = 2
-border_color = Color(0.624, 0.584, 0.467, 0.55)
+border_color = Color(0.498, 0.525, 0.706, 0.55)
 corner_radius_top_left = 7
 corner_radius_top_right = 7
 
 [resource]
 default_font = ExtResource("1_font")
-default_font_size = 26
-Button/colors/font_color = Color(0.102, 0.067, 0.098, 1)
-Button/colors/font_disabled_color = Color(0.102, 0.067, 0.098, 0.45)
-Button/colors/font_focus_color = Color(0.102, 0.067, 0.098, 1)
-Button/colors/font_hover_color = Color(0.102, 0.067, 0.098, 1)
-Button/colors/font_outline_color = Color(0.102, 0.067, 0.098, 1)
-Button/colors/font_pressed_color = Color(0.102, 0.067, 0.098, 1)
-Button/constants/outline_size = 4
-Button/font_sizes/font_size = 28
+default_font_size = 21
+Button/colors/font_color = Color(0.039, 0.031, 0.094, 1)
+Button/colors/font_disabled_color = Color(0.039, 0.031, 0.094, 0.45)
+Button/colors/font_focus_color = Color(0.039, 0.031, 0.094, 1)
+Button/colors/font_hover_color = Color(0.039, 0.031, 0.094, 1)
+Button/colors/font_outline_color = Color(0.039, 0.031, 0.094, 1)
+Button/colors/font_pressed_color = Color(0.039, 0.031, 0.094, 1)
+Button/constants/outline_size = 0
+Button/font_sizes/font_size = 22
 Button/styles/disabled = SubResource("ButtonPad")
 Button/styles/focus = SubResource("ButtonPad")
 Button/styles/hover = SubResource("ButtonPad")
 Button/styles/normal = SubResource("ButtonPad")
 Button/styles/pressed = SubResource("ButtonPad")
-CheckBox/colors/font_color = Color(0.988, 0.965, 0.694, 1)
-CheckBox/colors/font_pressed_color = Color(0.988, 0.965, 0.694, 1)
+CheckBox/colors/font_color = Color(0.902, 0.918, 1, 1)
+CheckBox/colors/font_pressed_color = Color(0.902, 0.918, 1, 1)
 HScrollBar/styles/grabber = SubResource("ScrollGrabber")
 HScrollBar/styles/grabber_highlight = SubResource("ScrollGrabber")
 HScrollBar/styles/grabber_pressed = SubResource("ScrollGrabber")
@@ -139,37 +139,37 @@ HSeparator/styles/separator = SubResource("Separator")
 HSlider/styles/grabber_area = SubResource("SliderFill")
 HSlider/styles/grabber_area_highlight = SubResource("SliderFill")
 HSlider/styles/slider = SubResource("SliderTrack")
-Label/colors/font_color = Color(0.988, 0.965, 0.694, 1)
-Label/colors/font_outline_color = Color(0.176, 0.118, 0.184, 1)
-Label/constants/outline_size = 5
-LineEdit/colors/caret_color = Color(0.969, 0.702, 0.169, 1)
-LineEdit/colors/font_color = Color(0.988, 0.965, 0.694, 1)
-LineEdit/colors/font_placeholder_color = Color(0.624, 0.584, 0.467, 0.9)
-LineEdit/colors/selection_color = Color(0.969, 0.702, 0.169, 0.35)
+Label/colors/font_color = Color(0.902, 0.918, 1, 1)
+Label/colors/font_outline_color = Color(0.039, 0.031, 0.094, 1)
+Label/constants/outline_size = 3
+LineEdit/colors/caret_color = Color(0.435, 0.863, 0.949, 1)
+LineEdit/colors/font_color = Color(0.902, 0.918, 1, 1)
+LineEdit/colors/font_placeholder_color = Color(0.498, 0.525, 0.706, 0.9)
+LineEdit/colors/selection_color = Color(0.435, 0.863, 0.949, 0.35)
 LineEdit/styles/focus = SubResource("InputPad")
 LineEdit/styles/normal = SubResource("InputPad")
 LineEdit/styles/read_only = SubResource("InputPad")
-OptionButton/colors/font_color = Color(0.102, 0.067, 0.098, 1)
-OptionButton/colors/font_focus_color = Color(0.102, 0.067, 0.098, 1)
-OptionButton/colors/font_hover_color = Color(0.102, 0.067, 0.098, 1)
-OptionButton/colors/font_outline_color = Color(0.102, 0.067, 0.098, 1)
-OptionButton/colors/font_pressed_color = Color(0.102, 0.067, 0.098, 1)
-OptionButton/constants/outline_size = 4
+OptionButton/colors/font_color = Color(0.039, 0.031, 0.094, 1)
+OptionButton/colors/font_focus_color = Color(0.039, 0.031, 0.094, 1)
+OptionButton/colors/font_hover_color = Color(0.039, 0.031, 0.094, 1)
+OptionButton/colors/font_outline_color = Color(0.039, 0.031, 0.094, 1)
+OptionButton/colors/font_pressed_color = Color(0.039, 0.031, 0.094, 1)
+OptionButton/constants/outline_size = 0
 OptionButton/styles/focus = SubResource("ButtonPad")
 OptionButton/styles/hover = SubResource("ButtonPad")
 OptionButton/styles/normal = SubResource("ButtonPad")
 OptionButton/styles/pressed = SubResource("ButtonPad")
 PanelContainer/styles/panel = SubResource("CardPad")
-PopupMenu/colors/font_color = Color(0.988, 0.965, 0.694, 1)
-PopupMenu/colors/font_hover_color = Color(0.102, 0.067, 0.098, 1)
+PopupMenu/colors/font_color = Color(0.902, 0.918, 1, 1)
+PopupMenu/colors/font_hover_color = Color(0.039, 0.031, 0.094, 1)
 PopupMenu/styles/hover = SubResource("PopupHover")
 PopupMenu/styles/panel = SubResource("PopupPanel")
-SpinBox/colors/font_color = Color(0.988, 0.965, 0.694, 1)
-TabContainer/colors/font_hovered_color = Color(0.102, 0.067, 0.098, 1)
-TabContainer/colors/font_outline_color = Color(0.102, 0.067, 0.098, 1)
-TabContainer/colors/font_selected_color = Color(0.102, 0.067, 0.098, 1)
-TabContainer/colors/font_unselected_color = Color(0.784, 0.753, 0.565, 1)
-TabContainer/constants/outline_size = 3
+SpinBox/colors/font_color = Color(0.902, 0.918, 1, 1)
+TabContainer/colors/font_hovered_color = Color(0.039, 0.031, 0.094, 1)
+TabContainer/colors/font_outline_color = Color(0.039, 0.031, 0.094, 1)
+TabContainer/colors/font_selected_color = Color(0.039, 0.031, 0.094, 1)
+TabContainer/colors/font_unselected_color = Color(0.69, 0.714, 0.886, 1)
+TabContainer/constants/outline_size = 0
 TabContainer/styles/panel = SubResource("CardPad")
 TabContainer/styles/tab_hovered = SubResource("TabHovered")
 TabContainer/styles/tab_selected = SubResource("TabSelected")

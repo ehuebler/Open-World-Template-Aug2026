@@ -38,7 +38,7 @@ func _build_create_column() -> void:
 	var box := MenuWidgets.card(self, 26, true)
 	box.custom_minimum_size = Vector2(MenuWidgets.panel_width(self, 0.4, 560.0), 0)
 	box.add_child(MenuWidgets.heading("CREATE LOBBY"))
-	box.add_child(PencilSurface.rule())
+	box.add_child(AuroraSurface.rule())
 
 	var form := MenuWidgets.scroll_area(box)
 	var player := MenuWidgets.field(form, "Player name", _player_name, "Your display name")
@@ -53,7 +53,7 @@ func _build_create_column() -> void:
 	var visibility := OptionButton.new()
 	visibility.add_item("Public")
 	visibility.add_item("Private - code required")
-	PencilSurface.add_to(visibility, PencilSurface.Style.BUTTON)
+	AuroraSurface.add_to(visibility, AuroraSurface.Style.BUTTON)
 	access.add_child(visibility)
 
 	var code := MenuWidgets.field(form, "Private lobby code", "", "4-12 letters or numbers")
@@ -64,7 +64,7 @@ func _build_create_column() -> void:
 		code_group.visible = index == 1
 	)
 
-	var host := MenuWidgets.button("HOST LOBBY", PencilSurface.Style.PRIMARY)
+	var host := MenuWidgets.button("HOST LOBBY", AuroraSurface.Style.PRIMARY)
 	host.custom_minimum_size.y = 56
 	host.pressed.connect(func() -> void:
 		_player_name = player.text.strip_edges()
@@ -92,7 +92,7 @@ func _build_join_column() -> void:
 	var box := MenuWidgets.card(self, 26, true)
 	box.custom_minimum_size = Vector2(MenuWidgets.panel_width(self, 0.4, 560.0), 0)
 	box.add_child(MenuWidgets.heading("JOIN LOBBY"))
-	box.add_child(PencilSurface.rule())
+	box.add_child(AuroraSurface.rule())
 
 	var form := MenuWidgets.scroll_area(box)
 	var player := MenuWidgets.field(form, "Player name", _player_name, "Your display name")
@@ -108,13 +108,13 @@ func _build_join_column() -> void:
 	form.add_child(_lobby_list)
 	_show_empty_lobbies()
 
-	form.add_child(PencilSurface.rule())
+	form.add_child(AuroraSurface.rule())
 	form.add_child(MenuWidgets.caption("Or connect straight to a host."))
 	var address := MenuWidgets.field(form, "Address", "127.0.0.1", "IP address or hostname")
 	var code := MenuWidgets.field(form, "Lobby code", "", "Blank for public lobbies")
 	code.max_length = 12
 
-	var join := MenuWidgets.button("CONNECT", PencilSurface.Style.PRIMARY)
+	var join := MenuWidgets.button("CONNECT", AuroraSurface.Style.PRIMARY)
 	join.custom_minimum_size.y = 56
 	join.pressed.connect(func() -> void:
 		_player_name = player.text.strip_edges()
@@ -160,7 +160,7 @@ func _on_lobby_list_changed(lobbies: Array) -> void:
 
 func _make_lobby_row(data: Dictionary) -> PanelContainer:
 	var panel := PanelContainer.new()
-	PencilSurface.add_to(panel, PencilSurface.Style.ROW)
+	AuroraSurface.add_to(panel, AuroraSurface.Style.ROW)
 	var padding := MarginContainer.new()
 	for side: String in ["left", "top", "right", "bottom"]:
 		padding.add_theme_constant_override("margin_%s" % side, 12)
@@ -212,7 +212,7 @@ func _ask_for_code(data: Dictionary) -> void:
 	code.max_length = 12
 	code.secret = true
 	code.custom_minimum_size.x = 260
-	PencilSurface.add_to(code, PencilSurface.Style.INPUT)
+	AuroraSurface.add_to(code, AuroraSurface.Style.INPUT)
 	dialog.add_child(code)
 	dialog.register_text_enter(code)
 	add_child(dialog)

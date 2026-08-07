@@ -75,9 +75,10 @@ const POSE_PITCHES := [-12.0, 30.0, 12.0]
 const PREVIEW_TURN := -32.0
 const POSE_FOVS := [90.0, 62.0, 58.0]
 
-## Type over space is outlined in near-black rather than in the palette's violet:
-## the planet's lit face passes under this text as the camera moves, and violet on
-## a pale limb is not a strong enough edge to hold the letterforms apart.
+## Type over space is outlined in near-black rather than in the palette's own
+## ink: the planet's lit face passes under this text as the camera moves, and a
+## deep indigo on a pale limb is not a strong enough edge to hold the letterforms
+## apart.
 const SKY_OUTLINE := Color(0.02, 0.01, 0.03, 0.92)
 ## Side of the pencil beside the name field, in pixels.
 const PENCIL_SIZE := 58.0
@@ -89,8 +90,9 @@ const MODES: Array[String] = ["Story Mode", "Crawler Mode"]
 ## The editor's tabs, in [enum InventoryPage.Section] order because the row is
 ## indexed by it. Named as the in-game menu names the same two.
 const EDITOR_TABS: Array[String] = ["Hero Design", "Inventory"]
-## Weapon slots the editor draws. The player's own bar is this long; see
-## [method _character_editor] for why an empty copy of it is worth the room.
+## Weapon slots the editor draws, which has to match the player's own bar:
+## `OnlinePlayer.apply_rack` fills it positionally, so a rack of a different
+## length here would put weapons under different number keys in game.
 const EDITOR_WEAPON_SLOTS := 5
 
 ## Height of the band at the foot of the window the menu row runs along, and how
@@ -168,7 +170,7 @@ var _editor_stats: PlayerStats
 ## card itself, so they cannot be reached by casting `_screen`.
 var _editor_pages: Dictionary = {}
 var _editor_tabs: HBoxContainer
-var _editor_host: MarginContainer
+var _editor_host: ScrollContainer
 ## Stocking a container fires its changed signal, which is the same signal the
 ## player dragging a garment fires; without this the editor would read its own
 ## restock back as a change and write it out again.
@@ -357,7 +359,7 @@ func _build_overlay() -> void:
 	_root.theme = preload("res://ui/themes/main_theme.tres")
 	_layer.add_child(_root)
 
-	_title = _sky_label(String(ProjectSettings.get_setting("game/title", "Astraphel")), 64)
+	_title = _sky_label(String(ProjectSettings.get_setting("game/title", "Astraphel")), 51)
 	_title.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 	_title.position = Vector2(56, 40)
 	_root.add_child(_title)
@@ -400,7 +402,7 @@ func _build_overlay() -> void:
 	_screen_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_screen_host)
 
-	_notice = _sky_label("", 20)
+	_notice = _sky_label("", 16)
 	_notice.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 	_notice.offset_top = -38.0
 	_notice.offset_bottom = -12.0
@@ -482,7 +484,7 @@ func _build_name_row() -> void:
 	panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	panel.custom_minimum_size = Vector2(250.0, 0.0)
 	row.add_child(panel)
-	PencilSurface.add_to(panel, PencilSurface.Style.INPUT)
+	AuroraSurface.add_to(panel, AuroraSurface.Style.INPUT)
 	var padding := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		padding.add_theme_constant_override(side, 12)
@@ -492,7 +494,7 @@ func _build_name_row() -> void:
 	_name_field.text = NetworkManager.saved_player_name()
 	_name_field.placeholder_text = "Your name"
 	_name_field.max_length = 24
-	_name_field.add_theme_font_size_override("font_size", 24)
+	_name_field.add_theme_font_size_override("font_size", 19)
 	_name_field.text_submitted.connect(func(value: String) -> void: _rename(value))
 	_name_field.focus_exited.connect(func() -> void: _rename(_name_field.text))
 	padding.add_child(_name_field)
@@ -503,10 +505,10 @@ func _build_name_row() -> void:
 	_name_row = row
 
 
-## A pencil, drawn rather than set as text: the pixel face carries no glyph for one,
-## and a missing glyph in this font comes out as a stray sliver rather than as a
-## visible box. Two polygons over a dark rim, so it reads against the starfield the
-## same way the outlined type beside it does.
+## A pencil, drawn rather than set as text: no display face here carries a glyph
+## for one, and a missing glyph comes out as a stray sliver rather than as a
+## visible box. Two polygons over a dark rim, so it reads against the starfield
+## the same way the outlined type beside it does.
 func _pencil_button() -> Button:
 	var button := Button.new()
 	button.flat = true
@@ -576,16 +578,16 @@ func _sky_label(text: String, size: int) -> Label:
 	return label
 
 
-## On a card the label stays violet and only the focus ring moves; over space
-## violet is invisible, so here the text itself carries the state. The meaning is
-## the one that holds everywhere else in the UI: custard at rest, and the screen's
-## own gold for the one item the player is on.
+## On a card the label stays dark and only the focus rim moves; over space a dark
+## label is invisible, so here the text itself carries the state. The meaning is
+## the one that holds everywhere else in the UI: starlight at rest, and the
+## screen's own cyan for the one item the player is on.
 func _sky_button(text: String, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = text
 	button.flat = true
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	button.add_theme_font_size_override("font_size", 34)
+	button.add_theme_font_size_override("font_size", 27)
 	button.add_theme_color_override("font_color", PALETTE.text_primary)
 	button.add_theme_color_override("font_hover_color", PALETTE.accent)
 	button.add_theme_color_override("font_focus_color", PALETTE.accent)
@@ -668,17 +670,22 @@ func _character_editor() -> Control:
 		_worn_slots = ItemContainer.new(ItemDB.SLOT_ORDER.size())
 		for index in ItemDB.SLOT_ORDER.size():
 			_worn_slots.set_filter(index, ItemDB.SLOT_ORDER[index])
-		# One slot per garment cut for this body, worn or not. The editor's grid
-		# is a catalogue rather than a bag, so nothing ever leaves it and there is
-		# no free slot for anything to arrive in.
-		_apparel_rail = ItemContainer.new(CharacterDB.apparel_ids(body_id).size())
-		# Empty and unfillable — nothing has been picked up before the world
-		# starts. It is here so the bar is where it will be, rather than as five
-		# tiles that appear between the editor and the first time the menu is
-		# opened and move everything under them when they do.
+		# One slot per thing this character owns, held or worn or neither. The
+		# editor's grid is a catalogue rather than a bag, so nothing ever leaves
+		# it and there is no free slot for anything to arrive in.
+		#
+		# Sized for the widest body rather than for this one, because swapping
+		# bodies restocks the container in place: the tiles are bound to it by
+		# index, so a container replaced under them would leave every tile
+		# pointing at a freed object.
+		_apparel_rail = ItemContainer.new(_catalogue_size())
+		# The weapon bar you start with. It is the same container the in-game
+		# rack is, so clicking a weapon in the catalogue fills it here exactly as
+		# it does in game, and `_capture_worn` writes the result into the look.
 		_editor_weapons = ItemContainer.new(EDITOR_WEAPON_SLOTS)
 		for index in EDITOR_WEAPON_SLOTS:
 			_editor_weapons.set_filter(index, ItemDB.WEAPON)
+		_editor_weapons.changed.connect(_on_editor_changed)
 		# The stats a new character starts with. `PlayerStats` needs nobody to
 		# exist, so the editor can show the numbers you are about to play with
 		# instead of a well explaining that it cannot.
@@ -687,7 +694,7 @@ func _character_editor() -> Control:
 	_stock_editor(body_id)
 
 	var card := PanelContainer.new()
-	PencilSurface.add_to(card, PencilSurface.Style.CARD)
+	AuroraSurface.add_to(card, AuroraSurface.Style.CARD)
 	var padding := MarginContainer.new()
 	for side in ["margin_left", "margin_right", "margin_top", "margin_bottom"]:
 		padding.add_theme_constant_override(side, 20)
@@ -705,8 +712,16 @@ func _character_editor() -> Control:
 	_editor_tabs.add_theme_constant_override("separation", 10)
 	column.add_child(_editor_tabs)
 
-	_editor_host = MarginContainer.new()
+	# The pages scroll rather than overflow. This is the one card in the project
+	# that is both content-sized and squeezed from two directions — the title band
+	# above it and the EDITOR_CARD_SHARE of the window beside it — so it is the
+	# card most likely to want more height than the band it is given. A card that
+	# does is centred in the band and therefore clipped at *both* ends, which is
+	# how the colour wheel and the tab strip go missing together and reads as the
+	# page being cut off rather than as it being too tall.
+	_editor_host = ScrollContainer.new()
 	_editor_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_editor_host.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	column.add_child(_editor_host)
 
 	_editor_pages.clear()
@@ -737,6 +752,11 @@ func _new_editor_page(section: InventoryPage.Section) -> InventoryPage:
 	page.section = section
 	page.show_preview = false
 	page.catalogue = true
+	# Fill the scroll viewport while it is big enough, and grow past it when it is
+	# not. Without these a ScrollContainer hands a child its minimum size and
+	# nothing else, which would leave the page its old width in a wider card.
+	page.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	page.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	page.configure(_worn_slots, _editor_weapons, _apparel_rail,
 		_editor_stats, body_id, true)
 	page.set_player_name(NetworkManager.saved_player_name())
@@ -748,9 +768,10 @@ func _new_editor_page(section: InventoryPage.Section) -> InventoryPage:
 
 
 ## Puts the two containers in step with the look: what fits this body and is being
-## worn goes on the body, and the whole of the body's wardrobe — including what is
-## on the body — goes on the rail. Garments cut for the other skeleton are not
-## offered at all.
+## worn goes on the body, and everything this character owns — the body's whole
+## wardrobe, worn or not, and every weapon — goes on the rail. Garments cut for
+## the other skeleton are not offered at all; weapons are offered to both, since a
+## weapon is held rather than skinned and fits anybody.
 ##
 ## The rail listing the worn garments as well is what makes it a catalogue: an
 ## item is not in two places, it is in one list and worn or not, which is the only
@@ -762,10 +783,25 @@ func _stock_editor(body_id: String) -> void:
 		var slot: String = ItemDB.SLOT_ORDER[index]
 		var item_id := str(worn.get(slot, ""))
 		_worn_slots.set_item(index, item_id if CharacterDB.apparel_fits(body_id, item_id) else "")
-	var wardrobe := CharacterDB.apparel_ids(body_id)
+	var rack: PackedStringArray = CharacterDB.racked_items(_look, _editor_weapons.size())
+	for index in _editor_weapons.size():
+		_editor_weapons.set_item(index, rack[index])
+	var owned := CharacterDB.apparel_ids(body_id)
+	owned.append_array(ItemDB.weapon_ids())
 	for index in _apparel_rail.size():
-		_apparel_rail.set_item(index, wardrobe[index] if index < wardrobe.size() else "")
+		_apparel_rail.set_item(index, owned[index] if index < owned.size() else "")
 	_stocking = false
+
+
+## Slots the rail needs to hold any body's catalogue, so that swapping bodies
+## never has to resize it. Every body's wardrobe rather than the largest, because
+## the sum is a couple of dozen tiles and a spare one is an invisible blank in a
+## grid that hides its empties.
+func _catalogue_size() -> int:
+	var total := ItemDB.weapon_ids().size()
+	for id in CharacterDB.body_ids():
+		total += CharacterDB.apparel_ids(id).size()
+	return total
 
 
 func _on_editor_changed() -> void:
@@ -775,8 +811,13 @@ func _on_editor_changed() -> void:
 	_dress_preview()
 
 
-## The equipment container is where a garment being worn is recorded; the look is
-## a copy of it, taken whenever it moves.
+## The two containers are where being worn and being carried are recorded; the
+## look is a copy of them, taken whenever either moves.
+##
+## Garments go in by slot and weapons by position, and that difference is not
+## cosmetic: a garment's slot is what it *is*, so a sparse map survives a slot
+## being inserted into `SLOT_ORDER`, while a rack slot means nothing except which
+## number key draws it.
 func _capture_worn() -> void:
 	var worn: Dictionary = {}
 	for index in _worn_slots.size():
@@ -784,6 +825,10 @@ func _capture_worn() -> void:
 		if not item_id.is_empty():
 			worn[_worn_slots.filter_of(index)] = item_id
 	_look["worn"] = worn
+	var rack: Array = []
+	for index in _editor_weapons.size():
+		rack.append(_editor_weapons.get_item(index))
+	_look["rack"] = rack
 	CharacterDB.save_look(_look)
 
 
