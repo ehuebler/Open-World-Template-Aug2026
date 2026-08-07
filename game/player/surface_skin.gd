@@ -29,6 +29,12 @@ static func apply(root: Node) -> Array[MeshInstance3D]:
 
 
 static func paint(mesh_instance: MeshInstance3D, derived: Dictionary = {}) -> MeshInstance3D:
+	# Characters cast no shadow, and it is decided here because this is the one
+	# call every body's meshes already pass through — the player, the home
+	# screen's preview, the editor's, and each garment as it is put on. Left to
+	# whoever owns the body, it is four places to remember and the previews are
+	# the two nobody thinks of.
+	mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	var mesh := mesh_instance.mesh
 	if mesh == null:
 		return mesh_instance

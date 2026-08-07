@@ -41,6 +41,7 @@ func _run() -> void:
 	await _tab_key()
 	await _dress()
 	await _tint()
+	await _filter()
 	await _walk_tabs()
 	await _admin()
 	await _close_with_tab()
@@ -94,29 +95,79 @@ func _dress() -> void:
 ## The colour strip along the bottom. Only offers targets for what is actually worn,
 ## so this runs after dressing.
 func _tint() -> void:
-	var page := _page()
+	var page := _page(InventoryPage.Section.HERO)
 	if page == null:
 		return
+	await _wait(16)
 	page.tint_picked.emit(InventoryPage.TINT_BODY, Color(0.85, 0.70, 0.55))
 	await _wait(16)
 	_report("tint", "tints=%s" % [_player.tints()])
 	await _shot("menu_tinted")
 
 
+## Whether the pockets filter narrows anything, which is the one thing about it a
+## screenshot cannot say: a row of buttons that does nothing photographs exactly
+## like a row that works. Pressed through the button, so what is measured is the
+## wiring and not the predicate.
+##
+## Filled with one garment and one weapon, because a filter is only proved by the
+## thing it leaves out.
+func _filter() -> void:
+	var page := _page()
+	if page == null:
+		return
+	_player.backpack.clear()
+	_player.backpack.set_item(0, "c3_hair")
+	_player.backpack.set_item(1, "sword")
+	await _wait(12)
+	var counts: Array[String] = []
+	for label: String in ["", "Clothing", "Weapons", "Items"]:
+		if not label.is_empty():
+			_press(page, label)
+			await _wait(10)
+		counts.append("%s=%d" % [label if not label.is_empty() else "all",
+			_showing(page)])
+	# Back to everything, or the tabs are photographed mid-search below.
+	_press(page, "Items")
+	await _wait(10)
+	_report("pockets filter", ", ".join(counts))
+
+
+## Tiles of the pockets grid the player can currently see.
+func _showing(page: InventoryPage) -> int:
+	var shown := 0
+	for node in page.find_children("*", "ItemSlot", true, false):
+		var slot := node as ItemSlot
+		if slot.container == page.spare_slots() and slot.visible:
+			shown += 1
+	return shown
+
+
+func _press(page: InventoryPage, label: String) -> void:
+	for node in page.find_children("*", "Button", true, false):
+		var button := node as Button
+		if button.text == label:
+			button.pressed.emit()
+			return
+
+
 func _walk_tabs() -> void:
 	var menu := _menu()
 	if menu == null:
 		return
-	for row: Array in [
+	var rows: Array[Array] = [
+		[GameMenu.Tab.HERO, "menu_hero"],
+		[GameMenu.Tab.INVENTORY, "menu_inventory"],
 		[GameMenu.Tab.QUESTS, "menu_quests"],
 		[GameMenu.Tab.ACHIEVEMENTS, "menu_achievements"],
 		[GameMenu.Tab.SETTINGS, "menu_settings"],
 		[GameMenu.Tab.ADMIN, "menu_admin"],
-	]:
+	]
+	for row: Array in rows:
 		menu.show_tab(row[0])
 		await _wait(26)
 		await _shot(row[1])
-	_report("tabs", "photographed %d" % 4)
+	_report("tabs", "photographed %d" % rows.size())
 
 
 ## The admin tab's ADD, found by walking for the button rather than by calling the
@@ -168,13 +219,19 @@ func _menu() -> GameMenu:
 	return null
 
 
-func _page() -> InventoryPage:
+## The character screen is two pages against one set of containers now, so which
+## one is wanted has to be said: the pockets live on Inventory and the figure, the
+## worn tiles and the colour strip live on Hero Design.
+func _page(section := InventoryPage.Section.POCKETS) -> InventoryPage:
 	var menu := _menu()
 	if menu == null:
 		return null
+	menu.show_tab(GameMenu.Tab.INVENTORY if section == InventoryPage.Section.POCKETS \
+		else GameMenu.Tab.HERO)
 	for node in menu.find_children("*", "Control", true, false):
-		if node is InventoryPage:
-			return node as InventoryPage
+		var page := node as InventoryPage
+		if page != null and page.section == section:
+			return page
 	return null
 
 

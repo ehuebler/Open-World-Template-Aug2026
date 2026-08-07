@@ -38,6 +38,31 @@ const GRASS := Color(0.33, 0.66, 0.25)
 const UPLAND := Color(0.19, 0.45, 0.27)
 const ROCK := Color(0.46, 0.42, 0.42)
 const SNOW := Color(0.95, 0.96, 1.00)
+# Arid country, in the order a cliff face stacks them. Sandstone reads as bands
+# because it was laid down as bands, so these are a *sequence* and not a palette
+# to pick from: [method _strata] walks them by altitude, which is what puts the
+# same courses at the same height on every butte in sight of each other and is
+# most of why the result looks deposited rather than noisy.
+## Darker than sandstone looks in a photograph, and deliberately. The scene runs
+## about 1.4 of light through a surface before ACES tone maps it, so a colour
+## written at the value the rock reads at comes out washed pink — which is what
+## the first pass at this did across a whole hemisphere. Judge these under
+## `dev/_planet_test.tscn -- --tour` and nowhere else, the same rule the city
+## road tones are held to.
+const MESA_MAROON := Color(0.26, 0.10, 0.09)
+const MESA_RED := Color(0.45, 0.16, 0.09)
+const MESA_ORANGE := Color(0.62, 0.29, 0.11)
+const MESA_CREAM := Color(0.70, 0.57, 0.36)
+## Dust on anything flat enough to hold it. Bands are a cliff feature — a bench
+## top is covered in its own debris — so the flats fade to this and only the
+## risers carry the sequence above.
+const DESERT_FLOOR := Color(0.56, 0.38, 0.22)
+# A geyser basin: sinter white, the bacterial mats that ring a hot pool, and the
+# pool itself. Placed on the lake field rather than a field of their own, so a
+# basin sits exactly where an arid region would otherwise have had standing water.
+const SINTER := Color(0.91, 0.89, 0.83)
+const MAT_ORANGE := Color(0.88, 0.51, 0.16)
+const POOL_BLUE := Color(0.13, 0.58, 0.70)
 ## Pack ice, which is not snow: ice is dense enough to swallow the warm end of
 ## the light and hand back the blue, and reading as a paler shade of the snow
 ## beside it is what made the arctic one flat white field with no coastline in it.
@@ -142,6 +167,71 @@ const SEA_ICE_WETNESS := 0.3
 ## Noise level above which a lowland flat sinks into a lake bed. Lower floods more.
 @export_range(0.0, 1.0) var lake_threshold := 0.60
 
+@export_group("Arid country")
+## Share of the land that is desert. The whole look below hangs off this one
+## number: at 0 the planet is the green one it was, at 1 there is no grass left
+## anywhere. It is approximate rather than solved the way [member sea_fraction]
+## is, because nothing downstream depends on the exact figure — no shoreline has
+## to come out in the right place — so a threshold on the raw field is enough.
+@export_range(0.0, 1.0) var aridity := 0.66
+## Distance between deserts. Deliberately smaller than the continents so that a
+## single landmass carries both, and a green valley is something you fly out of
+## the red country to reach rather than a different continent.
+@export var arid_wavelength := 4600.0
+
+## Height of one bench, in metres.
+##
+## This is the number that turns hills into mesas, and the most powerful one in
+## the file. The ground is quantised onto multiples of it, so a slope that used
+## to run smoothly uphill becomes a staircase of flat tops and steep risers —
+## which is what Monument Valley is, geologically and visually: level courses of
+## rock, each eroding back at its own rate.
+@export var terrace_height := 32.0
+## Share of each bench spent climbing rather than flat. Small is dramatic: at
+## 0.2 a fifth of the rise is cliff and four fifths is tableland. Past about 0.5
+## it stops reading as terracing at all and is just a slightly lumpy hill.
+@export_range(0.02, 0.9) var terrace_riser := 0.2
+## The sample spacing at which benches stop being drawn, in metres. Cliffs are
+## the one thing here that genuinely cannot survive a coarse mesh — a riser is
+## near-vertical and a chunk stepping over it aliases into a sawtooth — so they
+## fade like every other fine feature. Set generously: the fade is what a distant
+## mesa loses, and losing it looks like a smooth hill rather than like an error.
+@export var terrace_span := 120.0
+
+## Extra depth of a slot canyon over an ordinary river, in metres.
+##
+## Cut from the same noise field the rivers use and therefore free, which is also
+## why it is right: a canyon is what a river does to arid ground given time, so
+## the two belong on the same lines. It is applied above the waterline only, so a
+## canyon is a dry gorge and its lowland reaches are still the river they were.
+@export var canyon_depth := 120.0
+## Half-width of the slot, in noise units. Far narrower than [member river_width]
+## — the point of a slot canyon is that it is a crack you could jump across at
+## the top and a hundred metres deep.
+@export_range(0.0, 0.05) var canyon_width := 0.0035
+
+## Thickness of one colour course, in metres.
+##
+## **Must not divide [member terrace_height] evenly**, and that is not a nicety.
+## Terracing quantises the ground onto multiples of the bench height, so if the
+## courses shared a period with it every bench top in the world would land on the
+## same colour and the banding would vanish everywhere except the risers — which
+## is exactly what the first attempt did, and it came out a uniform salmon. Left
+## incommensurate, successive benches land at different points in the sequence and
+## a staircase of tablelands climbs through the whole palette.
+@export var stratum_height := 11.5
+
+## Height of a hoodoo above the bench it stands on, in metres.
+##
+## Spires stand on the lip of a riser, which is where they form: a bench erodes
+## back and leaves columns of the harder course behind it. They are the finest
+## thing on the planet and the first to fade, so they are only ever seen from
+## close to — which is the honest treatment, since at 1.5 m between vertices a
+## spire is four vertices across and would read as speckle at any distance.
+@export var hoodoo_height := 17.0
+## Distance between spires, in metres.
+@export var hoodoo_wavelength := 21.0
+
 @export_group("Polar cap")
 ## How much of the planet's surface is arctic, as a share of its area.
 ##
@@ -173,13 +263,32 @@ const SEA_ICE_WETNESS := 0.3
 ## everywhere.
 @export var cities: Array[CityPlan] = []
 
-var _continent: FastNoiseLite
-var _mountain: FastNoiseLite
-var _hills: FastNoiseLite
-var _detail: FastNoiseLite
-var _rivers: FastNoiseLite
-var _roughness: FastNoiseLite
-var _lakes: FastNoiseLite
+## A cosine no unit dot product can reach, which is how a town that is switched
+## off keeps its row in the tables below without ever matching.
+const UNREACHABLE_CAP := 2.0
+
+## Where a feature is fully resolved, as a fraction of its own width. See
+## [method _resolves], which is this rule written out.
+const RESOLVE_FLOOR := 0.33
+
+## [member cities]' `near` test, flattened: the cap axis and the cosine to beat,
+## one row per town in the same order. See `prepare`.
+var _town_up: PackedVector3Array = []
+var _town_cap: PackedFloat32Array = []
+
+## The native height field. Built in [method prepare] and read-only afterwards,
+## which is what makes it safe on the mesh worker threads.
+##
+## Typed, and that is a performance requirement rather than tidiness. Held as an
+## [Object] the call is resolved by name against [ClassDB] every time, which
+## takes a global read lock — four build threads asking a few thousand times each
+## per chunk turned a sample that had got cheaper into one that was twenty times
+## dearer, and it reads as the whole terrain pipeline stalling rather than as a
+## slow function. Typed, GDScript binds the method once and calls it directly.
+var _field: PlanetField
+
+## Where the arid field is cut to leave [member aridity] of the land desert.
+var _arid_edge := 0.0
 var _sea_bias := 0.0
 var _pole := Vector3.UP
 ## Cosines of the cap's outer and inner edges, in that order, so [method frost]
@@ -194,14 +303,17 @@ var _built := false
 func prepare() -> void:
 	if _built:
 		return
-	_continent = _make_noise(continent_wavelength, 5, 0)
-	_mountain = _make_noise(mountain_wavelength, 5, 101)
-	_hills = _make_noise(hill_wavelength, 3, 202)
-	_detail = _make_noise(detail_wavelength, 2, 303)
-	_rivers = _make_noise(river_wavelength, 3, 404)
-	_roughness = _make_noise(roughness_wavelength, 2, 505)
-	_lakes = _make_noise(lake_wavelength, 3, 606)
-	_sea_bias = _solve_sea_bias()
+	# The arithmetic lives in the native field; this resource owns the numbers,
+	# the towns and the API. See AGENTS.md for why the split is here and not
+	# somewhere more convenient — briefly, everything above this line is data a
+	# designer edits and everything below it is a few thousand samples per chunk.
+	_field = PlanetField.new()
+	_field.configure(native_settings(self))
+	# Simplex clusters around zero rather than spreading evenly, so the useful
+	# half of this range is the middle: the ends are asking for a threshold the
+	# field almost never crosses, which is why it stops short of +-1.
+	_arid_edge = lerpf(-0.5, 0.5, 1.0 - aridity)
+	_sea_bias = float(_field.solve_sea_bias(SURVEY_SAMPLES, sea_fraction))
 	_pole = frost_axis.normalized() if frost_axis.length_squared() > 0.0 else Vector3.UP
 	_frost_edge = 1.0 - 2.0 * clampf(frost_area + frost_blend * 0.5, 0.0, 1.0)
 	_frost_full = 1.0 - 2.0 * clampf(frost_area - frost_blend * 0.5, 0.0, 1.0)
@@ -211,6 +323,22 @@ func prepare() -> void:
 		cities.assign(Settlements.plans())
 	for town: CityPlan in cities:
 		town.prepare(radius)
+	# `near()` is two comparisons and a dot product, and calling it costs several
+	# times what it does: at two towns the test was 0.82 µs of a 6.7 µs sample,
+	# 12% of every height on the planet spent on cross-resource call overhead
+	# rather than on arithmetic. Cached flat so the hot paths can ask inline.
+	#
+	# One row per town whether or not it is switched on, so an index into these
+	# is an index into `cities`: a town that can never answer yes is given a cap
+	# no dot product can reach rather than being left out, because dropping it
+	# would silently shift every later town onto the wrong plan.
+	_town_up.clear()
+	_town_cap.clear()
+	for town: CityPlan in cities:
+		var bounds := town.near_bounds()
+		var live := bounds != Vector4.ZERO
+		_town_up.append(Vector3(bounds.x, bounds.y, bounds.z) if live else Vector3.UP)
+		_town_cap.append(bounds.w if live else UNREACHABLE_CAP)
 	_built = true
 
 
@@ -260,63 +388,25 @@ func frost_inner() -> float:
 ## over while the player's ground guard — which always samples at the finest
 ## spacing — held them on the flat.
 func elevation(direction: Vector3, spacing := 0.0) -> float:
-	var point := direction * radius
-	var continent := _continent.get_noise_3dv(point) + _sea_bias
-	var height := 0.0
-	if continent <= 0.0:
-		height = _sea_floor(point, continent, spacing)
-	else:
-		var inland := clampf(continent / CONTINENT_SPAN, 0.0, 1.0)
-		var rough := _roughness_at(point)
-		height = _relief(point, inland, rough, spacing)
-		height -= _lake_cut(point, height, rough, spacing)
-		height -= _river_cut(point, height, spacing)
-	height = _freeze(direction, height)
-	for town: CityPlan in cities:
-		if town.near(direction):
-			return town.elevation(direction, height)
+	var height: float = _field.elevation(direction, spacing)
+	for index in _town_up.size():
+		if direction.dot(_town_up[index]) >= _town_cap[index]:
+			return cities[index].elevation(direction, height)
 	return height
-
-
-## The sea, frozen over. Inside the cap anything under the waterline comes up to
-## [constant ICE_TOP]; ground already above it is left exactly where it was, so
-## the coast, the hills and the mountains of the arctic are the same landscape
-## they would have been with the floe laid across the water between them.
-##
-## Blended by [method frost] rather than switched, which is what makes the edge
-## read: through the band the ice thins toward the sea it came from, so the floe
-## breaks up into open water over a kilometre or two instead of ending in a wall.
-func _freeze(direction: Vector3, height: float) -> float:
-	if height >= ICE_TOP:
-		return height
-	var chill := frost(direction)
-	if chill <= 0.0:
-		return height
-	return lerpf(height, ICE_TOP, chill)
 
 
 ## The parts an elevation was made of: what the water is, how rough the ground is,
 ## how high it would have been dry. Surveys need this to tell a river from a lake,
-## which cannot be done from the finished height alone. Built from the same
-## helpers as [method elevation], so the two cannot drift apart.
+## which cannot be done from the finished height alone. Built by the native field
+## from the same helpers as [method elevation], so the two cannot drift apart.
 func sample(direction: Vector3) -> Dictionary:
-	var point := direction * radius
-	var continent := _continent.get_noise_3dv(point) + _sea_bias
-	if continent <= 0.0:
-		return {"elevation": _freeze(direction, _sea_floor(point, continent, 0.0)),
-			"dry": 0.0, "river": 0.0, "lake": 0.0, "rough": 0.0, "continent": continent}
-	var inland := clampf(continent / CONTINENT_SPAN, 0.0, 1.0)
-	var rough := _roughness_at(point)
-	var dry := _relief(point, inland, rough, 0.0)
-	var lake := _lake_cut(point, dry, rough, 0.0)
-	var river := _river_cut(point, dry - lake, 0.0)
-	var height := _freeze(direction, dry - lake - river)
-	for town: CityPlan in cities:
-		if town.near(direction):
-			height = town.elevation(direction, height)
+
+	var parts: Dictionary = _field.sample(direction)
+	for index in _town_up.size():
+		if direction.dot(_town_up[index]) >= _town_cap[index]:
+			parts["elevation"] = cities[index].elevation(direction, parts["elevation"])
 			break
-	return {"elevation": height, "dry": dry, "river": river,
-		"lake": lake, "rough": rough, "continent": continent}
+	return parts
 
 
 ## The point on the surface below a unit direction, in planet-local space.
@@ -345,6 +435,33 @@ func normal_at(direction: Vector3, spacing: float) -> Vector3:
 	return normal if normal.dot(up) > 0.0 else -normal
 
 
+## Whether a patch of ground this wide, centred here, could touch a town.
+##
+## Conservative on purpose: it is the test that decides whether a chunk may be
+## built by the native field, which knows nothing about towns, and a false
+## negative would build a pad as though the hills under it were still there.
+## The chunk's own width is turned into an angle and taken straight off the cap's
+## cosine, which over-estimates the reach — a cosine never falls faster than its
+## angle — and so can only ever err toward the slower path.
+func overlaps_town(centre: Vector3, arc: float) -> bool:
+	if _town_up.is_empty():
+		return false
+	var direction := centre.normalized()
+	var margin := arc / maxf(radius, 1.0)
+	for index in _town_up.size():
+		if direction.dot(_town_up[index]) >= _town_cap[index] - margin:
+			return true
+	return false
+
+
+## One chunk's mesh, built in the native field. See [method Planet._build_natively].
+func build_patch(face_origin: Vector3, face_u: Vector3, face_v: Vector3,
+		offset: Vector2, size: float, resolution: int, spacing: float,
+		skirt: float, chunk_origin: Vector3, want_collision: bool) -> Dictionary:
+	return _field.build_patch(face_origin, face_u, face_v, offset, size,
+		resolution, spacing, skirt, chunk_origin, want_collision)
+
+
 ## The biome colour for a point, with how wet it is in the alpha channel.
 ##
 ## Alpha is the one signal the surface shader cannot work out for itself: a chunk
@@ -352,166 +469,54 @@ func normal_at(direction: Vector3, spacing: float) -> Vector3:
 ## than as blue ground. 0 is dry, [constant SHORE_WETNESS] is the waterline, 1 is
 ## open ocean.
 func color_at(direction: Vector3, height: float, normal: Vector3) -> Color:
+	var ground: Color = _field.color_at(direction, height, normal)
+	# Water is not zoned. The town cap is a disc on the sphere and the Landing's
+	# reaches the sea, so a pad's concrete would otherwise be mixed into the
+	# harbour — which is what happened for as long as this loop ran over every
+	# colour rather than over the dry ones. Height, not alpha, decides: the
+	# alpha channel is wetness and the shore is wet without being sea.
 	if height <= 0.0:
-		var depth := smoothstep(-1.0, -70.0, height)
-		var water := DEEP_WATER.lerp(SHALLOW_WATER, 1.0 - depth)
-		water.a = lerpf(SHORE_WETNESS, 1.0, depth)
-		return water
-	# The sand band is deliberately narrow. Coastal plains here run for kilometres
-	# at only a few metres of altitude, so a wide band turns every one of them
-	# into a desert.
-	var ground := SHORE.lerp(GRASS, smoothstep(0.5, 7.0, height))
-	ground = ground.lerp(UPLAND, smoothstep(25.0, 110.0, height))
-	ground = ground.lerp(ROCK, smoothstep(150.0, 300.0, height))
-	ground = ground.lerp(SNOW, smoothstep(330.0, 460.0, height))
-	# Anything too steep to hold soil reads as bare rock whatever its altitude.
-	var slope := 1.0 - clampf(normal.dot(direction.normalized()), 0.0, 1.0)
-	ground = ground.lerp(ROCK, smoothstep(0.32, 0.62, slope))
-	ground.a = 0.0
-	ground = _whiten(direction, height, ground)
-	for town: CityPlan in cities:
-		if town.near(direction):
-			return town.tint(direction, ground)
+		return ground
+	for index in _town_up.size():
+		if direction.dot(_town_up[index]) >= _town_cap[index]:
+			return cities[index].tint(direction, ground)
 	return ground
 
 
-## Snow over the arctic, and pack ice where the arctic is sea.
+## Every tuning number the native field needs, by the name it has here.
 ##
-## The two are told apart by height alone, which they can be because
-## [method _freeze] put the ice at exactly [constant ICE_TOP] and left everything
-## else alone: ground sitting at the ice line was sea, ground above it was always
-## ground. That saves recomputing the sea floor here purely to ask a question the
-## height already answers.
-##
-## They differ in colour and in wetness, and the same height ramp carries both:
-## [constant ICE] and [constant SEA_ICE_WETNESS] on the floe, so the surface shader
-## gives it the smooth, mirror-ish treatment it gives water — which is what ice
-## wants too — and [constant SNOW] bone dry and matte on the land above it.
-func _whiten(direction: Vector3, height: float, ground: Color) -> Color:
-	var chill := frost(direction)
-	if chill <= 0.0:
-		return ground
-	var ashore := smoothstep(ICE_TOP, ICE_TOP + 1.5, height)
-	var arctic := ICE.lerp(SNOW, ashore)
-	arctic.a = SEA_ICE_WETNESS * (1.0 - ashore)
-	return ground.lerp(arctic, chill)
-
-
-# --- Layers -----------------------------------------------------------------
-
-## The sea bed: an apron of shallows out to the shelf break, then a slope into an
-## abyss. Not one curve from shore to deepest point, because a single smoothstep
-## spends most of the ocean's width barely under water and the result is a blue
-## surface sitting at sea level pretending to be the sea.
-##
-## It passes through exactly zero at the waterline, so the floor meets the land it
-## was carved out of without a step, and it is strictly below zero everywhere else
-## — the relief term is faded in with depth faster than it can grow, so no dune
-## out there can surface as an island the shoreline solver never counted.
-func _sea_floor(point: Vector3, continent: float, spacing: float) -> float:
-	# 0 at the shoreline, 1 out where the ocean stops getting any more oceanic.
-	var out := clampf(-continent / abyss_span, 0.0, 1.0)
-	var depth := shelf_depth * smoothstep(0.0, shelf_break, out) \
-		+ (ocean_depth - shelf_depth) * smoothstep(shelf_break, 1.0, out)
-	# The same hill field the land above uses, so the two are one landscape with
-	# a waterline drawn across it rather than two that meet at the coast.
-	var relief := _hills.get_noise_3dv(point) * seabed_relief \
-		* _resolves(hill_wavelength, spacing) \
-		* smoothstep(0.0, seabed_relief * 2.0, depth)
-	return relief - depth
-
-
-## How much relief the ground is allowed here, independently of how high it is.
-## This is what makes plains possible: without it, altitude would imply hills.
-func _roughness_at(point: Vector3) -> float:
-	return smoothstep(0.42, 0.86, _roughness.get_noise_3dv(point) * 0.5 + 0.5)
-
-
-## Land height before any water is carved out of it.
-func _relief(point: Vector3, inland: float, rough: float, spacing: float) -> float:
-	# Coasts stay low and interiors climb, so a beach is a beach and not a cliff.
-	var height := pow(inland, 1.4) * land_height
-	# Everything the ground is made of is faded in over the first stretch inland.
-	# The hill term does not start at zero — half its amplitude is a constant —
-	# so without this the land begins at whatever the hill noise happens to read
-	# on the waterline, and every shore in the world is a step of up to
-	# hill_height with nowhere to wade in from.
-	var ashore := smoothstep(0.0, 0.1, inland)
-	# Ridged noise cubed leaves sparse sharp crests rather than a lumpy field.
-	var ridge := 1.0 - absf(_mountain.get_noise_3dv(point))
-	height += pow(ridge, 3.0) * mountain_height * rough \
-		* smoothstep(0.05, 0.45, inland) * _resolves(mountain_wavelength, spacing)
-	height += (_hills.get_noise_3dv(point) * 0.5 + 0.5) * hill_height \
-		* (0.2 + 0.8 * rough) * ashore * _resolves(hill_wavelength, spacing)
-	return height + _detail.get_noise_3dv(point) * detail_height * ashore \
-		* _resolves(detail_wavelength, spacing)
-
-
-## Rivers are the zero crossing of a noise field, which gives a network of
-## meandering lines for the cost of one lookup. They are not solved from flow, so
-## they run downhill only in the statistical sense; the altitude fade is what
-## keeps them out of the summits, and only the lowland reaches cut deep enough to
-## fall below sea level and read as water.
-func _river_cut(point: Vector3, height: float, spacing: float) -> float:
-	if height <= 0.0:
-		return 0.0
-	# A channel is far narrower than its wavelength, and it is the channel a
-	# coarse mesh cannot resolve. Faded on its own width, not the noise's.
-	var resolves := _resolves(river_channel * 2.0, spacing)
-	if resolves <= 0.0:
-		return 0.0
-	var channel := 1.0 - absf(_rivers.get_noise_3dv(point))
-	var across := smoothstep(1.0 - river_width, 1.0, channel)
-	if across <= 0.0:
-		return 0.0
-	return river_depth * across * resolves * (1.0 - smoothstep(90.0, 380.0, height))
-
-
-## Broad shallow basins on lowland flats. Where one takes the ground under sea
-## level it fills, so lakes and ponds are a consequence of the terrain rather
-## than objects placed on it.
-func _lake_cut(point: Vector3, height: float, rough: float, spacing: float) -> float:
-	var resolves := _resolves(lake_wavelength * 0.35, spacing)
-	if resolves <= 0.0:
-		return 0.0
-	var level := _lakes.get_noise_3dv(point) * 0.5 + 0.5
-	var pool := smoothstep(lake_threshold, lake_threshold + 0.14, level)
-	if pool <= 0.0:
-		return 0.0
-	return lake_depth * pool * resolves * (1.0 - rough) \
-		* (1.0 - smoothstep(70.0, 240.0, height))
-
-
-## How much of a feature [param size] metres across survives being sampled every
-## [param spacing] metres: all of it below a third of its size, none of it once
-## the samples are as far apart as the feature is wide.
-func _resolves(size: float, spacing: float) -> float:
-	if spacing <= 0.0:
-		return 1.0
-	return smoothstep(size, size * 0.33, spacing)
-
-
-# --- Setup ------------------------------------------------------------------
-
-func _make_noise(wavelength: float, octaves: int, seed_offset: int) -> FastNoiseLite:
-	var noise := FastNoiseLite.new()
-	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-	noise.seed = noise_seed + seed_offset
-	noise.frequency = 1.0 / maxf(wavelength, 1.0)
-	noise.fractal_type = FastNoiseLite.FRACTAL_FBM
-	noise.fractal_octaves = octaves
-	return noise
-
-
-## Finds the offset that puts sea_fraction of the surface below zero, by sampling
-## the continent field evenly over the sphere and reading off the quantile.
-func _solve_sea_bias() -> float:
-	var values := PackedFloat32Array()
-	values.resize(SURVEY_SAMPLES)
-	for index in SURVEY_SAMPLES:
-		values[index] = _continent.get_noise_3dv(even_direction(index, SURVEY_SAMPLES) * radius)
-	values.sort()
-	return -values[clampi(int(SURVEY_SAMPLES * sea_fraction), 0, SURVEY_SAMPLES - 1)]
+## A dictionary rather than a setter per field because the alternative is fifty
+## of them that all have to be kept in step with the exports above by hand, and
+## a name missed is a number silently left at the C++ side's own default —
+## which produces a plausible planet that is not this one. Keyed off the export
+## list so adding a number here is the only edit a new tuning knob needs.
+static func native_settings(shape: PlanetShape) -> Dictionary:
+	var settings := {}
+	for entry in shape.get_property_list():
+		if int(entry["usage"]) & PROPERTY_USAGE_STORAGE == 0:
+			continue
+		var named: String = entry["name"]
+		var value: Variant = shape.get(named)
+		if value is float or value is int or value is Vector3:
+			settings[named] = value
+	# The constants go over too, so this file stays the one place the planet's
+	# palette and thresholds are written down. They could be literals on the
+	# other side — they were, for one version — but a colour is the kind of thing
+	# somebody edits without ever opening the C++, and a palette that exists twice
+	# is a palette that will disagree.
+	settings["CONTINENT_SPAN"] = CONTINENT_SPAN
+	settings["RESOLVE_FLOOR"] = RESOLVE_FLOOR
+	settings["SHORE_WETNESS"] = SHORE_WETNESS
+	settings["ICE_TOP"] = ICE_TOP
+	settings["SEA_ICE_WETNESS"] = SEA_ICE_WETNESS
+	settings["palette"] = {
+		"DEEP_WATER": DEEP_WATER, "SHALLOW_WATER": SHALLOW_WATER,
+		"SHORE": SHORE, "GRASS": GRASS, "UPLAND": UPLAND, "ROCK": ROCK,
+		"SNOW": SNOW, "ICE": ICE, "MESA_MAROON": MESA_MAROON,
+		"MESA_RED": MESA_RED, "MESA_ORANGE": MESA_ORANGE,
+		"MESA_CREAM": MESA_CREAM, "DESERT_FLOOR": DESERT_FLOOR,
+	}
+	return settings
 
 
 ## One of [param count] directions spread evenly over the sphere, so a survey

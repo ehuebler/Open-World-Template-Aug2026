@@ -1,0 +1,18 @@
+#!/usr/bin/env python
+# Builds the native height field into bin/. See AGENTS.md; the bindings in
+# godot-cpp/ are generated against this machine's own Godot with
+# `--dump-extension-api`, because godot-cpp has no branch for 4.7.
+
+import os
+
+env = SConscript("godot-cpp/SConstruct")
+
+env.Append(CPPPATH=["src/"])
+sources = Glob("src/*.cpp")
+
+library = env.SharedLibrary(
+    "../bin/libplanet{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+    source=sources,
+)
+
+Default(library)

@@ -48,8 +48,18 @@ enum View { HOME, ONLINE, SETTINGS, CHARACTER }
 ##     looked 25 degrees down onto a figure whose middle is at 0.9, and the home
 ##     screen showed the top of its head. Dropping to the figure's own height
 ##     rides it up the frame, which the shorter pitch then pays for.
+##   - The HOME row was moved in until the figure fills three fifths of the frame
+##     rather than two fifths, and the height went **up** to pay for it. Those are
+##     the same two dials as above doing the same two jobs: coming in makes the
+##     figure bigger about wherever it already was, and at this size that put the
+##     hair through the top edge; rising drops the whole figure down the frame and
+##     leaves the planet where it was, because nine kilometres does not care about
+##     a foot of camera. Reaching for the pitch instead is the mistake — it would
+##     have brought the planet down with it and closed the band the menu sits in.
+##     The head now lands about a sixth of the way down and the feet three
+##     quarters, which leaves the name plate and the menu row the bottom quarter.
 const POSE_OFFSETS := [
-	Vector3(2.05, 0.98, 1.05),
+	Vector3(1.50, 1.15, 0.77),
 	Vector3(0.0, 2.2, -2.0),
 	Vector3(-2.0, 1.2, 3.5),
 ]
@@ -71,6 +81,35 @@ const POSE_FOVS := [90.0, 62.0, 58.0]
 const SKY_OUTLINE := Color(0.02, 0.01, 0.03, 0.92)
 ## Side of the pencil beside the name field, in pixels.
 const PENCIL_SIZE := 58.0
+
+## What New Game opens onto. They all start the same game for now; the list is
+## here so a fourth is one string rather than another button and another lambda.
+const MODES: Array[String] = ["Story Mode", "Crawler Mode"]
+
+## The editor's tabs, in [enum InventoryPage.Section] order because the row is
+## indexed by it. Named as the in-game menu names the same two.
+const EDITOR_TABS: Array[String] = ["Hero Design", "Inventory"]
+## Weapon slots the editor draws. The player's own bar is this long; see
+## [method _character_editor] for why an empty copy of it is worth the room.
+const EDITOR_WEAPON_SLOTS := 5
+
+## Height of the band at the foot of the window the menu row runs along, and how
+## far its baseline sits off the bottom edge.
+const MENU_ROW_HEIGHT := 56.0
+const MENU_ROW_INSET := 38.0
+## Share of the window the character editor's card is allowed, measured from the
+## right edge. The rest is the figure, which is the whole reason the editor has no
+## preview of its own — see [method _character_editor].
+const EDITOR_CARD_SHARE := 0.56
+## Where a screen's card starts: under the title row for the full-width ones, and
+## higher for the editor, which is off to the right of the title rather than under
+## it. `dev/_menu_shot.tscn` prints what the card wants against what it is given.
+const TITLE_BAND := 136.0
+## Higher again since the editor grew a tab strip, which is 54 px the card has to
+## find from somewhere. It only clears the title horizontally rather than
+## vertically now, which is enough: the title ends around 400 px in and the card
+## starts past the middle of the window.
+const EDITOR_TOP := 52.0
 
 const MOVE_TIME := 0.85
 ## The sweep from the home pose to behind the character. Long enough to read as a
@@ -95,7 +134,10 @@ var _view := View.HOME
 var _layer: CanvasLayer
 var _root: Control
 var _title: Label
-var _menu: VBoxContainer
+var _menu: HBoxContainer
+## Which set of entries the menu row is showing. New Game does not start a game
+## any more, it asks which one, and the answer replaces the row it was pressed on.
+var _picking_mode := false
 var _back: Button
 var _screen_host: MarginContainer
 var _screen: Control
@@ -117,9 +159,16 @@ var _look: Dictionary = {}
 ## the screen so the look survives the editor being closed and opened again.
 var _worn_slots: ItemContainer
 var _apparel_rail: ItemContainer
-## The editor's page, which is the card's content rather than the card itself, so
-## it cannot be reached by casting `_screen`.
-var _editor_page: InventoryPage
+## Five weapon slots nothing can be put in, and the stats a new character starts
+## with. Held here for the same reason the containers are: the editor is thrown
+## away and rebuilt every time it is opened.
+var _editor_weapons: ItemContainer
+var _editor_stats: PlayerStats
+## The editor's pages by section, which are the card's content rather than the
+## card itself, so they cannot be reached by casting `_screen`.
+var _editor_pages: Dictionary = {}
+var _editor_tabs: HBoxContainer
+var _editor_host: MarginContainer
 ## Stocking a container fires its changed signal, which is the same signal the
 ## player dragging a garment fires; without this the editor would read its own
 ## restock back as a change and write it out again.
@@ -161,7 +210,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			show_view(View.HOME)
 			get_viewport().set_input_as_handled()
 		return
-	if _view != View.HOME or _handover_target != null:
+	# Turnable while the editor is open as well as from the home view: with no
+	# preview of its own, the figure standing in the world *is* the editor's
+	# model, and being able to look at its back is most of what dressing one is.
+	if (_view != View.HOME and _view != View.CHARACTER) or _handover_target != null:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_dragging = event.pressed
@@ -319,25 +371,21 @@ func _build_overlay() -> void:
 	_back.visible = false
 	_root.add_child(_back)
 
-	# Under the planet and hard right, where the mock-up puts it: the character
-	# owns the left of the frame and nothing should crowd it. The top edge is
-	# where the planet's lower limb lands at the HOME pose, so the list runs down
-	# dark sky rather than over cloud.
-	_menu = VBoxContainer.new()
-	_menu.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	_menu.anchor_left = 0.6
-	_menu.anchor_right = 0.97
-	_menu.anchor_top = 0.5
-	_menu.anchor_bottom = 0.5
-	_menu.offset_top = 0.0
-	_menu.offset_bottom = 0.0
-	_menu.grow_vertical = Control.GROW_DIRECTION_END
-	_menu.add_theme_constant_override("separation", 22)
+	# One row along the foot of the window rather than a list down the right.
+	# The list was there because the figure owned the left of the frame and the
+	# planet the right, which left one column of dark sky to put it in — but the
+	# figure has since been brought in close enough to want the middle as well,
+	# and a row along the bottom is the one place that crosses neither. It also
+	# stops being a column that grows downward off the screen as entries are
+	# added to it.
+	_menu = HBoxContainer.new()
+	_menu.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_menu.offset_top = -(MENU_ROW_HEIGHT + MENU_ROW_INSET)
+	_menu.offset_bottom = -MENU_ROW_INSET
+	_menu.alignment = BoxContainer.ALIGNMENT_CENTER
+	_menu.add_theme_constant_override("separation", 54)
 	_root.add_child(_menu)
-	_menu.add_child(_sky_button("New Game", start_new_game))
-	_menu.add_child(_sky_button("Online", func() -> void: show_view(View.ONLINE)))
-	_menu.add_child(_sky_button("Settings", func() -> void: show_view(View.SETTINGS)))
-	_menu.add_child(_sky_button("Quit", func() -> void: get_tree().quit()))
+	_fill_menu_row()
 
 	_build_name_row()
 
@@ -347,7 +395,7 @@ func _build_overlay() -> void:
 	_screen_host = MarginContainer.new()
 	_screen_host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	# Clear of the title row, which stays put behind every screen.
-	_screen_host.offset_top = 136.0
+	_screen_host.offset_top = TITLE_BAND
 	_screen_host.offset_bottom = -28.0
 	_screen_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_screen_host)
@@ -371,6 +419,37 @@ func _build_overlay() -> void:
 		.set_trans(Tween.TRANS_SINE)
 
 
+## The row's entries, which are one of two sets.
+##
+## New Game asks which mode rather than starting one, and the answer takes over
+## the row it was pressed on instead of opening a screen of its own. Two buttons
+## are not a form, and a card holding them would dim the figure that is about to
+## become the player — which is the one thing on this screen a mode picker should
+## leave alone, since the modes differ in what happens to that character.
+func _fill_menu_row() -> void:
+	for child in _menu.get_children():
+		child.queue_free()
+	if _picking_mode:
+		# Both start the same game today. The seam for telling them apart is
+		# `start_new_game`, which is already the one place the world is handed
+		# the spawn and the look, and is where a mode would go beside them.
+		for mode: String in MODES:
+			_menu.add_child(_sky_button(mode, start_new_game))
+		_menu.add_child(_sky_button("Back", func() -> void: _pick_mode(false)))
+		return
+	_menu.add_child(_sky_button("New Game", func() -> void: _pick_mode(true)))
+	_menu.add_child(_sky_button("Online", func() -> void: show_view(View.ONLINE)))
+	_menu.add_child(_sky_button("Settings", func() -> void: show_view(View.SETTINGS)))
+	_menu.add_child(_sky_button("Quit", func() -> void: get_tree().quit()))
+
+
+func _pick_mode(picking: bool) -> void:
+	if _picking_mode == picking:
+		return
+	_picking_mode = picking
+	_fill_menu_row()
+
+
 ## The name under the figure, and the pencil beside it.
 ##
 ## Under the character rather than in the menu on the right, because it is that
@@ -384,12 +463,17 @@ func _build_name_row() -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	row.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	row.anchor_top = 0.62
-	row.anchor_bottom = 0.62
-	# Placed so the field sits centred under the figure, which stands at a third of
-	# the way across; the pencil then falls in the empty space to its right.
-	row.offset_left = 275.0
-	row.offset_right = 620.0
+	# Between the figure's feet and the menu row along the bottom, which is the
+	# band left over once the figure was brought in close. Anchored across rather
+	# than placed in pixels from the left edge: the figure's own position in the
+	# frame is a fraction of the width — it is parallax off a camera a metre and a
+	# half to the side — so a pixel offset only holds at one window size.
+	row.anchor_top = 0.75
+	row.anchor_bottom = 0.75
+	row.anchor_left = 0.17
+	row.anchor_right = 0.17
+	row.offset_left = 0.0
+	row.offset_right = 345.0
 	row.offset_top = -26.0
 	row.offset_bottom = 26.0
 	_root.add_child(row)
@@ -471,8 +555,9 @@ func _rename(value: String) -> void:
 	var stored := NetworkManager.saved_player_name()
 	if _name_field.text != stored:
 		_name_field.text = stored
-	if is_instance_valid(_editor_page):
-		_editor_page.set_player_name(stored)
+	for page: Variant in _editor_pages.values():
+		if is_instance_valid(page):
+			(page as InventoryPage).set_player_name(stored)
 
 
 ## Type over the starfield cannot sit on a drawn plate the way the in-game HUD
@@ -522,8 +607,9 @@ func show_view(view: View) -> void:
 	if is_instance_valid(_screen):
 		_screen.queue_free()
 		_screen = null
-		_editor_page = null
+		_editor_pages.clear()
 	_menu.visible = view == View.HOME
+	_pick_mode(false)
 	_back.visible = view != View.HOME
 	# The editor carries a name field of its own, so the one under the figure would
 	# be a second field for the same name sitting beside it.
@@ -534,6 +620,18 @@ func show_view(view: View) -> void:
 	# no planet to protect and wants every pixel it can get. Character stays on
 	# the home pose so the preview keeps facing the camera while you edit it.
 	_screen_host.offset_bottom = -96.0 if view == View.ONLINE else -28.0
+	# And the editor is held clear of the left of the frame, because the figure
+	# standing there is the editor's preview. A full-width card would cover the
+	# one thing it is for.
+	#
+	# Being over there is also what lets it start higher than every other screen.
+	# The 136 px band exists to clear the title, and the title is 56 px from the
+	# left edge — so a card that begins past the middle of the window is not under
+	# it and the difference is height the equipment column needs.
+	var editing := view == View.CHARACTER
+	_screen_host.anchor_left = 1.0 - EDITOR_CARD_SHARE if editing else 0.0
+	_screen_host.offset_right = -28.0 if editing else 0.0
+	_screen_host.offset_top = EDITOR_TOP if editing else TITLE_BAND
 	match view:
 		View.ONLINE:
 			var lobby := LobbyPanel.new()
@@ -570,7 +668,21 @@ func _character_editor() -> Control:
 		_worn_slots = ItemContainer.new(ItemDB.SLOT_ORDER.size())
 		for index in ItemDB.SLOT_ORDER.size():
 			_worn_slots.set_filter(index, ItemDB.SLOT_ORDER[index])
-		_apparel_rail = ItemContainer.new(InventoryPage.RAIL_COLUMNS)
+		# One slot per garment cut for this body, worn or not. The editor's grid
+		# is a catalogue rather than a bag, so nothing ever leaves it and there is
+		# no free slot for anything to arrive in.
+		_apparel_rail = ItemContainer.new(CharacterDB.apparel_ids(body_id).size())
+		# Empty and unfillable — nothing has been picked up before the world
+		# starts. It is here so the bar is where it will be, rather than as five
+		# tiles that appear between the editor and the first time the menu is
+		# opened and move everything under them when they do.
+		_editor_weapons = ItemContainer.new(EDITOR_WEAPON_SLOTS)
+		for index in EDITOR_WEAPON_SLOTS:
+			_editor_weapons.set_filter(index, ItemDB.WEAPON)
+		# The stats a new character starts with. `PlayerStats` needs nobody to
+		# exist, so the editor can show the numbers you are about to play with
+		# instead of a well explaining that it cannot.
+		_editor_stats = PlayerStats.new()
 		_worn_slots.changed.connect(_on_editor_changed)
 	_stock_editor(body_id)
 
@@ -581,22 +693,68 @@ func _character_editor() -> Control:
 		padding.add_theme_constant_override(side, 20)
 	card.add_child(padding)
 
-	# No weapons: nothing has been picked up yet, so the rack would be five empty
-	# tiles and a hint about number keys that do nothing here.
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 10)
+	padding.add_child(column)
+
+	# The same two tabs the in-game menu has, from the same strip and against the
+	# same two sections. Dressing a character and rummaging in what you own are
+	# two jobs however far apart in the game they happen, and the editor showing
+	# both at once was the one screen in the project that disagreed about that.
+	_editor_tabs = HBoxContainer.new()
+	_editor_tabs.add_theme_constant_override("separation", 10)
+	column.add_child(_editor_tabs)
+
+	_editor_host = MarginContainer.new()
+	_editor_host.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	column.add_child(_editor_host)
+
+	_editor_pages.clear()
+	_show_editor_tab(InventoryPage.Section.HERO)
+	return card
+
+
+func _show_editor_tab(section: InventoryPage.Section) -> void:
+	MenuWidgets.fill_tab_row(_editor_tabs, EDITOR_TABS, int(section),
+		func(index: int) -> void: _show_editor_tab(index as InventoryPage.Section))
+	for child in _editor_host.get_children():
+		child.visible = false
+	_editor_pages.get_or_add(section, _new_editor_page(section))
+	(_editor_pages[section] as Control).visible = true
+
+
+## Built once per tab and kept, the way [GameMenu] keeps its pages.
+##
+## No preview on either, because there is already one: the figure hanging at the
+## spawn behind this card is the character being edited, lit by the world's own
+## sun and wearing exactly what the containers hold. The page used to render a
+## second one into a SubViewport a couple of hundred pixels wide, which meant two
+## models of the same character on screen at once, disagreeing about the light
+## and about which way round they were turned.
+func _new_editor_page(section: InventoryPage.Section) -> InventoryPage:
+	var body_id := CharacterDB.sanitize_body(str(_look.get("body", CharacterDB.DEFAULT_BODY)))
 	var page := InventoryPage.new()
-	page.configure(_worn_slots, ItemContainer.new(0), _apparel_rail, null, body_id, true)
+	page.section = section
+	page.show_preview = false
+	page.catalogue = true
+	page.configure(_worn_slots, _editor_weapons, _apparel_rail,
+		_editor_stats, body_id, true)
 	page.set_player_name(NetworkManager.saved_player_name())
 	page.set_tints(_look.get("tints", {}))
 	page.tint_picked.connect(_on_tint_picked)
 	page.name_entered.connect(_rename)
-	padding.add_child(page)
-	_editor_page = page
-	return card
+	_editor_host.add_child(page)
+	return page
 
 
-## Puts the two containers in step with the look: what fits this body and is
-## being worn goes on the body, and the rest of the body's wardrobe goes on the
-## rail. Garments cut for the other skeleton are not offered at all.
+## Puts the two containers in step with the look: what fits this body and is being
+## worn goes on the body, and the whole of the body's wardrobe — including what is
+## on the body — goes on the rail. Garments cut for the other skeleton are not
+## offered at all.
+##
+## The rail listing the worn garments as well is what makes it a catalogue: an
+## item is not in two places, it is in one list and worn or not, which is the only
+## arrangement in which the grid can mark what is on the body.
 func _stock_editor(body_id: String) -> void:
 	_stocking = true
 	var worn: Dictionary = _look.get("worn", {})
@@ -604,12 +762,9 @@ func _stock_editor(body_id: String) -> void:
 		var slot: String = ItemDB.SLOT_ORDER[index]
 		var item_id := str(worn.get(slot, ""))
 		_worn_slots.set_item(index, item_id if CharacterDB.apparel_fits(body_id, item_id) else "")
-	var spare := PackedStringArray()
-	for item_id in CharacterDB.apparel_ids(body_id):
-		if _worn_slots.find(item_id) < 0:
-			spare.append(item_id)
+	var wardrobe := CharacterDB.apparel_ids(body_id)
 	for index in _apparel_rail.size():
-		_apparel_rail.set_item(index, spare[index] if index < spare.size() else "")
+		_apparel_rail.set_item(index, wardrobe[index] if index < wardrobe.size() else "")
 	_stocking = false
 
 
@@ -643,8 +798,9 @@ func _on_tint_picked(target: String, colour: Color) -> void:
 	tints[target] = colour.to_html(false)
 	_look["tints"] = tints
 	CharacterDB.save_look(_look)
-	if is_instance_valid(_editor_page):
-		_editor_page.set_tints(tints)
+	for page: Variant in _editor_pages.values():
+		if is_instance_valid(page):
+			(page as InventoryPage).set_tints(tints)
 	_dress_preview()
 
 

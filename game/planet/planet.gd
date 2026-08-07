@@ -84,29 +84,45 @@ var detail_level := 1
 
 @export_group("Budget")
 ## Meshes handed to the scene per frame. Each one is an ArrayMesh upload.
-@export_range(1, 32) var applies_per_frame := 4
+@export_range(1, 64) var applies_per_frame := 12
 ## Chunk builds allowed on the thread pool at once.
 ##
-## Low on purpose, and the single most valuable number here. A build is a few
-## thousand height-field samples in GDScript, and twelve of them at once starved
-## the main thread badly enough to cost 35 ms a frame on a 24-core machine — the
-## work is off the frame, but it is not off the CPU. At four, the same crossing
-## at 200 m/s drops no frames at all and the terrain still keeps up: the tree
-## reaches the same size and draws the same chunks either way. More parallelism
-## buys throughput nobody was waiting for at the price of the frame that was.
-@export_range(1, 64) var pending_limit := 4
+## It was 4 for as long as a build was GDScript, because twelve at once starved
+## the main thread badly enough to cost 35 ms a frame on a 24-core machine: work
+## moved to a pool is off the frame but not off the CPU. A build is now 0.9 ms of
+## native code instead of 9.4 ms of interpreted, so twenty-four of them cost less
+## CPU than four used to.
+##
+## It is also a throughput ceiling and not only a concurrency cap, which is the
+## part that is easy to miss: finished tasks are collected once a frame, so the
+## pool can never deliver more than this many chunks per frame however fast a
+## build is. At 4 that was 240 chunks a second at 60 fps — exactly the rate
+## arriving somewhere new was converging at, while the workers sat 95% idle.
+##
+## Twelve rather than the twenty-four that converges fastest. Past about this the
+## extra supply is spent on churn rather than on arrival: crossing at 200 m/s
+## built 8400 chunks at 24 against 5960 at 10, for the same ground and the same
+## triangle count standing still.
+@export_range(1, 64) var pending_limit := 12
 ## Chunk splits allowed per frame. Placing a chunk's four children means asking
 ## the height field where each of them sits, and a flight at 200 m/s crosses
 ## enough ground to split whole subtrees in a single frame — which was worth 48 ms
 ## of a 62 ms hitch before this bounded it. Refinement then lags a fast viewer by
 ## a few frames, which costs nothing visible: the coarse ancestor keeps its mesh
 ## until every child has one, so the ground is blurred rather than missing.
-@export_range(1, 64) var splits_per_frame := 8
+##
+## Raised from 8 once two things made it safe: the budget is now spent
+## nearest-first rather than in tree order, so it buys ground the viewer is
+## actually near, and `_grow` withholds it entirely when the pool cannot keep up.
+## It is also what bounds how fast the tree can *deepen* — a level costs at least
+## one walk, so arriving somewhere new that needs five levels takes five of them,
+## and a budget too small to finish a level in one walk multiplies that out.
+@export_range(1, 64) var splits_per_frame := 26
 ## Collision bodies built per frame. `ConcavePolygonShape3D.set_faces` builds its
 ## BVH on the main thread, so this is a main-thread cost like the mesh uploads and
 ## it has to be paid in instalments for the same reason. Ground that has not been
 ## given a body yet is caught by the player's own height-field check.
-@export_range(1, 32) var bodies_per_frame := 2
+@export_range(1, 32) var bodies_per_frame := 8
 ## How often the quadtree is walked, in times a second.
 ##
 ## Every pass over it is GDScript across about a thousand nodes and costs a few
@@ -120,9 +136,83 @@ var detail_level := 1
 ## tenth of a millisecond and it is what puts new ground on screen.
 @export_range(5, 240) var lod_updates_per_second := 30
 
+@export_group("Lead")
+## Seconds of travel the detail is built ahead of the viewer.
+##
+## Ground takes time to appear — a chunk is queued, waits for a slot on the pool,
+## is built there, and is then handed to the scene a few per frame — and all of
+## that happens *after* the viewer is close enough to want it. Standing still that
+## is invisible. Crossing the ground it is the whole complaint: the detail arrives
+## where you were, and at 200 m/s where you were is a second behind you.
+##
+## So the refine pass measures its distances to the short path from where the
+## viewer is to where it will be in this many seconds, rather than to the point it
+## occupies. Chunks along that path are split, queued and built before they are
+## arrived at, and `_dispatch` orders the queue by the same distance, so the
+## ground being flown into is also what the pool builds first.
+##
+## It is a *time* and not a distance because what it has to cover is a latency.
+## Setting it to zero restores the old behaviour exactly.
+@export_range(0.0, 3.0, 0.05) var lead_time := 0.6
+## The furthest ahead the detail may be built, in metres.
+##
+## The cap is what keeps this from being expensive. The region refined is a
+## capsule rather than a sphere, so what the lead costs is the ground swept along
+## it — nothing at all when standing still, and bounded by this when crossing at
+## `fly_speed`, where `lead_time` alone would ask for a kilometre.
+## Raised from 300 m once the build got cheap enough to fill it. At 300 the cap,
+## not `lead_time`, was what a fast viewer actually got: a second of warning was
+## clipped to a third of one at `fly_speed`, which is most of the way back to
+## having no lead at all.
+@export_range(0.0, 2000.0, 10.0) var lead_distance := 750.0
+## Seconds the measured velocity is smoothed over. The refine pass is the most
+## expensive thing in here, so the point it is centred on must not jitter: a
+## velocity read off two positions one walk apart is noisy enough to swing the
+## whole detail region every pass.
+const LEAD_SMOOTHING := 0.35
+## Below this speed, in m/s, there is no lead at all. A walk covers less ground in
+## `lead_time` than a chunk is wide, so leading it would only add cost.
+const LEAD_MIN_SPEED := 8.0
+## A step faster than this, in m/s, is a teleport rather than travel — a spawn, a
+## harness placing the viewer, a respawn across the planet. Fed to the smoothing
+## it would point the lead at wherever the viewer came from for the better part of
+## a second, so the reading is thrown away and the drift restarted instead.
+const LEAD_TELEPORT_SPEED := 2000.0
+## How many chunks may be queued for a mesh, as a multiple of the pool's width,
+## before the tree stops growing. Some queue is wanted — it is what keeps a slot
+## from ever standing idle — so this is a backlog several builds deep and not a
+## demand that the pool be caught up.
+##
+## It is also the number that decides how long arriving somewhere new takes to
+## sharpen, and the two jobs pull opposite ways, which is why it is a dial rather
+## than the constant it started as. A level near the viewer is a couple of hundred
+## chunks and none of it is drawn until all of it is built, so a mark below that
+## makes each level wait for the one under it to finish everywhere: at 8 the
+## ground underfoot climbed one level every 1.2 s and took 5.5 s to sharpen.
+@export_range(1, 200) var queue_depth := 8
+
+## Letting a few splits through while the queue is past that mark looks like the
+## obvious way to get detail to the player's feet sooner, and it is a trap worth
+## recording: spent nearest-first, a small floor deepens **one chain** rather than
+## one area, because the nearest child of the nearest chunk is nearest again. Its
+## three siblings never get built while the pool is busy, `_show` needs a level
+## fully covered before it may draw it, and a spike covers nothing — so the ground
+## underfoot fell back to a depth 2 ancestor and stayed there for the whole eight
+## seconds. Coverage is the quantity that matters here, never depth.
+
 @export_group("Collision")
 ## Leaf chunks nearer than this get a collision body. Everything past it is
 ## scenery, which is why this must comfortably exceed anything that walks.
+##
+## Distance is the only test. Every chunk carries its collision soup whatever
+## depth it is at, which was not true for a long time: builds were also gated on
+## being within two levels of [member max_depth], on the reasoning that a coarse
+## chunk is never the one underfoot. It is, whenever the tree has not finished
+## refining — and a coarse chunk near the viewer with no faces cannot be given a
+## body at all, so the ground it draws is walked straight through onto whatever
+## deeper chunk is under it. The soup is a rearrangement of vertices the build
+## has already paid for, so building it always costs a fraction of a millisecond
+## and some memory, and buys the invariant that anything drawn can be stood on.
 @export var collision_range := 260.0
 
 @export_group("Water")
@@ -193,8 +283,13 @@ var _pending: Dictionary = {}
 var _finished: Array[Chunk] = []
 var _requests: Array[Chunk] = []
 var _visible: Array[Chunk] = []
-var _collision_min_depth := 0
-var _splits_left := 0
+## Chunks the last walk found wanting to split, spent nearest-first once it has
+## finished. Collected rather than split where they are met, because the walk
+## meets them in tree order and tree order is nothing like distance order: with a
+## budget of eight per walk, splitting whoever came first spent the whole
+## allowance on ground already behind the viewer while the chunk under their feet
+## waited for a later frame to come round to it.
+var _splitters: Array[Chunk] = []
 ## [member split_ratio] with the render distance in it, taken once per walk rather
 ## than per chunk: the walk is a thousand nodes of GDScript and the answer is the
 ## same for all of them.
@@ -203,7 +298,32 @@ var _split_reach := 2.0
 ## the thing every per-frame pass is proportional to.
 var _walked := 0
 var _since_lod := 0.0
+## Depth of the finest drawn chunk the viewer is *over*, and how far its origin
+## is. -1 while nothing is drawn over the viewer at all, which is a different
+## answer from depth 0 and has to stay tellable apart from it: a root patch drawn
+## overhead is a real, very coarse floor, and falling back to unlimited detail
+## there is exactly the mistake [method spacing_underfoot] exists to prevent.
+var _near_depth := -1
+var _near_distance := INF
+## Where the viewer was at the previous walk, and its smoothed velocity from that,
+## in planet-local metres. Together they are the lead: a direction and how far
+## along it the refine pass looks.
+var _last_eye := Vector3.INF
+var _drift := Vector3.ZERO
+var _lead_direction := Vector3.ZERO
+var _lead_length := 0.0
+## Drawn chunks within [member collision_range] still waiting for a body.
+var _floorless := 0
+## Times a build landed on a chunk that already held a mesh. `chunk.instance` is
+## the only handle anything has on that node, so an overwrite would leave the
+## displaced mesh drawn and unreachable forever. Zero is the only correct reading
+## and there is no throttle that makes a non-zero one acceptable.
+var _stranded := 0
 var _built_meshes := 0
+## Worker-thread time spent building the meshes counted by [member _built_meshes],
+## which is the supply side of every arrival measurement: the pool can deliver
+## `pending_limit / this` chunks a second and no more, whatever the budgets say.
+var _build_micros_total := 0.0
 var _update_micros := 0.0
 ## This frame's cost, not an average: both are spike sources and an average is
 ## the one summary guaranteed to hide a spike.
@@ -243,6 +363,10 @@ class Chunk extends RefCounted:
 	var body: StaticBody3D
 	var arrays: Array
 	var collision_faces := PackedVector3Array()
+	## What this chunk's build cost on its worker thread, in microseconds. Written
+	## there and read once the mesh is attached, so it crosses threads the same
+	## way the mesh does and needs no lock of its own.
+	var build_micros := 0.0
 	var triangles := 0
 	var queued := false
 	## Set when the parent collapses while a build is still running. The result is
@@ -257,9 +381,6 @@ func _ready() -> void:
 	if shape == null:
 		shape = PlanetShape.new()
 	shape.prepare()
-	# Two levels of slack, so a chunk does not lose its collider the instant the
-	# viewer steps far enough away to coarsen it.
-	_collision_min_depth = maxi(0, max_depth - 2)
 	_publish_frame()
 	_raise_water()
 	_raise_snowfield()
@@ -327,36 +448,57 @@ func _process(delta: float) -> void:
 	_apply_finished()
 	_apply_micros = float(Time.get_ticks_usec() - applying)
 
+	# Every frame, for the same reason meshes are attached every frame and not on
+	# the walk: this is a twentieth of a millisecond and it is what keeps the pool
+	# fed. Dispatched only on the walk, a slot that came free just after one stood
+	# idle until the next — measured at 2.5 of 4 slots busy and the pool full only
+	# 61% of the time, with a queue of 43 chunks waiting to use the other 1.5.
+	# Standing requests outlive the walk that found them, so there is always a
+	# list to fill from.
+	var dispatching := Time.get_ticks_usec()
+	_dispatch(viewer_position())
+	_dispatch_micros = float(Time.get_ticks_usec() - dispatching)
+
 	_since_lod += delta
 	if _since_lod < 1.0 / float(lod_updates_per_second):
 		# Zeroed rather than left alone, so an average over frames is an average
 		# of what those frames actually cost and not of the last one that walked.
+		# Dispatch is not among them: it ran above, on this frame.
 		_refine_micros = 0.0
-		_dispatch_micros = 0.0
 		_show_micros = 0.0
 		_collision_micros = 0.0
 		_frame_micros = float(Time.get_ticks_usec() - started)
 		_update_micros = _update_micros * 0.9 + _frame_micros * 0.1
 		return
+	# Read before it is zeroed: it is the interval since the last walk, which is
+	# what the viewer's velocity has to be measured against. `delta` is a frame,
+	# and frames are several times more often than this.
+	var since_walk := _since_lod
 	_since_lod = 0.0
 
 	var eye := viewer_position()
+	_track_lead(eye, since_walk)
 	_requests.clear()
-	_splits_left = splits_per_frame
+	_splitters.clear()
 	_split_reach = split_ratio * float(
 		DETAIL_LEVELS[clampi(detail_level, 0, DETAIL_LEVELS.size() - 1)]["scale"])
 	_walked = 0
 	var refining := Time.get_ticks_usec()
 	for root in _roots:
 		_refine(root, eye)
+	_grow()
 	_refine_micros = float(Time.get_ticks_usec() - refining)
-	var dispatching := Time.get_ticks_usec()
+	# Again, now that the walk has found this pass's requests: the run above was
+	# working from the previous walk's list.
+	var redispatch := Time.get_ticks_usec()
 	_dispatch(eye)
-	_dispatch_micros = float(Time.get_ticks_usec() - dispatching)
+	_dispatch_micros += float(Time.get_ticks_usec() - redispatch)
 	var showing := Time.get_ticks_usec()
 	_visible.clear()
+	_near_distance = INF
+	_near_depth = -1
 	for root in _roots:
-		_show(root)
+		_show(root, eye)
 	_show_micros = float(Time.get_ticks_usec() - showing)
 	# No colliders in the editor: nothing there walks, and a body per chunk would
 	# be built and thrown away every time the view moved.
@@ -391,7 +533,41 @@ func up_at(global_point: Vector3) -> Vector3:
 ## sampling distance, because the terrain the player touches is band-limited to
 ## it and the true field is not.
 func finest_spacing() -> float:
-	return PI * 0.5 * shape.radius / pow(2.0, max_depth) / float(chunk_resolution)
+	return spacing_at_depth(max_depth)
+
+
+## Vertex spacing of a chunk at a given depth, which is what its mesh is
+## band-limited to.
+func spacing_at_depth(depth: int) -> float:
+	return PI * 0.5 * shape.radius / pow(2.0, depth) / float(chunk_resolution)
+
+
+## Vertex spacing of the ground actually drawn under the viewer, right now.
+##
+## Not the same as [method finest_spacing], and the difference is the whole
+## reason this exists. Every feature in the height field fades out at coarse
+## spacing so it cannot alias, so a chunk that has not refined yet is missing
+## whatever is finer than it — and for a canyon or a river gorge, which are very
+## nearly step functions, what is missing is the hole. The coarse chunk draws a
+## lid straight across it.
+##
+## Anything asking "where is the ground" on behalf of a *body* must ask at this
+## spacing rather than at the finest, or it answers about a surface that is not
+## on screen. Underneath a lid the two disagree by the depth of the canyon: the
+## guard reads the body as thirty-six metres in the air while it stands on ground
+## it can see, and hands it air control and no floor snapping until it sinks
+## through. Settled, the two agree to a few centimetres, which is why this only
+## ever bites during an arrival and never once the tree has converged.
+##
+## Falls back to the finest when nothing is drawn over the viewer at all, which is
+## right rather than merely safe: with no chunk there is no lid to stand on
+## either, and the true field is the only answer available. Depth 0 is **not**
+## that case — a root patch overhead is a real floor at 785 m between vertices,
+## and answering about unlimited detail under it is the exact failure above.
+func spacing_underfoot() -> float:
+	if _near_depth < 0:
+		return finest_spacing()
+	return spacing_at_depth(_near_depth)
 
 
 ## Ground level plus clearance, for putting something on the surface.
@@ -444,9 +620,26 @@ func statistics() -> Dictionary:
 	return {
 		"visible": _visible.size(),
 		"pending": _pending.size(),
+		# Chunks the last walk wanted a mesh for. Held apart from `pending`
+		# because the two say different things and only together say which end of
+		# the pipe is the narrow one: a backlog with the pool full is supply, a
+		# pool with slots free is demand that arrived too late to use them.
+		"requests": _requests.size(),
+		# What the ground under the viewer is drawn at, against `max_depth`. This
+		# is the arrival measurement: throughput says how much ground is being
+		# built anywhere, and this says whether any of it is where somebody is
+		# standing.
+		"depth": _near_depth,
 		"triangles": triangles,
 		"bodies": bodies,
+		# Drawn ground within reach of a walker that has no collider yet. Zero is
+		# the only steady-state answer; anything else is ground you fall through.
+		"floorless": _floorless,
+		# Meshes that would have been stranded on screen with no handle left to
+		# hide them. See `_attach`.
+		"stranded": _stranded,
 		"built": _built_meshes,
+		"build_ms": _build_micros_total / 1000.0 / maxf(1.0, float(_built_meshes)),
 		"update_ms": _update_micros / 1000.0,
 		"apply_ms": _apply_micros / 1000.0,
 		"collision_ms": _collision_micros / 1000.0,
@@ -598,8 +791,48 @@ func _make_chunk(face: int, offset: Vector2, size: float, depth: int, height := 
 
 ## Distance from the viewer to the chunk's patch of ground, measured to a sphere
 ## around it so a chunk is not judged by its centre alone.
+## Works out how far ahead of the viewer the detail should be built, from how fast
+## the viewer is actually moving. Nothing tells the planet its viewer's velocity —
+## it may be a player, a camera or a harness writing a transform — so it is
+## measured here, off two positions one walk apart.
+func _track_lead(eye: Vector3, elapsed: float) -> void:
+	if _last_eye == Vector3.INF or elapsed <= 0.0:
+		_last_eye = eye
+		return
+	var measured := (eye - _last_eye) / elapsed
+	_last_eye = eye
+	if measured.length() > LEAD_TELEPORT_SPEED:
+		_drift = Vector3.ZERO
+	else:
+		_drift = _drift.lerp(measured, clampf(elapsed / LEAD_SMOOTHING, 0.0, 1.0))
+	var speed := _drift.length()
+	if lead_time <= 0.0 or speed < LEAD_MIN_SPEED:
+		_lead_direction = Vector3.ZERO
+		_lead_length = 0.0
+		return
+	_lead_direction = _drift / speed
+	_lead_length = minf(speed * lead_time, lead_distance)
+
+
+## Distance from a chunk to the viewer, less most of the chunk's own half-width so
+## that a big chunk is judged by its nearest ground rather than by its middle.
 func _distance(chunk: Chunk, eye: Vector3) -> float:
 	return maxf(0.0, eye.distance_to(chunk.origin) - chunk.arc * 0.75)
+
+
+## The same measure taken to the whole path the viewer is on rather than to the
+## point it occupies, which is what makes the ground ahead refine before it is
+## reached. Degenerates to [method _distance] exactly when there is no lead, so
+## standing still costs nothing over the old behaviour and the region refined
+## grows only in the direction being travelled.
+##
+## The path is a straight segment while the planet is round, and that is fine at
+## this length: 300 m of chord across an 8 km sphere departs from the surface by
+## six metres, well under the arc already being subtracted.
+func _path_distance(chunk: Chunk, eye: Vector3) -> float:
+	var to_chunk := chunk.origin - eye
+	var along := clampf(to_chunk.dot(_lead_direction), 0.0, _lead_length)
+	return maxf(0.0, (to_chunk - _lead_direction * along).length() - chunk.arc * 0.75)
 
 
 func _refine(chunk: Chunk, eye: Vector3) -> void:
@@ -609,7 +842,12 @@ func _refine(chunk: Chunk, eye: Vector3) -> void:
 	if not chunk.has_mesh() and not chunk.queued:
 		_requests.append(chunk)
 	_walked += 1
-	var distance := _distance(chunk, eye)
+	# Measured to the path and not to the viewer, so a chunk about to be flown
+	# over is split and queued now. `chunk.distance` carries it to `_dispatch`,
+	# which builds the nearest first — and nearest to the path is exactly the
+	# order a fast viewer wants. Collision keeps to the true position; see
+	# `_update_collision`.
+	var distance := _path_distance(chunk, eye)
 	chunk.distance = distance
 	var split_at := chunk.arc * _split_reach
 	# Nothing subdivides until it has been built. Splitting on distance alone let
@@ -619,18 +857,65 @@ func _refine(chunk: Chunk, eye: Vector3) -> void:
 	# each cost tens of milliseconds. Tying growth to what has actually arrived
 	# keeps the tree the size of the ground that exists.
 	if chunk.depth < max_depth and distance < split_at and chunk.has_mesh():
-		# Out of budget the split is simply not made this frame. Nothing records
-		# that it was wanted: the same test comes round again next frame, and by
-		# then the nearest chunk wanting one may be a different chunk anyway.
-		if chunk.children.is_empty() and _splits_left > 0:
-			_splits_left -= 1
-			_split(chunk)
+		# Only noted here. Nothing records that a split was wanted beyond this
+		# walk: the same test comes round again next time, and by then the
+		# nearest chunk wanting one may well be a different chunk.
+		if chunk.children.is_empty():
+			_splitters.append(chunk)
 	elif not chunk.children.is_empty() and distance > split_at * 1.3:
 		# Collapsing further out than splitting, so a viewer loitering on the
 		# boundary does not rebuild the same four chunks every frame.
 		_collapse(chunk)
 	for child in chunk.children:
 		_refine(child, eye)
+
+
+## Spends the walk's split budget on the chunks nearest the path, and withholds it
+## entirely while the pool is hopelessly behind.
+##
+## Two separate things gate growth here and they answer different questions. The
+## budget is how much tree may be added in one walk; the queue is whether adding
+## any of it is worth doing at all. A split makes four meshless chunks, and while
+## hundreds are already waiting for the pool those four cannot make their ground
+## arrive one moment sooner for having been asked earlier — all they do is
+## lengthen every later walk, and the refine and draw passes are the two most
+## expensive things in this file. Growth left ungated that way feeds itself: a
+## bigger tree costs more per frame, fewer meshes are attached, so more of the
+## tree is meshless, which is the state that was measured at 350 deep.
+##
+## The loop that results is self-limiting rather than tuned. Builds landing take
+## chunks out of the queue, the queue falls under the mark, splitting resumes —
+## so the tree settles at the size the pool can actually keep in meshes.
+func _grow() -> void:
+	# Both conditions, and the first is the one that was missing. A deep queue
+	# only means growth is pointless if the pool is also flat out: with a slot
+	# standing free there is capacity for the ground being asked for, and
+	# refusing to ask is how the tree ended up throttled while builders idled.
+	# The queue alone is not evidence of anything — it is 43 deep in the healthy
+	# case, which is above any fixed mark worth setting.
+	if _pending.size() >= pending_limit \
+			and _requests.size() > pending_limit * queue_depth:
+		return
+	var budget := splits_per_frame
+	# Nearest-first by the same argument as `_dispatch`, and by repeated linear
+	# scan even at this budget. Sorting once and taking the front looks strictly
+	# better on paper — a few thousand comparisons against tens of thousands of
+	# array reads — and measured worse on both counts, refine 6.25 ms to 8.51 and
+	# delivery 2856 chunks to 2618. `sort_custom` pays a script call per
+	# comparison, and one of those costs more than the dozen inline reads it
+	# saves. Do not re-derive this from the complexity; it is the constant that
+	# decides it.
+	while budget > 0:
+		var nearest: Chunk = null
+		var nearest_at := INF
+		for chunk in _splitters:
+			if chunk.children.is_empty() and chunk.distance < nearest_at:
+				nearest_at = chunk.distance
+				nearest = chunk
+		if nearest == null:
+			return
+		_split(nearest)
+		budget -= 1
 
 
 func _split(chunk: Chunk) -> void:
@@ -660,11 +945,11 @@ func _drop(chunk: Chunk) -> void:
 ## Walks the tree deciding what to draw, and returns whether this subtree is fully
 ## covered. A parent keeps its mesh on screen until every descendant that replaces
 ## it is ready, so the ground never opens up mid-build.
-func _show(chunk: Chunk) -> bool:
+func _show(chunk: Chunk, eye: Vector3) -> bool:
 	if not chunk.children.is_empty():
 		var covered := true
 		for child in chunk.children:
-			covered = _show(child) and covered
+			covered = _show(child, eye) and covered
 		if covered:
 			_set_visible(chunk, false)
 			return true
@@ -673,9 +958,49 @@ func _show(chunk: Chunk) -> bool:
 	if chunk.has_mesh():
 		_set_visible(chunk, true)
 		_visible.append(chunk)
+		_note_underfoot(chunk, eye)
 		return true
 	_set_visible(chunk, false)
 	return false
+
+
+## Records the finest chunk drawn over the viewer, which is the resolution the
+## ground under the feet was band-limited to and the whole of what
+## [method spacing_underfoot] means.
+##
+## **Containment, not nearness**, and taking the nearest was wrong twice over.
+## `chunk.distance` is the *lead* distance, aimed ahead along the path so ground
+## about to be flown over refines before it is reached — so at speed it names a
+## chunk the viewer is not on. And `_distance` subtracts three quarters of a
+## chunk's own width, which is right for deciding what to split and useless here:
+## a root patch is nine kilometres across, so it reports zero from most of the
+## visible cap and wins every comparison it enters.
+##
+## Both faults point the same way: the guard ends up sampling the field at a
+## spacing no chunk under the body was built at, and its surface stops being the
+## surface on screen — which is the thing `spacing_underfoot` was written to
+## guarantee. A parent and its own children are never drawn together, so among
+## the chunks containing the eye there is one per face and the deepest is the
+## answer.
+func _note_underfoot(chunk: Chunk, eye: Vector3) -> void:
+	if chunk.depth <= _near_depth:
+		return
+	# Sideways only. A chunk's extent is a patch of ground and altitude is not
+	# part of it, so the straight-line distance is the wrong measure entirely: a
+	# viewer 80 m up is more than a depth-9 chunk's whole width away from every
+	# chunk beneath them, and testing that way says nothing is underfoot anywhere
+	# above head height.
+	var to_eye := eye - chunk.origin
+	var radial := chunk.origin.normalized()
+	var lateral := (to_eye - radial * to_eye.dot(radial)).length()
+	# Half a chunk plus a margin: the half-diagonal is 0.71 of the arc, and being
+	# generous costs nothing because the deepest container wins. A coarse patch
+	# only takes the answer where no finer one covers the spot, which is exactly
+	# when the coarse patch *is* the ground on screen.
+	if lateral > chunk.arc * 0.75:
+		return
+	_near_depth = chunk.depth
+	_near_distance = lateral
 
 
 func _hide(chunk: Chunk) -> void:
@@ -710,7 +1035,15 @@ func _dispatch(_eye: Vector3) -> void:
 		var nearest: Chunk = null
 		var nearest_at := INF
 		for chunk in _requests:
-			if not chunk.queued and chunk.distance < nearest_at:
+			# `has_mesh` as well as `queued`, and leaving it out was the whole of
+			# the leak. Requests deliberately outlive the walk that found them so
+			# the pool never idles, but `_apply_finished` runs every frame too and
+			# clears `queued` the instant a build lands — so between that attach
+			# and the next walk, a chunk that is finished and drawn still looks
+			# like an outstanding request and gets built all over again.
+			if chunk.queued or chunk.has_mesh():
+				continue
+			if chunk.distance < nearest_at:
 				nearest_at = chunk.distance
 				nearest = chunk
 		if nearest == null:
@@ -735,7 +1068,22 @@ func _apply_finished() -> void:
 		chunk.arrays = []
 
 
+## Hangs a finished mesh on the planet, in place of whatever the chunk had before.
+##
+## **The old instance has to be freed here**, and not freeing it was invisible in
+## exactly the way that costs the most. `chunk.instance` is the only handle
+## anything has on a chunk's mesh — `_set_visible` writes through it, `_drop`
+## frees through it — so a replacement that merely reassigns the field leaves the
+## previous node parented to the planet, drawn, holding whatever visibility it
+## was last given, and unreachable by every piece of code that could ever turn it
+## off. An orphaned *parent* is the bad case: coarse, smoothed ground that stays
+## on screen above the refined chunks that replaced it, with no collider, because
+## a collider belongs to the chunk and the chunk has moved on.
 func _attach(chunk: Chunk) -> void:
+	if chunk.instance != null:
+		_stranded += 1
+		chunk.instance.queue_free()
+		chunk.instance = null
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, chunk.arrays)
 	var instance := MeshInstance3D.new()
@@ -750,11 +1098,17 @@ func _attach(chunk: Chunk) -> void:
 	add_child(instance, false, Node.INTERNAL_MODE_BACK)
 	chunk.instance = instance
 	_built_meshes += 1
+	_build_micros_total += chunk.build_micros
 
 
 ## Runs on a worker thread. Touches nothing but the chunk it was handed and the
 ## shape, which is read-only once prepared.
 func _build(chunk: Chunk) -> void:
+	var began := Time.get_ticks_usec()
+	if not shape.overlaps_town(chunk.origin, chunk.arc):
+		_build_natively(chunk)
+		chunk.build_micros = float(Time.get_ticks_usec() - began)
+		return
 	var resolution := chunk_resolution
 	# One skirt ring outside the patch on every side, so the grid is the patch
 	# plus a border rather than a patch with special cases at its edges.
@@ -780,23 +1134,45 @@ func _build(chunk: Chunk) -> void:
 	var skirt := chunk.arc * skirt_scale
 	var last := side - 1
 
+	var span := float(resolution)
+	# One field evaluation per grid slot and no more. The ring outside the patch
+	# is a genuine step out rather than a copy of the edge, because the pass below
+	# differences it: a normal taken from these heights costs four array reads
+	# where `PlanetShape.normal_at` costs four more evaluations of the whole
+	# field, which was 23 of the 30 microseconds a vertex used to take.
+	var field := PackedVector3Array()
+	var heights := PackedFloat32Array()
+	field.resize(count)
+	heights.resize(count)
+	for row in side:
+		for col in side:
+			var index := row * side + col
+			var direction := _direction(chunk, float(col - 1) / span, float(row - 1) / span)
+			field[index] = direction
+			heights[index] = shape.elevation(direction, spacing)
+
 	for row in side:
 		var v_index := clampi(row - 1, 0, resolution)
+		var patch_row := clampi(row, 1, last - 1)
 		for col in side:
 			var u_index := clampi(col - 1, 0, resolution)
-			var direction := _direction(chunk,
-				float(u_index) / float(resolution),
-				float(v_index) / float(resolution))
-			var height := shape.elevation(direction, spacing)
-			var normal := shape.normal_at(direction, spacing)
+			var patch_col := clampi(col, 1, last - 1)
+			var index := row * side + col
+			# The skirt hangs off the patch edge, so a ring slot stands on the
+			# edge's own direction and height and drops them. Its own sample is
+			# there to be differenced, not to be stood on, which is what keeps
+			# the curtain a vertical one and the geometry what it always was.
+			var source := patch_row * side + patch_col
+			var direction := field[source]
+			var height := heights[source]
+			var normal := _grid_normal(field, heights, side, patch_row, patch_col)
 			var radius := shape.radius + height
 			if row == 0 or col == 0 or row == last or col == last:
 				radius -= skirt
-			var index := row * side + col
 			vertices[index] = direction * radius - chunk.origin
 			normals[index] = normal
 			colors[index] = shape.color_at(direction, height, normal)
-			uvs[index] = Vector2(float(u_index), float(v_index)) / float(resolution)
+			uvs[index] = Vector2(float(u_index), float(v_index)) / span
 
 	var indices := PackedInt32Array()
 	indices.resize(last * last * 6)
@@ -823,8 +1199,74 @@ func _build(chunk: Chunk) -> void:
 	chunk.arrays = arrays
 	chunk.triangles = indices.size() / 3
 
-	if chunk.depth >= _collision_min_depth:
-		chunk.collision_faces = _collision_from(vertices, side, resolution)
+	chunk.collision_faces = _collision_from(vertices, side, resolution)
+
+	chunk.build_micros = float(Time.get_ticks_usec() - began)
+
+
+## The same patch, built entirely in the native field.
+##
+## The loop above is kept, and is not dead code: it is the path a chunk over a
+## town takes. A town's ground and colour come from a [CityPlan] — a baked raster
+## and a pad in GDScript — so those chunks are composed here a vertex at a time
+## the way every chunk used to be. There are two towns on an 8 km sphere, so this
+## is a handful of chunks against thousands, and the alternative was either to
+## port [CityPlan] as well or to teach the native field about something that is
+## not terrain.
+func _build_natively(chunk: Chunk) -> void:
+	var resolution := chunk_resolution
+	var axes: Array = FACES[chunk.face]
+	var patch: Dictionary = shape.build_patch(
+		axes[0], axes[1], axes[2], chunk.offset, chunk.size, resolution,
+		chunk.arc / float(resolution), chunk.arc * skirt_scale, chunk.origin,
+		true)
+
+	chunk.height = float(patch["height"])
+	var indices: PackedInt32Array = patch["indices"]
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = patch["vertices"]
+	arrays[Mesh.ARRAY_NORMAL] = patch["normals"]
+	arrays[Mesh.ARRAY_COLOR] = patch["colors"]
+	arrays[Mesh.ARRAY_TEX_UV] = patch["uvs"]
+	arrays[Mesh.ARRAY_INDEX] = indices
+	chunk.arrays = arrays
+	chunk.triangles = indices.size() / 3
+	if patch.has("collision"):
+		chunk.collision_faces = patch["collision"]
+
+
+## Surface normal from the chunk's own height grid, as a central difference of the
+## four neighbouring samples.
+##
+## Cheaper than [method PlanetShape.normal_at] by the whole of that function: it
+## reads four numbers the build has already paid for, where the field's own
+## version evaluates the entire height field four more times. It is also the more
+## honest of the two, because it describes the triangles actually being built
+## rather than a finer surface this mesh has not got the vertices for.
+##
+## Two chunks at one depth agree along the edge they share, which is the property
+## that keeps normals from seaming there: the grid steps one cell *outside* the
+## patch, so both sides difference the same two points. Clamping the ring to the
+## edge instead would leave each side taking a one-sided difference in opposite
+## directions, and the seam would run down every chunk boundary on the planet.
+func _grid_normal(field: PackedVector3Array, heights: PackedFloat32Array,
+		side: int, row: int, col: int) -> Vector3:
+	var index := row * side + col
+	var west := index - 1
+	var east := index + 1
+	var south := index - side
+	var north := index + side
+	var along_u := field[east] * (shape.radius + heights[east]) \
+		- field[west] * (shape.radius + heights[west])
+	var along_v := field[north] * (shape.radius + heights[north]) \
+		- field[south] * (shape.radius + heights[south])
+	var normal := along_u.cross(along_v)
+	var up := field[index]
+	if normal.length_squared() < 1e-12:
+		return up
+	normal = normal.normalized()
+	return normal if normal.dot(up) > 0.0 else -normal
 
 
 ## Triangles for the collider, taken from the patch only: the skirt hangs below
@@ -851,16 +1293,36 @@ func _collision_from(vertices: PackedVector3Array, side: int,
 
 func _update_collision(eye: Vector3) -> void:
 	var built := 0
+	_floorless = 0
 	for chunk in _visible:
-		var near := _distance(chunk, eye) < collision_range and not chunk.collision_faces.is_empty()
-		if near and chunk.body == null:
-			if built >= bodies_per_frame:
-				continue
-			built += 1
-			chunk.body = _make_body(chunk)
-		elif not near and chunk.body != null:
-			chunk.body.queue_free()
-			chunk.body = null
+		# The true position, deliberately, where the refine pass uses the lead. A
+		# collider is what the body stands on, so leading this would take the
+		# floor out from under a viewer that had just slowed down or turned. The
+		# ground ahead needs no body until it is arrived at, and by then the lead
+		# has already had its mesh built, which is the part that takes time.
+		if _distance(chunk, eye) >= collision_range:
+			if chunk.body != null:
+				chunk.body.queue_free()
+				chunk.body = null
+			continue
+		if chunk.body != null:
+			continue
+		# Ground that is drawn, is close enough to walk on, and has nothing to
+		# walk on it with. A steady figure here is a real hole: the body budget
+		# is a queue and is meant to drain, so this should only ever be non-zero
+		# for the frames after arriving somewhere.
+		#
+		# Counted **before** the faces are looked at, and that is the whole point
+		# of the ordering. A drawn chunk whose build produced no collision soup
+		# is the one hole that can never drain, and folding that test into the
+		# reachability check above — which is how this was written — left it as
+		# the one hole this counter could not see. The only instrument for the
+		# fault read zero precisely when the fault was permanent.
+		_floorless += 1
+		if chunk.collision_faces.is_empty() or built >= bodies_per_frame:
+			continue
+		built += 1
+		chunk.body = _make_body(chunk)
 
 
 func _make_body(chunk: Chunk) -> StaticBody3D:

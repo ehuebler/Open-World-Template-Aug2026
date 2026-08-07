@@ -1,0 +1,16 @@
+[configuration]
+
+entry_symbol = "planet_library_init"
+compatibility_minimum = "4.4"
+
+[libraries]
+
+windows.editor.x86_64 = "res://bin/libplanet.windows.editor.x86_64.dll"
+windows.template_debug.x86_64 = "res://bin/libplanet.windows.template_debug.x86_64.dll"
+windows.template_release.x86_64 = "res://bin/libplanet.windows.template_release.x86_64.dll"
+linux.editor.x86_64 = "res://bin/libplanet.linux.editor.x86_64.so"
+linux.template_debug.x86_64 = "res://bin/libplanet.linux.template_debug.x86_64.so"
+linux.template_release.x86_64 = "res://bin/libplanet.linux.template_release.x86_64.so"
+macos.editor = "res://bin/libplanet.macos.editor.framework"
+macos.template_debug = "res://bin/libplanet.macos.template_debug.framework"
+macos.template_release = "res://bin/libplanet.macos.template_release.framework"

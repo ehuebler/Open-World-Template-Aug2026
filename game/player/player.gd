@@ -547,6 +547,11 @@ var _held_mesh: MeshInstance3D
 var _weapon_pose: WeaponPose
 var _weapon_bar: WeaponBar
 var _waypoints: WaypointLayer
+## Where the player is, in terms that can be read out to somebody else. On by
+## default and toggled with `coordinates`, because it exists to be quoted when
+## something looks wrong and a readout nobody knows about would never be.
+var _coordinates: CoordinatePlate
+var _coordinates_wanted := true
 ## Charge left per weapon id, kept while a weapon is put away so switching is not
 ## a way to refill it. Fractional, because it trickles back up.
 var _cells: Dictionary = {}
@@ -640,6 +645,9 @@ func _ready() -> void:
 		hud.add_child(_waypoints)
 		hud.move_child(_waypoints, 0)
 		_waypoints.bind(camera)
+		_coordinates = CoordinatePlate.new()
+		_coordinates.body = self
+		hud.add_child(_coordinates)
 		if not defer_camera:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -697,6 +705,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_shoulder = -_shoulder
 	elif event.is_action_pressed("interact"):
 		_interact()
+	elif event.is_action_pressed("coordinates"):
+		_coordinates_wanted = not _coordinates_wanted
+		if _coordinates != null:
+			_coordinates.visible = _coordinates_wanted
 	elif event.is_action_pressed("inventory"):
 		_open_game_menu(GameMenu.Tab.INVENTORY)
 	elif event.is_action_pressed("pause"):
@@ -725,7 +737,7 @@ func _process(delta: float) -> void:
 		_weapon_pose.set_pitch(_pitch)
 	if peer_id == multiplayer.get_unique_id():
 		_update_weapon(delta)
-		_update_hud()
+		_update_hud(delta)
 
 
 func _physics_process(delta: float) -> void:
@@ -874,6 +886,8 @@ func open_menu() -> void:
 		_weapon_bar.visible = false
 	if _waypoints != null:
 		_waypoints.visible = false
+	if _coordinates != null:
+		_coordinates.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
@@ -885,6 +899,9 @@ func close_menu() -> void:
 		_weapon_bar.visible = true
 	if _waypoints != null:
 		_waypoints.visible = true
+	# Back to what it was, not to on: the menu is not a reason to undo a toggle.
+	if _coordinates != null:
+		_coordinates.visible = _coordinates_wanted
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -1434,7 +1451,10 @@ func _catch_ground() -> bool:
 	var planet := _planet_below()
 	if planet == null or planet.shape == null:
 		return false
-	var spacing := planet.finest_spacing()
+	# The ground that is drawn, not the ground the field could describe. A chunk
+	# that has not refined yet has no canyon in it, and a body must be held up by
+	# the surface it can see rather than by the one under it.
+	var spacing := planet.spacing_underfoot()
 	# First, because at speed the place the move finished is not the place it
 	# met the ground, and everything below measures wherever the body is.
 	var crossed := _rewind_to_entry(planet, spacing)
@@ -2405,21 +2425,20 @@ func _update_camera(delta: float) -> void:
 		_base_fov + SPEED_FOV_RUSH * maxf(maxf(_fly_blend, _run_blend), _swim_rush),
 		_base_fov * AIM_FOV_SCALE, _aim_amount())
 
-	# Own body is hidden while the camera sits inside its head, but it keeps
-	# casting a shadow so you can still see yourself on the ground.
+	# Own body is hidden while the camera sits inside its head. Hiding is a
+	# visibility switch and not SHADOWS_ONLY, because SurfaceSkin has already put
+	# every character mesh's shadow out and that setting would light one back up
+	# for the one case that used to want it.
 	var inside_head := peer_id == multiplayer.get_unique_id() and camera_arm.spring_length < 0.35
-	var casting := GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY if inside_head else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	# What is in the hands keeps being drawn where the body is not: it is held out in
 	# front of the eyes, so hiding it with the body would leave first person with no
 	# weapon at all. The exception is a weapon brought right up to the eye, which
 	# from inside is a wall of polygons rather than a weapon.
-	var weapon_casting := casting
+	var hide_weapon := false
 	if _held_mesh != null and inside_head:
-		var to_eye := _held_mesh.global_position.distance_to(camera.global_position)
-		weapon_casting = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY \
-			if to_eye < 0.3 else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+		hide_weapon = _held_mesh.global_position.distance_to(camera.global_position) < 0.3
 	for mesh_instance in _character_meshes:
-		mesh_instance.cast_shadow = weapon_casting if mesh_instance == _held_mesh else casting
+		mesh_instance.visible = not (hide_weapon if mesh_instance == _held_mesh else inside_head)
 
 
 ## The spring arm shortens against anything it can cast a sphere at, which covers
@@ -2539,10 +2558,12 @@ func _grounded_for_display() -> bool:
 	return absf(_rise()) < 1.5
 
 
-func _update_hud() -> void:
+func _update_hud(delta: float) -> void:
 	# Sighted down the optic the crosshair draws in, which is most of what says the
 	# shot has settled.
 	reticle.set_spread(_horizontal_speed() / sprint_speed * (1.0 - 0.7 * _aim_amount()))
+	if _coordinates != null and _coordinates.visible:
+		_coordinates.refresh(global_position, _planet_below(), delta)
 	if _weapon_bar != null:
 		var cell := ItemDB.cell_size(_held)
 		_weapon_bar.show_cell("cell  %d / %d" % [_charge(), cell] if cell > 0 else "")

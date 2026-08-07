@@ -712,6 +712,12 @@ void fragment() {
 	// as a bank of daylight-blue cloud over an unlit horizon.
 	ALBEDO = mix(body_color, haze_color * day, haze);
 	EMISSION = iris * glow * iris_strength * day * mix(0.5, 1.0, region.y) * (1.0 - haze);
+	// The rim is added to the opacity as well as to the colour. Alpha multiplies
+	// the emission on its way into the frame, so a rim that is nearly clear puts
+	// nearly none of its glow on screen — which is the one part of this that has
+	// to be bright.
+	ALPHA = clamp(alpha * body_alpha + rim * 0.2, 0.0, 1.0);
+
 	// A deck seen from under the sea is seen through the sea, and the march above
 	// already knows how much of it: `enter` was pushed out to where the ray leaves
 	// the water, so it *is* the water in the way. Without this the weather was
@@ -724,6 +730,15 @@ void fragment() {
 	// here as well would lay it twice wherever there is weather, and a cloud gone
 	// completely has to leave the sky's version showing — so the alpha goes with
 	// the colour.
+	//
+	// **This has to be the last thing the shader does**, and it is the whole of
+	// why: with the veil written first, the assignment above landed on top of the
+	// alpha it had just taken away, so a cloud the water should have hidden
+	// completely kept every bit of its opacity while its colour had been
+	// multiplied down to nothing. That is not a faint cloud, it is a black one,
+	// and looking sideways from a few metres down — where the chord out of the
+	// water is hundreds of metres long and `kept` is essentially zero — it was
+	// the whole sky.
 	float under = -vivid_altitude(origin);
 	if (under > 0.0) {
 		vec3 kept;
@@ -733,9 +748,4 @@ void fragment() {
 		EMISSION *= kept;
 		ALPHA *= kept.g;
 	}
-	// The rim is added to the opacity as well as to the colour. Alpha multiplies
-	// the emission on its way into the frame, so a rim that is nearly clear puts
-	// nearly none of its glow on screen — which is the one part of this that has
-	// to be bright.
-	ALPHA = clamp(alpha * body_alpha + rim * 0.2, 0.0, 1.0);
 }

@@ -2,17 +2,30 @@ class_name InventoryPage
 extends Control
 
 ## Who you are and what you are carrying: your name, a live model you can spin,
-## what you are wearing, your stats, your weapon bar, your pockets, and a strip
-## along the bottom for recolouring any of it.
+## what you are wearing, your stats, your weapon bar, a colour wheel to recolour
+## any of it, and your pockets.
 ##
-## This is the Inventory tab of [GameMenu] **and** the home screen's character
-## editor, and that is deliberate rather than convenient. Dressing a character is
-## dressing a character; a second screen for doing it before the game starts would
-## be a second place for the tiles, the preview, the filters and the quick-move
-## rules to drift out of step. [method configure] takes an `editing` flag, and what
-## it changes is small: the name becomes typeable, the pockets become the rail of
-## garments that fit this body, and there is no weapon bar to show because nothing
-## has been picked up yet.
+## This is the Hero Design and Inventory tabs of [GameMenu] **and** both tabs of
+## the home screen's character editor, and that is deliberate rather than
+## convenient. Dressing a character is dressing a character; a second screen for
+## doing it before the game starts would be a second place for the tiles, the
+## filters and the quick-move rules to drift out of step. Two switches cover the
+## differences:
+##
+## - [member section] picks which half is built. Both callers build both halves
+##   and put a tab over them, against **one** set of containers: an item moving
+##   on either tab redraws the tiles on the other with no wiring, which is what
+##   two instances buys over two classes.
+## - [member show_preview] is off wherever there is already a model of this
+##   character on screen — which on the home screen there is, standing at the
+##   spawn behind the card.
+##
+## - [member catalogue] says the pockets are a list of what this character owns
+##   rather than a bag of what it happens to be carrying. See there.
+##
+## `editing` is the fourth and it is much smaller than it was: it makes the name
+## typeable and stocks the pockets from the body's wardrobe rather than from a
+## backpack.
 ##
 ## The page holds no item state. Every tile points at a slot of an [ItemContainer],
 ## and moving an item is a change to a container, which reports back and has the
@@ -27,6 +40,11 @@ signal tint_picked(target: String, colour: Color)
 ## opened the page.
 signal name_entered(value: String)
 
+## Which half of the page to build. HERO is who you are — the figure, what it is
+## wearing, its stats, its weapons and the colour wheel; POCKETS is what you are
+## carrying, over the filters that narrow it.
+enum Section { HERO, POCKETS }
+
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
 const GAP := 6
 ## Between the stacked rows — the name, the figure, the pockets, the colour strip.
@@ -40,8 +58,11 @@ const ROW_GAP := 8
 ## above the fold. Times its rows this has to come to the backpack's size, or the
 ## last row comes out ragged.
 const COLUMNS := 18
-## Columns of the garment rail the character editor shows instead of pockets.
-const RAIL_COLUMNS := 8
+## The catalogue's grid, which is the other shape entirely: a character owns a few
+## dozen garments at the outside and the card is its own, so the tiles are large
+## enough to tell one pair of goggles from another and there are few across.
+const CATALOGUE_COLUMNS := 5
+const CATALOGUE_TILE := 84.0
 ## Height is the axis that runs out on this page: the figure, the pockets and the
 ## colour strip all want it and the card has to fit inside the window. Every value
 ## here that looks mean is paying for the strip staying above the fold.
@@ -54,21 +75,40 @@ const SPIN_PER_PIXEL := 0.01
 const TOOLTIP_OFFSET := Vector2(18.0, 12.0)
 const TOOLTIP_WIDTH := 330.0
 ## The tint key for the body rather than for a garment, as [CharacterDB], the
-## player and the spawn metadata all spell it. Its button says "Skin", because
-## "Body" is already the equipment column's label for the torso.
+## player and the spawn metadata all spell it. It is described as the skin,
+## because "Body" is already the equipment column's label for the torso.
 const TINT_BODY := "body"
-## Size of a colour chip. Chips are spaced wider than they are big: a drawn surface
-## reaches [constant PencilSurface.BLEED] past the control it backs, which on
-## something this small is most of the gap.
-const CHIP := 26.0
-const CHIP_GAP := 14
-## What a tint can be set to. Skin tones first, then dyes.
-const SWATCHES := [
-	Color(0.94, 0.90, 0.84), Color(0.85, 0.70, 0.55), Color(0.62, 0.44, 0.32),
-	Color(0.34, 0.24, 0.19), Color(0.86, 0.24, 0.20), Color(0.94, 0.68, 0.22),
-	Color(0.32, 0.62, 0.38), Color(0.24, 0.46, 0.74), Color(0.52, 0.34, 0.66),
-	Color(0.16, 0.16, 0.19),
-]
+## Width of the colour block. See [method _colour_block] for why it is not the
+## wheel's own.
+const TINT_BLOCK_WIDTH := 212.0
+
+## What the pockets can be narrowed to, and the buttons in the order they sit in.
+## A category is worked out from an item's slot rather than stored on it, so
+## nothing has to be tagged: [constant ItemDB.WEAPON] is a weapon, any other slot
+## is clothing, and something worn nowhere is an item. That last row is what a
+## future consumable or crafting material lands in with no edit here.
+const CATEGORIES := {
+	"clothing": "Clothing",
+	"weapons": "Weapons",
+	"items": "Items",
+}
+
+## Set before the page enters the tree, alongside [method configure]. Public
+## rather than two more arguments on a call that already takes six.
+var section := Section.HERO
+## Whether to render a model of this character into the page. Off wherever the
+## caller already has one on screen; the page then costs no SubViewport at all.
+var show_preview := true
+## Whether the pockets are a **catalogue** rather than storage: everything this
+## character owns, listed whether it is on the body or not, with what is worn
+## marked and a click to put it on or take it off.
+##
+## That is the character editor, and it is a different thing from a backpack even
+## though it is drawn the same way. A backpack is where an item *is*, so wearing
+## something takes it out of there; a catalogue is a list of what exists, so
+## wearing something changes how the row is drawn and nothing else. Off, and the
+## grid is ordinary storage that items are dragged out of.
+var catalogue := false
 
 var _equipment: ItemContainer
 var _weapons: ItemContainer
@@ -101,8 +141,16 @@ var _column: VBoxContainer
 var _stat_rows: VBoxContainer
 var _tint_target := TINT_BODY
 var _tints: Dictionary = {}
-var _tint_targets: HBoxContainer
 var _tint_caption: Label
+var _wheel: ColourWheel
+
+## Empty means everything. Two filters rather than one because they narrow along
+## different axes and are worth combining: a category is what kind of thing it
+## is, a body slot is where it goes.
+var _category := ""
+var _slot_filter := ""
+var _category_row: HBoxContainer
+var _slot_row: HBoxContainer
 
 
 ## Called before the page enters the tree: it is built against these. `stats` may
@@ -138,12 +186,13 @@ func set_body(body_id: String) -> void:
 	if body_id == _body_id:
 		return
 	_body_id = body_id
-	if is_instance_valid(_preview_character):
-		_preview_character.queue_free()
 	_preview_worn.clear()
-	_preview_character = _new_model()
-	_preview_pivot.add_child(_preview_character)
-	_frame_model()
+	if is_instance_valid(_preview_pivot):
+		if is_instance_valid(_preview_character):
+			_preview_character.queue_free()
+		_preview_character = _new_model()
+		_preview_pivot.add_child(_preview_character)
+		_frame_model()
 	refresh()
 	_paint_model()
 
@@ -164,7 +213,8 @@ func _ready() -> void:
 	_build()
 	# Late, because a ViewportTexture can only resolve the path to its viewport
 	# once both ends are in the tree.
-	_preview_holder.texture = _preview_viewport.get_texture()
+	if _preview_holder != null:
+		_preview_holder.texture = _preview_viewport.get_texture()
 	refresh()
 	_paint_model()
 
@@ -185,48 +235,23 @@ func _get_minimum_size() -> Vector2:
 
 # --- Construction -----------------------------------------------------------
 
-## The shape of the page, top to bottom: a name and a wide reserve above; the
-## figure, what it is wearing, the stats and the weapon bar in the middle, with a
-## tall reserve down the right; the pockets and the colour strip below.
+## One of the two halves, and nothing shared but the tooltip, the icon driver and
+## the container hookups below.
 ##
-## The two reserves are empty on purpose and captioned as such. They are the room
-## the layout was designed with, and leaving them visible is what stops the next
-## panel that wants a home from being wedged into the space between two others.
+## Both halves used to end in a captioned "Reserved" well marking the room the
+## layout was designed with. They are gone: a well is a control, and a control
+## the size of half the card reads as the screen's main feature however it is
+## captioned. Blank card says the same thing and does not compete.
 func _build() -> void:
 	var column := VBoxContainer.new()
 	column.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	column.add_theme_constant_override(&"separation", ROW_GAP)
 	add_child(column)
 	_column = column
-
-	var top := HBoxContainer.new()
-	top.add_theme_constant_override(&"separation", 12)
-	top.add_child(_name_plate())
-	top.add_child(_reserve("", 0.0, 38.0))
-	column.add_child(top)
-
-	var middle := HBoxContainer.new()
-	middle.add_theme_constant_override(&"separation", 12)
-	middle.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	column.add_child(middle)
-
-	var left := VBoxContainer.new()
-	left.add_theme_constant_override(&"separation", ROW_GAP)
-	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	middle.add_child(left)
-	left.add_child(_figure_row())
-	left.add_child(_pockets_block())
-	left.add_child(_tint_strip())
-
-	# In game the middle row's right-hand side is the stats and the weapon bar, so
-	# this is the only reserve on it. The editor has neither and its figure row
-	# already reserves that whole side, and two wells side by side describe the same
-	# empty room twice. It is also 180 px the colour strip needs: with every garment
-	# worn, a target button per garment and ten chips come to more than what is left
-	# beside this, and the card ends up wider than the window.
-	if not _editing:
-		middle.add_child(_reserve("Reserved", 168.0, 0.0))
+	if section == Section.POCKETS:
+		column.add_child(_pockets_block())
+	else:
+		_build_hero(column)
 
 	_build_tooltip()
 
@@ -241,6 +266,47 @@ func _build() -> void:
 	if _stats != null:
 		_stats.changed.connect(func(_id: StringName, _value: float) -> void: _fill_stats())
 	update_minimum_size()
+
+
+## Who you are, in one shape wherever it is shown: the name across the top; the
+## figure and what it is wearing down the left; the stats, the weapon bar and the
+## colour wheel down the right, in that order, with the wheel pushed into the
+## bottom corner.
+##
+## The editor draws the same thing rather than a reduced version of it. It has no
+## figure of its own — the one at the spawn behind the card is the model — and
+## nothing has been picked up yet, so its stats are the ones a new character
+## starts with and its weapon bar is empty. Both are worth the room they take:
+## the two screens then hold still against each other, and the numbers you are
+## about to play with are visible while you are choosing a body to hang them on.
+func _build_hero(column: VBoxContainer) -> void:
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override(&"separation", 12)
+	top.add_child(_name_plate())
+	top.add_child(_spacer())
+	column.add_child(top)
+
+	var middle := HBoxContainer.new()
+	middle.add_theme_constant_override(&"separation", 12)
+	middle.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	column.add_child(middle)
+	if show_preview:
+		middle.add_child(_preview())
+	middle.add_child(_worn_column())
+
+	var right := VBoxContainer.new()
+	right.add_theme_constant_override(&"separation", ROW_GAP)
+	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	right.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	middle.add_child(right)
+	right.add_child(_stats_block())
+	right.add_child(_weapon_block())
+
+	var bottom := HBoxContainer.new()
+	bottom.add_theme_constant_override(&"separation", 12)
+	bottom.add_child(_spacer())
+	bottom.add_child(_colour_block())
+	right.add_child(bottom)
 
 
 ## The name, top left. Typeable in the editor, where naming yourself is part of
@@ -275,29 +341,6 @@ func _name_plate() -> Control:
 	return panel
 
 
-## Figure, what it is wearing, a narrow reserve, then the stats with the weapon bar
-## under them.
-func _figure_row() -> Control:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override(&"separation", 12)
-	row.add_child(_preview())
-	row.add_child(_worn_column())
-	row.add_child(_reserve("", 42.0, 0.0))
-
-	var right := VBoxContainer.new()
-	right.add_theme_constant_override(&"separation", ROW_GAP)
-	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(right)
-	# Nothing has stats or weapons before the world starts, so the editor gets the
-	# room as room rather than as two wells explaining what they would hold.
-	if _editing:
-		right.add_child(_reserve("Reserved", 0.0, 0.0))
-		return row
-	right.add_child(_stats_block())
-	right.add_child(_weapon_block())
-	return row
-
-
 func _worn_column() -> Control:
 	var worn := VBoxContainer.new()
 	worn.add_theme_constant_override(&"separation", GAP)
@@ -320,22 +363,144 @@ func _weapon_block() -> Control:
 		slot.badge = str(index + 1)
 		slots.add_child(slot)
 	block.add_child(slots)
-	block.add_child(_hint("1 - 5 or the mouse wheel to draw"))
+	block.add_child(_hint("Weapons you pick up are drawn from here" if _editing \
+		else "1 - 5 or the mouse wheel to draw"))
 	return block
 
 
+## What you are carrying, over the filters that narrow it.
 func _pockets_block() -> Control:
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override(&"separation", GAP)
-	block.add_child(_caption("Apparel" if _editing else "Inventory"))
+	block.add_child(_filters())
 	var grid := GridContainer.new()
-	grid.columns = RAIL_COLUMNS if _editing else COLUMNS
+	grid.columns = CATALOGUE_COLUMNS if catalogue else COLUMNS
 	grid.add_theme_constant_override(&"h_separation", GAP)
 	grid.add_theme_constant_override(&"v_separation", GAP)
 	for index in _pockets.size():
-		grid.add_child(_new_slot(_pockets, index))
+		var slot := _new_slot(_pockets, index)
+		if catalogue:
+			slot.set_edge(CATALOGUE_TILE)
+		grid.add_child(slot)
 	block.add_child(grid)
 	return block
+
+
+# --- Filtering the pockets --------------------------------------------------
+
+## Two rows of toggles: what kind of thing, and then which of that kind.
+##
+## The second row is the sub-divisions of whatever the first has chosen, which
+## today means the body slots under Clothing and nothing under the other two —
+## so the row is only there when it has something to say. A weapon has no body
+## slot, and a row of five greyed-out garment names above a grid of rifles would
+## be worse than an absent row.
+func _filters() -> Control:
+	# The catalogue is a wardrobe, so it opens on the clothes rather than on
+	# everything: the mock-up's two rows are both up on arrival, and there is no
+	# state where the second row is missing until you go looking for a weapon.
+	if catalogue:
+		_category = "clothing"
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override(&"separation", GAP)
+	_category_row = HBoxContainer.new()
+	_category_row.add_theme_constant_override(&"separation", GAP)
+	box.add_child(_category_row)
+	_slot_row = HBoxContainer.new()
+	_slot_row.add_theme_constant_override(&"separation", GAP)
+	box.add_child(_slot_row)
+	_fill_filters()
+	return box
+
+
+func _fill_filters() -> void:
+	var labels: Array[String] = []
+	var ids: Array[String] = []
+	for id: String in CATEGORIES:
+		labels.append(String(CATEGORIES[id]))
+		ids.append(id)
+	_fill_toggles(_category_row, labels, ids, _category, _pick_category)
+	_slot_row.visible = _category == "clothing"
+	if not _slot_row.visible:
+		return
+	var slot_labels: Array[String] = []
+	for slot: String in ItemDB.SLOT_ORDER:
+		slot_labels.append(String(ItemDB.SLOT_LABELS.get(slot, slot)))
+	_fill_toggles(_slot_row, slot_labels, ItemDB.SLOT_ORDER, _slot_filter, _pick_slot)
+
+
+## Toggles rather than a radio group, so pressing the open one clears it. That is
+## the same idiom the worn tiles use to hand the colour wheel back to the skin,
+## and it is what saves an "All" button that would otherwise be needed on both
+## rows.
+func _fill_toggles(row: HBoxContainer, labels: Array[String], ids: Array,
+		current: String, on_pick: Callable) -> void:
+	for child in row.get_children():
+		child.queue_free()
+	for index in labels.size():
+		var id := String(ids[index])
+		var button := MenuWidgets.button(labels[index],
+			PencilSurface.Style.PRIMARY if id == current else PencilSurface.Style.BUTTON)
+		button.add_theme_font_size_override(&"font_size", 16)
+		button.pressed.connect(func() -> void: on_pick.call(id))
+		row.add_child(button)
+
+
+func _pick_category(id: String) -> void:
+	# The catalogue has no "everything" state to fall back to, because opening it
+	# on everything is what the mock-up's lit Clothing button says it does not do.
+	_category = "" if _category == id and not catalogue else id
+	# A slot filter left behind by Clothing would keep narrowing a category that
+	# has no body slots, and nothing on screen would say why the grid is empty.
+	if _category != "clothing":
+		_slot_filter = ""
+	_fill_filters()
+	_refresh_pockets()
+
+
+func _pick_slot(id: String) -> void:
+	_slot_filter = "" if _slot_filter == id else id
+	_fill_filters()
+	_refresh_pockets()
+
+
+## Which tiles of the grid can be seen, and which are marked as worn. One pass,
+## because both are answers about the same tile taken from the same containers
+## and both have to be taken again whenever anything moves.
+##
+## Hiding rather than greying: a [GridContainer] lays out only its visible
+## children, so the survivors close up instead of leaving the grid full of holes.
+func _refresh_pockets() -> void:
+	if _slot_row == null:
+		return
+	var filtering := catalogue or not (_category.is_empty() and _slot_filter.is_empty())
+	for slot in _slots:
+		if slot.container != _pockets:
+			continue
+		var id := slot.item_id()
+		# Empty tiles go with the filter rather than staying as somewhere to drop
+		# things: a filtered grid is a search result, and blanks are not results.
+		# A catalogue is nowhere to drop anything, so its blanks never show.
+		slot.visible = _matches(id) if filtering else true
+		var worn := catalogue and not id.is_empty() and _equipment.find(id) >= 0
+		if slot.selected != worn:
+			slot.selected = worn
+		slot.queue_redraw()
+
+
+func _matches(id: String) -> bool:
+	if id.is_empty():
+		return false
+	if not _category.is_empty() and _category_of(id) != _category:
+		return false
+	return _slot_filter.is_empty() or ItemDB.slot_of(id) == _slot_filter
+
+
+func _category_of(id: String) -> String:
+	var slot := ItemDB.slot_of(id)
+	if slot == ItemDB.WEAPON:
+		return "weapons"
+	return "clothing" if ItemDB.SLOT_ORDER.has(slot) else "items"
 
 
 # --- Stats ------------------------------------------------------------------
@@ -405,96 +570,107 @@ func _bar(share: float) -> Control:
 	return track
 
 
-# --- The colour strip -------------------------------------------------------
+# --- The colour wheel -------------------------------------------------------
 
-## Along the bottom, where a Drop button would otherwise be. What it recolours is
-## whatever is worn: the skin, plus one target per garment actually on the body, so
-## there is never a button for tinting a hat you are not wearing.
-func _tint_strip() -> Control:
+## Bottom right, where the mock-up puts it. What it recolours is whichever worn
+## tile is selected, or the skin when none is — so the tiles are the target
+## picker and there is not a second one.
+##
+## There used to be a row of buttons here naming every garment on the body, which
+## said the same thing as the equipment tiles a few centimetres above it and had
+## to be rebuilt from the container every time anything moved, purely to stay in
+## step with them. A tile that is already on screen, already knows what is in it
+## and already draws a selected state for the weapon bar is the control that was
+## being duplicated.
+func _colour_block() -> Control:
 	var panel := PanelContainer.new()
 	PencilSurface.add_to(panel, PencilSurface.Style.ROW)
 	var padding := _padded(10)
 	panel.add_child(padding)
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override(&"separation", 14)
-	padding.add_child(row)
-
-	var heading := VBoxContainer.new()
-	heading.add_theme_constant_override(&"separation", 2)
-	heading.add_child(_caption("Colour"))
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override(&"separation", 4)
+	# Wider than the wheel on purpose. The line under the heading names what is
+	# being painted and the longest of those is a sentence, so at the disc's own
+	# width it wraps to three lines — and height is the axis this card runs out
+	# of, while width it has going spare.
+	column.custom_minimum_size = Vector2(TINT_BLOCK_WIDTH, 0.0)
+	padding.add_child(column)
+	column.add_child(_caption("Colour"))
 	_tint_caption = _hint("")
-	heading.add_child(_tint_caption)
-	row.add_child(heading)
+	_tint_caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_tint_caption.custom_minimum_size = Vector2(TINT_BLOCK_WIDTH, 0.0)
+	column.add_child(_tint_caption)
 
-	_tint_targets = HBoxContainer.new()
-	_tint_targets.add_theme_constant_override(&"separation", GAP)
-	_tint_targets.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(_tint_targets)
-
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	row.add_child(spacer)
-
-	var chips := HBoxContainer.new()
-	chips.add_theme_constant_override(&"separation", CHIP_GAP)
-	chips.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	for swatch: Color in SWATCHES:
-		chips.add_child(_chip(swatch))
-	row.add_child(chips)
-	_fill_tint_targets()
+	_wheel = ColourWheel.new()
+	_wheel.picked.connect(func(colour: Color) -> void:
+		tint_picked.emit(_tint_target, colour))
+	column.add_child(_wheel)
+	_update_tint_caption()
 	return panel
 
 
-func _chip(swatch: Color) -> Control:
-	var chip := Button.new()
-	chip.custom_minimum_size = Vector2(CHIP, CHIP)
-	# The chip is a control filled with the colour it offers, so the paper is
-	# repainted rather than the whole button modulated: modulate would take the
-	# drawn strokes and the shading down with it, leaving ten pale rectangles that
-	# all read as the same washed-out celadon.
-	var surface := PencilSurface.add_to(chip, PencilSurface.Style.BUTTON)
-	(surface.material as ShaderMaterial).set_shader_parameter(&"paper_color", swatch)
-	var colour := swatch
-	chip.pressed.connect(func() -> void: tint_picked.emit(_tint_target, colour))
-	return chip
+## A tile was clicked. On the body it aims the wheel; in a catalogue it dresses.
+##
+## Clicking the selected worn tile again lets go of it, because there has to be a
+## way back to the skin that is not taking the hat off. Clicking a catalogue tile
+## that is already on the body takes it off for the same reason: the tab has no
+## other way to undress, and a click that only ever equips does nothing at all
+## half the time it is used.
+func _on_slot_picked(slot: ItemSlot) -> void:
+	if slot.container == _pockets and catalogue:
+		_wear(slot.item_id())
+		return
+	var target := TINT_BODY
+	if slot.container == _equipment and not slot.item_id().is_empty():
+		var chosen := _equipment.filter_of(slot.index)
+		target = TINT_BODY if chosen == _tint_target else chosen
+	_set_tint_target(target)
 
 
-func _fill_tint_targets() -> void:
-	for child in _tint_targets.get_children():
-		child.queue_free()
-	var targets: Array[String] = [TINT_BODY]
+## Puts `id` on the body, or takes it off if that is what is already there. The
+## garment is not moved anywhere: a catalogue lists what exists, and the
+## equipment container is the only place a thing being worn is recorded.
+func _wear(id: String) -> void:
+	if id.is_empty():
+		return
+	var body_slot := ItemDB.slot_of(id)
 	for index in _equipment.size():
-		if not _equipment.get_item(index).is_empty():
-			targets.append(_equipment.filter_of(index))
-	# A target that has just been taken off should not stay selected, or the chips
-	# would silently paint a garment nobody can see.
-	if not targets.has(_tint_target):
-		_tint_target = TINT_BODY
-	for target in targets:
-		var button := MenuWidgets.button(
-			"Skin" if target == TINT_BODY \
-				else String(ItemDB.SLOT_LABELS.get(target, target)),
-			PencilSurface.Style.PRIMARY if target == _tint_target \
-				else PencilSurface.Style.BUTTON)
-		button.add_theme_font_size_override(&"font_size", 15)
-		var chosen := target
-		button.pressed.connect(func() -> void:
-			_tint_target = chosen
-			_fill_tint_targets()
-		)
-		_tint_targets.add_child(button)
+		if _equipment.filter_of(index) != body_slot:
+			continue
+		_equipment.set_item(index, "" if _equipment.get_item(index) == id else id)
+		return
+
+
+## Puts the selection ring, the caption, the wheel and [member _tint_target] in
+## step. Also the place a target that has just been taken off is dropped: the
+## wheel must never silently paint a garment nobody can see.
+func _set_tint_target(target: String) -> void:
+	if target != TINT_BODY and _equipped_in(target).is_empty():
+		target = TINT_BODY
+	_tint_target = target
+	# Worn tiles only: a catalogue tile's ring says the garment is on the body,
+	# and this pass would clear every one of them.
+	for slot in _slots:
+		if slot.container != _equipment:
+			continue
+		var wanted := target != TINT_BODY and _equipment.filter_of(slot.index) == target
+		if slot.selected != wanted:
+			slot.selected = wanted
+			slot.queue_redraw()
 	_update_tint_caption()
 
 
+## The caption names what the wheel is aimed at, and the wheel is moved to
+## whatever that thing has already been painted — otherwise every target opens on
+## white and the marker says nothing about the colour under it.
 func _update_tint_caption() -> void:
 	if _tint_caption == null:
 		return
-	if _tint_target == TINT_BODY:
-		_tint_caption.text = "the skin"
-		return
-	var worn := _equipped_in(_tint_target)
-	_tint_caption.text = ItemDB.title(worn) if not worn.is_empty() else "nothing worn there"
+	_tint_caption.text = "the skin — click a worn tile" \
+		if _tint_target == TINT_BODY else ItemDB.title(_equipped_in(_tint_target))
+	if _wheel != null:
+		_wheel.set_colour(Color.html(str(_tints.get(_tint_target, "ffffff"))))
 
 
 ## Read off the filters rather than by position, so this does not depend on the
@@ -594,6 +770,8 @@ func _play_idle(character: Node) -> void:
 func _new_slot(container: ItemContainer, index: int) -> ItemSlot:
 	var slot := ItemSlot.new()
 	slot.bind(container, index)
+	slot.draggable = not (catalogue and container == _pockets)
+	slot.picked.connect(_on_slot_picked)
 	slot.quick_move_requested.connect(_on_quick_move)
 	slot.hover_started.connect(_on_hover_started)
 	slot.hover_ended.connect(_on_hover_ended)
@@ -601,25 +779,12 @@ func _new_slot(container: ItemContainer, index: int) -> ItemSlot:
 	return slot
 
 
-## Room the layout was designed with and nothing has claimed yet. Drawn as a
-## recessed well so it reads as reserved rather than as a gap something failed to
-## fill; give it a caption and it names itself.
-func _reserve(text: String, width: float, height: float) -> Control:
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(width, height)
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	if width <= 0.0:
-		panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	if height <= 0.0:
-		panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	PencilSurface.add_to(panel, PencilSurface.Style.ROW)
-	if not text.is_empty():
-		var padding := _padded(10)
-		panel.add_child(padding)
-		var label := _hint(text)
-		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		padding.add_child(label)
-	return panel
+## Blank card, pushing whatever comes after it to the far end of the row.
+func _spacer() -> Control:
+	var control := Control.new()
+	control.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return control
 
 
 ## Margins are theme constants rather than properties, so they cannot be set
@@ -686,8 +851,11 @@ func refresh() -> void:
 	if _hovered != null:
 		_show_tooltip(_hovered)
 	_refresh_preview()
-	if _tint_targets != null:
-		_fill_tint_targets()
+	_set_tint_target(_tint_target)
+	# An item that has just moved may no longer match what the grid is narrowed
+	# to, and a tile left showing through a filter it fails is worse than one that
+	# has gone: it reads as the filter being broken.
+	_refresh_pockets()
 	if _stat_rows != null:
 		_fill_stats()
 

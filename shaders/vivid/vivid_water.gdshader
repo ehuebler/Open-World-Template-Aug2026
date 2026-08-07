@@ -171,6 +171,39 @@ uniform float crest_near = 120.0;
 uniform float crest_far = 700.0;
 uniform float surf_near = 600.0;
 uniform float surf_far = 2500.0;
+// Metres of water column the sea takes to reach its own opacity, counted down
+// from nothing at the waterline: the near term, plus the second one per metre of
+// range. Neither is a taste setting. Between them they are what stops the
+// shoreline being a sawtooth.
+//
+// The sea is a smooth sphere and the ground is a triangulated height field, and
+// on a shelf that falls a metre in a hundred the two cross at a couple of
+// degrees — so the crossing is not a line but a band many quads wide, in which
+// the mesh rises above sea level and drops below it once per triangle. Given a
+// hard edge to draw, that comes out as a comb of teeth leaning along the
+// triangulation's own diagonal. Refining the sea's disc does nothing whatever to
+// it: the zigzag belongs to the surface being cut, not to the one cutting.
+// Feathering the water out over its last few metres removes the edge instead of
+// smoothing it, and it is what shallow water does anyway.
+//
+// It takes two terms because the band is not a fixed depth. What has to be
+// swallowed is the ground mesh's excursion about sea level, which is the vertex
+// spacing times the shelf's slope — so it grows with the chunk's LOD, which is to
+// say with range. Underfoot there is almost nothing to fix, the chunk being the
+// finest the LOD builds, and the near term is held well under `wash_depth` for a
+// harder reason: the wash is the band of solid white along the waterline, it
+// lives in the first 0.6 m of depth, and a feather as wide would thin the water
+// it is drawn on and take the shoreline down with it.
+// The range term is sized against the *world's* planet and not the harness's:
+// `_planet_test` stands its own planet up and keeps the scene's baseline reach,
+// while `Planet` in `game/world.tscn` scales it by the player's saved render
+// distance, so the chunks the home screen is looking at are coarser than the ones
+// the tour photographs and the teeth are correspondingly bigger. Tuned at 0.0018
+// the tour came out clean and the home screen did not, which is worth knowing
+// before trusting either shot on its own.
+uniform float shore_fade : hint_range(0.0, 20.0) = 0.15;
+uniform float shore_fade_range : hint_range(0.0, 0.02) = 0.01;
+
 // How much of the caustic net goes into the white water. Foam is not a flat
 // paint job — it is bubbles, and bubbles are lit by the same focused light that
 // nets the sand under them, which is why surf sparkles and a white band does
@@ -285,57 +318,72 @@ void fragment() {
 		color += vec3(0.55, 0.85, 1.0) * web * underlight * day;
 	}
 
+	// How deep the water is under this fragment, read once and spent twice: on
+	// the shore fade above, and on the surf below.
+	//
+	// Taken as a difference of radii, not as a length along the view ray. A
+	// slant path through shallow water is long, so the ray version reads every
+	// grazing pixel as shallow and lays a band of foam along the whole horizon.
+	//
+	// Whether there is a bed at all is a separate question from how deep it is,
+	// and the two must not be folded into one number. Depth clears to zero under
+	// reverse-Z, so nothing in the buffer means open sky past the limb, with no
+	// bed behind the water and no shore to feather into — but dry land behind it
+	// reads as a *negative* depth, so a test for "nothing there" written as
+	// `under < 0.0` catches the shoreline too and hands it full opacity, which is
+	// the comb of teeth the fade exists to remove.
+	bool has_bed = false;
+	float under = 0.0;
+	float raw = texture(depth_buffer, SCREEN_UV).x;
+	if (raw > 0.0) {
+		vec4 probe = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, raw, 1.0);
+		vec3 bed = (INV_VIEW_MATRIX * vec4(probe.xyz / probe.w, 1.0)).xyz;
+		under = planet_radius - length(bed - planet_center);
+		has_bed = true;
+	}
+	float shore = has_bed
+		? smoothstep(0.0, shore_fade + range * shore_fade_range, under)
+		: 1.0;
+
 	float foam = 0.0;
 	float reach = 1.0 - smoothstep(surf_near, surf_far, range);
-	if (surf_strength > 0.0 && reach > 0.0) {
-		float raw = texture(depth_buffer, SCREEN_UV).x;
-		// Depth clears to zero under reverse-Z, so this is open sky past the
-		// limb: no bed behind the water, and nothing to break on.
-		if (raw > 0.0) {
-			vec4 probe = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, raw, 1.0);
-			vec3 bed = (INV_VIEW_MATRIX * vec4(probe.xyz / probe.w, 1.0)).xyz;
-			// Taken as a difference of radii, not as a length along the view
-			// ray. A slant path through shallow water is long, so the ray
-			// version reads every grazing pixel as shallow and lays a band of
-			// foam along the whole horizon.
-			float under = planet_radius - length(bed - planet_center);
-			float shoal = 1.0 - smoothstep(0.0, break_depth, under);
-			if (shoal > 0.0) {
-				float wash = 1.0 - smoothstep(0.0, wash_depth, under);
-				// Everything with a wavelength, faded as one: the crests, the
-				// swell riding them, and the mottle that breaks them up along
-				// the shore. What is left past this is the waterline.
-				float rolling = 1.0 - smoothstep(crest_near, crest_far, range);
-				float crest = 0.0;
-				if (rolling > 0.0) {
-					// One pulse of white water per wave, marching shoreward as
-					// TIME advances. Overdriven so the middle of a crest
-					// saturates and only its edges are a blend — a crest that
-					// merely peaks at white is never actually white anywhere.
-					// It reaches zero at both ends of the cycle, so the wrap
-					// needs no special care.
-					float phase = fract(under / max(wave_spacing, 0.01)
-						+ TIME * surf_speed);
-					crest = clamp(1.7 * smoothstep(0.0, crest_width, phase)
-						* (1.0 - smoothstep(crest_width, 1.0, phase)), 0.0, 1.0);
-					// A crest riding the face of the swell breaks harder than
-					// one in the trough, which is what ties the two together:
-					// without it the surf marches up the beach on its own
-					// schedule while the water it is made of moves to another.
-					crest = clamp(crest * (1.0 + max(heave, 0.0) * surf_swell),
-						0.0, 1.0) * rolling;
-				}
-				foam = max(wash, crest * shoal);
-				float mottle = vivid_fbm3(v_world_position * surf_mottle_scale, 3);
-				foam *= mix(1.0, clamp(2.1 * mottle - 0.2, 0.0, 1.4),
-					surf_mottle * rolling);
-				// The net into the crests and not into the wash. Bubbles are lit
-				// by the same focused light that draws the net on the sand under
-				// them, which is why real surf glitters; the wash along the
-				// waterline has to stay solid white or the shoreline dissolves.
-				foam *= 1.0 + web * surf_caustic * (1.0 - wash);
-				foam = clamp(foam * surf_strength * reach, 0.0, 1.0);
+	if (surf_strength > 0.0 && reach > 0.0 && under > 0.0) {
+		float shoal = 1.0 - smoothstep(0.0, break_depth, under);
+		if (shoal > 0.0) {
+			float wash = 1.0 - smoothstep(0.0, wash_depth, under);
+			// Everything with a wavelength, faded as one: the crests, the
+			// swell riding them, and the mottle that breaks them up along
+			// the shore. What is left past this is the waterline.
+			float rolling = 1.0 - smoothstep(crest_near, crest_far, range);
+			float crest = 0.0;
+			if (rolling > 0.0) {
+				// One pulse of white water per wave, marching shoreward as
+				// TIME advances. Overdriven so the middle of a crest
+				// saturates and only its edges are a blend — a crest that
+				// merely peaks at white is never actually white anywhere.
+				// It reaches zero at both ends of the cycle, so the wrap
+				// needs no special care.
+				float phase = fract(under / max(wave_spacing, 0.01)
+					+ TIME * surf_speed);
+				crest = clamp(1.7 * smoothstep(0.0, crest_width, phase)
+					* (1.0 - smoothstep(crest_width, 1.0, phase)), 0.0, 1.0);
+				// A crest riding the face of the swell breaks harder than
+				// one in the trough, which is what ties the two together:
+				// without it the surf marches up the beach on its own
+				// schedule while the water it is made of moves to another.
+				crest = clamp(crest * (1.0 + max(heave, 0.0) * surf_swell),
+					0.0, 1.0) * rolling;
 			}
+			foam = max(wash, crest * shoal);
+			float mottle = vivid_fbm3(v_world_position * surf_mottle_scale, 3);
+			foam *= mix(1.0, clamp(2.1 * mottle - 0.2, 0.0, 1.4),
+				surf_mottle * rolling);
+			// The net into the crests and not into the wash. Bubbles are lit
+			// by the same focused light that draws the net on the sand under
+			// them, which is why real surf glitters; the wash along the
+			// waterline has to stay solid white or the shoreline dissolves.
+			foam *= 1.0 + web * surf_caustic * (1.0 - wash);
+			foam = clamp(foam * surf_strength * reach, 0.0, 1.0);
 		}
 	}
 
@@ -347,7 +395,10 @@ void fragment() {
 	// falls to night_light on the dark side, so an unlit shore is not a beacon.
 	float sky = mix(night_light, 1.0, smoothstep(-0.55, 0.15, dot(up, sun)));
 	ALBEDO = mix(color * day + glint * glint_strength * day, foam_color * sky, foam);
-	ALPHA = mix(mix(water_alpha, 1.0, grazing), 1.0, foam) * (1.0 - floe);
+	// The shore fade goes on the water's own opacity and not on the finished
+	// alpha, so the wash along the waterline stays solid white while the clear
+	// water under it thins away to nothing.
+	ALPHA = mix(mix(water_alpha, 1.0, grazing) * shore, 1.0, foam) * (1.0 - floe);
 	// The same water the bed is fogged by, applied to the surface a swimmer sees
 	// it through. Alpha goes with it: past the visibility there is no surface
 	// left to see, only the water in front of it.

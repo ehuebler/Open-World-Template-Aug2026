@@ -48,6 +48,19 @@ var _offshore := Vector3.UP
 ## grain, which is exactly what a diver said was missing.
 var _slope := Vector3.UP
 
+## How square-on to the sun a vantage has to be to count as lit. One directional
+## light lights the whole planet, so the deepest water on it is as likely to be at
+## midnight as anywhere else — and every swimming shot in here is taken at
+## [member _deep].
+##
+## It is worth stating plainly why that is a fault in the harness and not a detail
+## of it: an underwater shot on the night side is black with stars in it whatever
+## the water is doing, so the four pictures that exist to show what the sea looks
+## like from inside showed nothing at all, and a cloud deck rendering solid black
+## under water survived every one of them. A vantage has to be lit before a
+## photograph of it means anything.
+const LIT_ENOUGH := 0.35
+
 ## How far from the shallows the offshore sample may be taken, in radians. Wide
 ## enough to be past the shelf, narrow enough to be the same coast under the same
 ## light.
@@ -110,6 +123,8 @@ func _survey() -> void:
 	var wet := 0
 	var total := 0.0
 	var deepest := 0.0
+	var deepest_lit := 0.0
+	var sunward := _sunward()
 	var over_shelf := 0
 	var tallest := 0.0
 	var flattest := INF
@@ -130,6 +145,8 @@ func _survey() -> void:
 		total += height
 		if height < deepest:
 			deepest = height
+		if height < deepest_lit and direction.normalized().dot(sunward) > LIT_ENOUGH:
+			deepest_lit = height
 			_deep = direction
 		if height < -shape.shelf_depth * 2.0:
 			over_shelf += 1
@@ -451,16 +468,23 @@ func _sink(direction: Vector3, depth: float, pitch: float) -> void:
 ## standing height above that, and the underwater shot is the one that has to
 ## remember it. The first run of it asked for 1.6 m under and photographed the
 ## sea from a metre in the air.
+## Which way the sun is, in world space. A directional light points along its own
+## -Z, so the way *toward* it is +Z of its basis. Read off the scene rather than
+## written down, unlike `_landing_site.gd`, because this harness runs inside
+## `world.tscn` and can simply ask.
+func _sunward() -> Vector3:
+	var sun := get_tree().current_scene.find_child("Sun", true, false) as DirectionalLight3D
+	return sun.global_basis.z.normalized() if sun != null else Vector3.UP
+
+
 func _hold(direction: Vector3, altitude: float, pitch: float, sunward: bool) -> void:
 	var up := direction.normalized()
 	var facing := up.cross(Vector3.UP if absf(up.y) < 0.9 else Vector3.RIGHT).normalized()
 	if sunward:
-		var sun := get_tree().current_scene.find_child("Sun", true, false) as DirectionalLight3D
-		if sun != null:
-			var toward := sun.global_basis.z
-			var flat := toward - up * up.dot(toward)
-			if flat.length_squared() > 0.01:
-				facing = flat.normalized()
+		var toward := _sunward()
+		var flat := toward - up * up.dot(toward)
+		if flat.length_squared() > 0.01:
+			facing = flat.normalized()
 	var side := facing.cross(up).normalized()
 	_player.global_transform = Transform3D(Basis(side, up, side.cross(up)),
 		_planet.global_position + up * (_planet.shape.radius + altitude))

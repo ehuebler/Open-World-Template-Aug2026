@@ -35,6 +35,27 @@ static func dress(control: Button, style: PencilSurface.Style) -> void:
 		control.add_theme_color_override(slot, PALETTE.text_primary)
 
 
+## Fills [param row] with one button per label, the open one carrying the gold
+## fill. Colour is the only thing marking it: state is shading and meaning is
+## hue in this UI, and which tab is open is meaning.
+##
+## Rebuilt on every switch rather than restyled in place, because that is the
+## cheaper thing to get right — a strip that is redrawn from one integer cannot
+## end up with two tabs both looking open.
+static func fill_tab_row(row: HBoxContainer, labels: Array[String], current: int,
+		on_pick: Callable, font_size := 19) -> void:
+	for child in row.get_children():
+		child.queue_free()
+	for index in labels.size():
+		var control := button(labels[index],
+			PencilSurface.Style.PRIMARY if index == current else PencilSurface.Style.BUTTON)
+		control.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		control.add_theme_font_size_override("font_size", font_size)
+		var chosen := index
+		control.pressed.connect(func() -> void: on_pick.call(chosen))
+		row.add_child(control)
+
+
 ## A drawn card, added to [param parent], with its padding on an inner margin
 ## rather than in a stylebox so the sheet reaches the panel's edge. Returns the
 ## box to fill: callers want the contents, never the card.

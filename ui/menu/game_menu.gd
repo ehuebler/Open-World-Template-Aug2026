@@ -2,7 +2,8 @@ class_name GameMenu
 extends Control
 
 ## The in-game menu: one card with a row of tabs across the top, holding the
-## inventory, the quest log, the achievements, the settings and the admin tools.
+## character screen in two halves, the quest log, the achievements, the settings
+## and the admin tools.
 ##
 ## It replaced two screens that used to be separate — the wardrobe/inventory card
 ## and the pause overlay — and that is the point of it. Both were opened by a key,
@@ -31,12 +32,13 @@ signal closed
 ## reason the pause overlay never acted on it: leaving is the session's business.
 signal leave_requested
 
-enum Tab { INVENTORY, QUESTS, ACHIEVEMENTS, SETTINGS, ADMIN }
+enum Tab { HERO, INVENTORY, QUESTS, ACHIEVEMENTS, SETTINGS, ADMIN }
 
 const THEME: Theme = preload("res://ui/themes/main_theme.tres")
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
 ## Tab order, and the labels on them.
-const TABS: Array[String] = ["Inventory", "Quests", "Achievements", "Settings", "Admin"]
+const TABS: Array[String] = ["Hero Design", "Inventory", "Quests", "Achievements",
+	"Settings", "Admin"]
 ## How much of the window's width the card takes, and the most it may grow to.
 const WIDTH_SHARE := 0.92
 const WIDTH_CAP := 1320.0
@@ -154,20 +156,11 @@ func _build() -> void:
 	padding.add_child(_page_host)
 
 
-## The tab strip, redrawn on every switch so the open tab carries the gold fill.
-## Colour is the only thing marking it: the rule in this UI is that state is
-## shading and meaning is hue, and which tab is open is meaning.
+## The strip lives in [MenuWidgets] because the home screen's character editor
+## grew the same two tabs and a second copy is a second place for them to differ.
 func _fill_tab_row() -> void:
-	for child in _tab_row.get_children():
-		child.queue_free()
-	for index in TABS.size():
-		var button := MenuWidgets.button(TABS[index],
-			PencilSurface.Style.PRIMARY if index == _tab else PencilSurface.Style.BUTTON)
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.add_theme_font_size_override(&"font_size", 19)
-		var chosen := index as Tab
-		button.pressed.connect(func() -> void: show_tab(chosen))
-		_tab_row.add_child(button)
+	MenuWidgets.fill_tab_row(_tab_row, TABS, _tab,
+		func(index: int) -> void: show_tab(index as Tab))
 
 
 ## Built once and kept. The inventory page owns a SubViewport with a body in it, so
@@ -178,7 +171,8 @@ func _page_for(tab: Tab) -> Control:
 		return _pages[tab]
 	var page: Control = null
 	match tab:
-		Tab.INVENTORY: page = _inventory_page()
+		Tab.HERO: page = _character_page(InventoryPage.Section.HERO)
+		Tab.INVENTORY: page = _character_page(InventoryPage.Section.POCKETS)
 		Tab.QUESTS: page = _journal_page(JournalDB.QUEST)
 		Tab.ACHIEVEMENTS: page = _journal_page(JournalDB.ACHIEVEMENT)
 		Tab.SETTINGS: page = _settings_page()
@@ -190,8 +184,14 @@ func _page_for(tab: Tab) -> Control:
 	return page
 
 
-func _inventory_page() -> Control:
+## Both halves of the character screen come from here, against the same
+## containers: Hero Design is the figure and its colours, Inventory is the
+## pockets. Two instances rather than two classes, because an item moving in
+## either one has to redraw the tiles in the other, and sharing the container is
+## what already does that.
+func _character_page(section: InventoryPage.Section) -> Control:
 	var page := InventoryPage.new()
+	page.section = section
 	if _player == null:
 		return page
 	page.configure(_player.equipment, _player.weapons, _player.backpack,

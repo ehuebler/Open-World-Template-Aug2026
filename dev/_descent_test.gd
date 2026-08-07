@@ -399,10 +399,20 @@ func _walk() -> void:
 	var crashes_before := _player._crashes
 	Input.action_press("move_forward")
 	Input.action_press("sprint")
+	# Both, because they disagree by design and only the second one decides
+	# anything. `is_on_floor` is the collider's answer and under-reports badly on
+	# the planet — half the ground has no body yet and the rest is a triangulation
+	# the feet spend most of a run a centimetre clear of. `_grounded()` folds in
+	# the height-field guard's `_footed`, and it is what gates air control, floor
+	# snapping and the stair step. A low figure in the *second* column is the
+	# walk-through-terrain fault; a low one in the first is the normal state.
+	var on_floor := 0
 	var grounded_for := 0
 	for frame in 240:
 		await get_tree().physics_frame
 		if _player.is_on_floor():
+			on_floor += 1
+		if _player._grounded():
 			grounded_for += 1
 	Input.action_release("move_forward")
 	Input.action_release("sprint")
@@ -411,8 +421,8 @@ func _walk() -> void:
 	print("descent_test: run            %.0f m in 4.0 s (%.0f m/s, a spooling sprint), stance=%s" % [
 		travelled, travelled / 4.0, _name_of(_player._stance)])
 	print("descent_test: run crashes    %d" % [_player._crashes - crashes_before])
-	print("descent_test: stayed on it   floor %d%% of the time, altitude %.1f -> %.1f m" % [
-		grounded_for * 100 / 240, start_altitude, _altitude()])
+	print("descent_test: stayed on it   collider %d%%, grounded %d%%, altitude %.1f -> %.1f m" % [
+		on_floor * 100 / 240, grounded_for * 100 / 240, start_altitude, _altitude()])
 	print("descent_test: tracked curve  turned %.2f° of planet, still %.2f° off square" % [
 		rad_to_deg(from.normalized().angle_to(_player.global_position.normalized())), _error()])
 	await _shoot("descent_walked")

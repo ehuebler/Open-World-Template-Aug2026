@@ -58,11 +58,24 @@ DRESSED_BLEND = os.path.join(ROOT, "generated", "dressed.blend")
 OUT_BLEND = os.path.join(ROOT, "generated", "character_3_rigged.blend")
 OUT_GLB = os.path.join(ASSET_DIR, "player_character_3.glb")
 
-SKIN_COLOUR = (0.74, 0.60, 0.49, 1.0)
+# The body and every garment ship white, and that is a requirement of how they
+# are coloured rather than a look. A tint multiplies the albedo it lands on, so
+# whatever is authored here is a ceiling on what the character editor can reach:
+# a boot baked at 0.17 grey can be tinted to any dark, and to no bright at all,
+# so nine of the ten swatches came out as the same near-black and the strip read
+# as broken. White is the only base under which every swatch arrives as itself.
+#
+# The cost of it is that an untinted figure is a blank, which is the right way
+# round: the colours belong to the player and this file has no business having
+# an opinion about them.
+WHITE = (1.0, 1.0, 1.0, 1.0)
+SKIN_COLOUR = WHITE
 
-# Where each garment's colour is read from on the dressed sculpt, as a box in
-# that sculpt's own metres once it has been turned to face +Y. The hair is also
-# *cut* out of its box; the other two only take their hue from theirs.
+# Where the hair is cut out of the dressed sculpt, as a box in that sculpt's own
+# metres once it has been turned to face +Y. The other two regions are no longer
+# read for colour — see WHITE — but are kept because they are what says the
+# figure is divided into three at all, and re-measuring them off the sculpt is
+# an hour nobody should have to spend twice.
 #
 # The boxes are measured off the sculpt and written down, not derived. Landmark
 # detection is no use over there, because every landmark it looks for is under
@@ -669,7 +682,7 @@ def load_module(filename: str):
     return module
 
 
-def shell_specs(apparel, landmarks, colours: dict) -> list[dict]:
+def shell_specs(apparel, landmarks) -> list[dict]:
     """The tunic, the boots and the goggles, as regions of this body in cloth.
 
     Written in the same shape as `build_apparel.garment_specs`, and consumed by
@@ -740,7 +753,7 @@ def shell_specs(apparel, landmarks, colours: dict) -> list[dict]:
         {
             "slug": "c3_boots",
             "name": "apparel_c3_boots",
-            "colour": colours["boots"],
+            "colour": WHITE,
             "roughness": 0.55,
             "region": boot_region,
             "displace": boot_displace,
@@ -750,7 +763,7 @@ def shell_specs(apparel, landmarks, colours: dict) -> list[dict]:
         {
             "slug": "c3_tunic",
             "name": "apparel_c3_tunic",
-            "colour": colours["tunic"],
+            "colour": WHITE,
             "roughness": 0.76,
             "region": tunic_region,
             "displace": tunic_displace,
@@ -768,10 +781,9 @@ def shell_specs(apparel, landmarks, colours: dict) -> list[dict]:
         },
         # Not written here, because a pair of goggles is the same garment on
         # both bodies: `build_apparel` owns the shape and this asks for it in
-        # this body's colour. Nothing about it is measured off the sculpt, which
-        # has none — the settler's palette is, so it does not arrive grey.
+        # this body's colour.
         apparel.goggles_spec(landmarks, slug="c3_goggles", name="apparel_c3_goggles",
-                             colour=(0.128, 0.166, 0.223, 1.0), roughness=0.30),
+                             colour=WHITE, roughness=0.30),
     ]
 
 
@@ -977,13 +989,12 @@ def extract_garments(body: Body, body_obj: bpy.types.Object,
         print("WARNING: no mesh in dressed.blend")
         return []
 
-    colours = sculpt_colours(source)
     collection = bpy.data.collections.get("Apparel") or bpy.data.collections.new("Apparel")
     if collection.name not in bpy.context.scene.collection.children:
         bpy.context.scene.collection.children.link(collection)
 
     made = []
-    hair = cut_hair(body, body_obj, source, colours["hair"])
+    hair = cut_hair(body, body_obj, source, WHITE)
     if hair is not None:
         transfer_weights(body_obj, hair)
         hair.parent = rig
@@ -996,7 +1007,7 @@ def extract_garments(body: Body, body_obj: bpy.types.Object,
 
     apparel = load_module("build_apparel.py")
     landmarks = apparel.Landmarks(body_obj, rig)
-    for spec in shell_specs(apparel, landmarks, colours):
+    for spec in shell_specs(apparel, landmarks):
         shell = apparel.build_garment(body_obj, rig, spec, collection)
         made.append(shell)
         gap = pair_clearance(shell)
@@ -1006,49 +1017,6 @@ def extract_garments(body: Body, body_obj: bpy.types.Object,
             max(v.co.z for v in shell.data.vertices),
             "one piece" if gap is None else "left-to-right gap {0:.3f} m".format(gap)))
     return made
-
-
-def sculpt_colours(source: bpy.types.Object) -> dict[str, tuple]:
-    """One albedo per garment, averaged over that garment's box on the sculpt.
-
-    Averaged per region and not over the whole figure: a single average is a
-    muddy near-black for all three, which is how the boots, the coat and the
-    hair ended up the same colour with only their brightness to tell them apart.
-    """
-    mesh = source.data
-    layer = mesh.color_attributes.get("Color")
-    coords = world_coords(source)
-    seen: dict[int, tuple[float, float, float]] = {}
-    if layer is not None:
-        for poly in mesh.polygons:
-            for loop_index in poly.loop_indices:
-                vertex = mesh.loops[loop_index].vertex_index
-                if vertex not in seen:
-                    colour = layer.data[loop_index].color
-                    seen[vertex] = (colour[0], colour[1], colour[2])
-    out = {}
-    for slug, box in SCULPT_REGIONS.items():
-        picked = [c for index, c in seen.items() if in_box(coords[index], box)]
-        out[slug] = level_colour(picked, GARMENT_LEVEL.get(slug, 0.3))
-        print("  colour {0:<6} {1} samples -> ({2:.2f}, {3:.2f}, {4:.2f})".format(
-            slug, len(picked), *out[slug][:3]))
-    return out
-
-
-# The sculpt's own vertex colours are a near-black wash, so they are used only
-# for hue: the level is set here, because `SurfaceSkin` copies albedo alone and
-# an unlit dark garment reads as a hole in the character.
-GARMENT_LEVEL = {"hair": 0.20, "tunic": 0.34, "boots": 0.17}
-
-
-def level_colour(samples: list, level: float) -> tuple[float, float, float, float]:
-    if not samples:
-        return (level, level, level * 1.07, 1.0)
-    reds = sum(c[0] for c in samples) / len(samples)
-    greens = sum(c[1] for c in samples) / len(samples)
-    blues = sum(c[2] for c in samples) / len(samples)
-    peak = max(reds, greens, blues, 1e-4)
-    return (reds / peak * level, greens / peak * level, blues / peak * level, 1.0)
 
 
 def transfer_weights(source: bpy.types.Object, target: bpy.types.Object) -> None:

@@ -165,6 +165,17 @@ func near(direction: Vector3) -> bool:
 	return enabled and _span > 0.0 and direction.dot(_up) >= _cap
 
 
+## The same test as [method near], as data a caller can apply itself: the cap's
+## axis in `xyz` and the cosine it has to beat in `w`, or zero for a town that can
+## never answer yes. [PlanetShape] samples a few thousand heights per chunk and
+## the call overhead of asking properly is 12% of one; this is what lets it ask
+## inline without keeping a second copy of the rule.
+func near_bounds() -> Vector4:
+	if not enabled or _span <= 0.0:
+		return Vector4.ZERO
+	return Vector4(_up.x, _up.y, _up.z, _cap)
+
+
 ## Metres east and inland from the pad centre.
 ##
 ## Azimuthal equidistant, so a road written as 1800 m long is 1800 m of ground. The

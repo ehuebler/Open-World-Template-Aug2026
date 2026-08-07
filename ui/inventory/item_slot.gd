@@ -10,6 +10,9 @@ extends Control
 ## because where an item should jump to depends on which grids are on screen, so
 ## that is passed out as a signal.
 
+## A plain left click. What that means is the screen's business, not the tile's:
+## the character pages use it to choose what the colour chips paint.
+signal picked(slot: ItemSlot)
 signal quick_move_requested(slot: ItemSlot)
 signal hover_started(slot: ItemSlot)
 signal hover_ended(slot: ItemSlot)
@@ -27,6 +30,11 @@ var index := 0
 ## HUD tiles are drawn but take no input: the weapon bar reports what is in hand
 ## rather than being rummaged in.
 var interactive := true
+## Off for a tile that is a **view** of an item rather than a place one is kept —
+## the character editor's catalogue is the case. Dragging one of those would swap
+## containers and put a worn garment into a list that is meant to hold every
+## garment; clicking and hovering still work, which is all a catalogue needs.
+var draggable := true
 ## Shown when the slot is empty, naming the body part an equipment slot covers.
 var placeholder := ""
 ## Drawn small in the top corner: the key that reaches this slot.
@@ -41,6 +49,14 @@ var _outlines: Array[PackedVector2Array] = []
 
 func _init() -> void:
 	custom_minimum_size = Vector2(SIZE, SIZE)
+	size = custom_minimum_size
+
+
+## A tile off the standard [constant SIZE], which the character editor's
+## catalogue is. Everything drawn here is measured off `size`, so the icon, the
+## border's wander and the badge all follow.
+func set_edge(edge: float) -> void:
+	custom_minimum_size = Vector2(edge, edge)
 	size = custom_minimum_size
 
 
@@ -84,10 +100,15 @@ func _gui_input(event: InputEvent) -> void:
 	if button.shift_pressed and not item_id().is_empty():
 		accept_event()
 		quick_move_requested.emit(self)
+		return
+	# Not accepted, because a press is also where a drag begins and swallowing it
+	# would leave the tiles unable to be moved. Selecting the tile a drag starts
+	# from is harmless: it is the one the player is pointing at either way.
+	picked.emit(self)
 
 
 func _get_drag_data(_at: Vector2) -> Variant:
-	if not interactive or item_id().is_empty():
+	if not interactive or not draggable or item_id().is_empty():
 		return null
 	set_drag_preview(_drag_preview())
 	return {"slot": self}
@@ -115,7 +136,7 @@ func _drop_data(_at: Vector2, data: Variant) -> void:
 
 
 func _source_slot(data: Variant) -> ItemSlot:
-	if not interactive or typeof(data) != TYPE_DICTIONARY:
+	if not interactive or not draggable or typeof(data) != TYPE_DICTIONARY:
 		return null
 	var from := (data as Dictionary).get("slot") as ItemSlot
 	if from == null or from == self or from.container == null:

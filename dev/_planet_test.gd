@@ -12,13 +12,21 @@ extends Node
 ##
 ## Flags:
 ##     -- --tour        take the screenshot tour and quit
+##     -- --at=LAT,LON  photograph one place, quoted the way the in-game
+##                      readout writes it: --at="34.21 S,118.55 W"
 ##     -- --seed=N      regenerate with a different seed
 ##     -- --radius=N    planet radius in metres, default 8000
 ##     -- --sea=F       share of the surface under water, 0..1
+##     -- --set=N:V     any other exported number on the shape, comma separated:
+##                      --set=aridity:0,terrace_height:40
+##     -- --mat=N:V     the same for a uniform on the terrain material:
+##                      --mat=water_specular:0
 ##     -- --split=F     chunk widths of viewer distance before a chunk subdivides
 ##     -- --regions     walk the colour wheel at ground level, measuring the sky
 ##     -- --night       pin the sun over the pole and photograph both sides of it
 ##     -- --noclouds    leave the cloud deck off
+##     -- --nosea       leave the sea off, baring the sea bed
+##     -- --noair       leave the atmosphere shell off
 ##     -- --skirt=F     skirt depth as a share of chunk width, 0 disables
 ##     -- --noshadow    drop the sun's shadows
 ##     -- --draw=MODE   wireframe, unshaded, normals or overdraw
@@ -74,7 +82,8 @@ var _to_sun := Vector3.UP
 
 func _ready() -> void:
 	_options = _arguments()
-	_touring = _options.has("tour") or _options.has("regions") or _options.has("night")
+	_touring = _options.has("tour") or _options.has("regions") or _options.has("night") \
+		or _options.has("at")
 
 	_shape = PlanetShape.new()
 	if _options.has("seed"):
@@ -83,6 +92,25 @@ func _ready() -> void:
 		_shape.radius = float(_options["radius"])
 	if _options.has("sea"):
 		_shape.sea_fraction = clampf(float(_options["sea"]), 0.0, 0.95)
+	# Any other exported number on the shape, by name: --set=aridity:0. The
+	# terrain has thirty of these and the interesting question is nearly always
+	# "which of them is doing this", which wants one flag rather than thirty.
+	if _options.has("set"):
+		for pair in String(_options["set"]).split(",", false):
+			var halves := pair.split(":", true, 1)
+			if halves.size() == 2:
+				_shape.set(StringName(halves[0].strip_edges()), halves[1].to_float())
+				print("planet_test: set %s = %s" % [halves[0], halves[1]])
+	# The same for a uniform on the terrain material, which is the other half of
+	# where a terrain artefact can live. The shape is edited before `prepare`;
+	# this can be edited whenever, since a uniform costs nothing to change.
+	if _options.has("mat"):
+		for pair in String(_options["mat"]).split(",", false):
+			var halves := pair.split(":", true, 1)
+			if halves.size() == 2:
+				Planet.SURFACE_MATERIAL.set_shader_parameter(
+					StringName(halves[0].strip_edges()), halves[1].to_float())
+				print("planet_test: mat %s = %s" % [halves[0], halves[1]])
 
 	var started := Time.get_ticks_msec()
 	_shape.prepare()
@@ -96,6 +124,8 @@ func _ready() -> void:
 			await _region_shots()
 		elif _options.has("night"):
 			await _night()
+		elif _options.has("at"):
+			await _at(String(_options["at"]))
 		else:
 			await _tour()
 		get_tree().quit()
@@ -137,7 +167,28 @@ func _build_scene() -> void:
 	# faint one is hard to tell from a sky that never got dark. Being able to
 	# take the deck away is how you tell which of the two you are looking at.
 	_planet.has_clouds = not _options.has("noclouds")
+	# The same switch for the sea. Every artefact along a shoreline has two
+	# candidates — the water drawn over the bed, and the bed itself — and they
+	# look alike in a photograph, so the only way to name one is to take the
+	# other away.
+	#
+	# The surface is hidden rather than the node left unbuilt, because PlanetWater
+	# also publishes the murk globals that the *terrain* reads. Skipping it takes
+	# the sea bed's own shading away along with the sea, which makes the one
+	# comparison this flag exists for prove nothing.
 	add_child(_planet)
+	if _options.has("nosea") and _planet.water != null:
+		var surface := _planet.water.get_node_or_null("Surface") as MeshInstance3D
+		if surface != null:
+			surface.visible = false
+	# And the third shell. Seen from inside, an additive sphere of a few dozen
+	# segments is a handful of very large flat facets across the whole view, so
+	# it is a candidate for any broad artefact that survives taking the ground
+	# away — and it is the only one of the three that could not be switched off.
+	if _options.has("noair"):
+		var air := _planet.find_child("Atmosphere", false, false) as MeshInstance3D
+		if air != null:
+			air.visible = false
 
 	_camera = Camera3D.new()
 	_camera.fov = 62.0
@@ -243,6 +294,12 @@ func _survey() -> void:
 	var highest := -INF
 	var peak := Vector3.UP
 	var flat_level := cos(deg_to_rad(FLAT_DEGREES))
+	# Desert country is the one thing the tour could not previously be aimed at,
+	# and terracing and strata are only judgeable there. Tracked as the *highest*
+	# arid ground rather than the first found, because a bench is only visible
+	# where there is enough altitude to have stacked a few of them.
+	var arid_land := 0
+	var mesa_top := -INF
 
 	for index in SURVEY_SAMPLES:
 		var direction := PlanetShape.even_direction(index, SURVEY_SAMPLES)
@@ -256,6 +313,12 @@ func _survey() -> void:
 			valley += 1
 		if height > 0.0:
 			land += 1
+			var arid := float(reading.get("arid", 0.0))
+			if arid > 0.5:
+				arid_land += 1
+				if height > mesa_top:
+					mesa_top = height
+					_features["mesa"] = direction
 			if _shape.normal_at(direction, 6.0).dot(direction) >= flat_level:
 				flat += 1
 				if not _features.has("plain") and height > 8.0:
@@ -291,6 +354,8 @@ func _survey() -> void:
 	print("planet_test: land %.1f%% flat (under %.0f degrees), %.1f%% river valley" % [
 		100.0 * float(flat) / maxf(float(land), 1.0), FLAT_DEGREES,
 		100.0 * float(valley) / maxf(float(land), 1.0)])
+	print("planet_test: land %.1f%% arid, highest desert ground %.0f m" % [
+		100.0 * float(arid_land) / maxf(float(land), 1.0), maxf(mesa_top, 0.0)])
 	# The one number that decides how the world feels on foot. It is a property of
 	# the radius, not of the terrain: a smaller planet cannot be given a longer
 	# view by any amount of tuning.
@@ -317,6 +382,99 @@ func _water_width(direction: Vector3) -> int:
 	return wet
 
 
+# --- One reported place -----------------------------------------------------
+
+## Photographs the spot a player read off [CoordinatePlate], from four heights.
+##
+## This is the other half of that readout and the reason it quotes latitude and
+## longitude rather than a position: a place on this planet has to survive being
+## spoken aloud, written down and typed back in, and three large world
+## coordinates measured from a point eight kilometres underground do not. The
+## letters are taken as written — `34.21 S` — so the string on the screen can be
+## copied across without being converted to a sign first, which is exactly the
+## step that would get it wrong.
+func _at(quoted: String) -> void:
+	var parts := quoted.split(",", false)
+	if parts.size() != 2:
+		push_error("--at wants LAT,LON, for example --at=\"34.21 S,118.55 W\"")
+		return
+	var latitude := _signed(parts[0], "S")
+	var longitude := _signed(parts[1], "W")
+	# The inverse of the readout: latitude off the planet's local Y, longitude
+	# from local +Z counting east toward +X.
+	var lat := deg_to_rad(latitude)
+	var lon := deg_to_rad(longitude)
+	var direction := Vector3(cos(lat) * sin(lon), sin(lat), cos(lat) * cos(lon)).normalized()
+	var reading := _shape.sample(direction)
+	print("planet_test: at %.2f, %.2f  dir %.4f, %.4f, %.4f  ground %.0f m" % [
+		latitude, longitude, direction.x, direction.y, direction.z,
+		float(reading["elevation"])])
+	_transect(direction)
+	await _shot_from("planet_at_air", direction, 2000.0, 3000.0)
+	await _shot_from("planet_at_low", direction, 300.0, 900.0)
+	await _shot_from("planet_at_near", direction, 60.0, 300.0)
+	await _shot_from("planet_at_ground", direction, 2.0, 120.0)
+
+
+## How much of the ground around a place is level, as a share of its area.
+##
+## A photograph cannot tell a bench from a gentle slope seen at a grazing angle,
+## and at the range these faults show up everything is at a grazing angle. So
+## this reads the field the chunks are built from, at the spacing they are built
+## at, and measures the local gradient over a square: **flat area is the fault,
+## stated as a number.** Natural relief at this spacing is level almost nowhere;
+## a quantised one is level over whole benches, and a bench is as wide as the
+## slope under it is gentle — which on a coastal plain is very wide indeed.
+##
+## A line across the site was the first version of this and it under-reported
+## badly: one line through one point misses every bench it happens not to cross,
+## and it read 6 m of flat ground in a view full of slabs.
+func _transect(direction: Vector3) -> void:
+	var spacing := _planet.finest_spacing()
+	var across := direction.cross(Vector3.UP).normalized()
+	var along := direction.cross(across).normalized()
+	var side := 240
+	# The field is read at the spacing the chunks read it at, but stepped much
+	# wider than that: what is being looked for is a bench tens of metres across,
+	# and a square only as wide as the view is not a square that contains one.
+	var step := 10.0
+	var heights := PackedFloat32Array()
+	heights.resize(side * side)
+	for v in side:
+		for u in side:
+			var spot := (direction * _shape.radius
+				+ across * ((u - side * 0.5) * step)
+				+ along * ((v - side * 0.5) * step)).normalized()
+			heights[v * side + u] = _shape.elevation(spot, spacing)
+	# Level enough that a bench would be caught and a natural slope would not.
+	# Half a per cent is under a third of a degree; the gentlest real ground in
+	# this field is the abyssal plain and it is steeper than that.
+	var level_grade := 0.005 * step
+	var level := 0
+	var counted := 0
+	for v in range(1, side - 1):
+		for u in range(1, side - 1):
+			var here := heights[v * side + u]
+			var grade := maxf(
+				absf(heights[v * side + u + 1] - here),
+				absf(heights[(v + 1) * side + u] - here))
+			counted += 1
+			if grade < level_grade:
+				level += 1
+	print("planet_test: transect  %.0f m square stepped %.0f m, %.1f%% of it level" % [
+		side * step, step, 100.0 * float(level) / maxf(counted, 1)])
+
+
+## Degrees with a hemisphere letter after them, which is how the readout writes
+## one. A bare number is taken as already signed.
+func _signed(text: String, negative: String) -> float:
+	var trimmed := text.strip_edges().to_upper()
+	var flip := trimmed.ends_with(negative)
+	var digits := trimmed.trim_suffix("N").trim_suffix("S").trim_suffix("E") \
+		.trim_suffix("W").strip_edges()
+	return -absf(digits.to_float()) if flip else digits.to_float()
+
+
 # --- Tour -------------------------------------------------------------------
 
 func _tour() -> void:
@@ -330,6 +488,11 @@ func _tour() -> void:
 	await _shot_from("planet_limb", _features.get("peak", Vector3.UP), _shape.radius * 0.35, 0.0)
 	await _shot_from("planet_coast", _features.get("coast", Vector3.UP), 900.0, 6000.0)
 	await _shot_from("planet_mountains", _features.get("peak", Vector3.UP), 500.0, 4000.0)
+	# Two ranges over the same desert, because terracing and strata fail at
+	# different ones: benches read from the air and the courses in a riser only
+	# resolve from close to.
+	await _shot_from("planet_mesa", _features.get("mesa", Vector3.UP), 420.0, 3000.0)
+	await _shot_from("planet_mesa_low", _features.get("mesa", Vector3.UP), 90.0, 900.0)
 	await _shot_from("planet_lake", _features.get("lake", Vector3.UP), 120.0, 1400.0)
 	await _shot_from("planet_river", _features.get("river", Vector3.UP), 130.0, 1200.0)
 	await _shot_from("planet_ground", _features.get("plain", Vector3.UP), 1.7, 4000.0)

@@ -129,9 +129,9 @@ func _run_character_bodies() -> void:
 	# it — but a screenshot run is not a choice, so the look is put back after.
 	var saved := CharacterDB.load_look()
 	var body_id := CharacterDB.sanitize_body(saved["body"])
-	var spare := page.spare_slots()
-	for item_id in CharacterDB.apparel_ids(body_id):
-		ItemContainer.quick_move(spare, spare.find(item_id), page.worn_slots())
+	await _run_character_pockets(body_id)
+	if not _press("Hero Design"):
+		return
 	await _wait(0.35)
 	_report_fit(page, "dressed")
 	await _capture("menu_character_%s" % body_id)
@@ -147,6 +147,89 @@ func _run_character_bodies() -> void:
 	CharacterDB.save_look(saved)
 
 
+## The editor's second tab: the two filter rows and the catalogue under them.
+##
+## Also how the figure gets dressed, and deliberately so — clicking a tile is the
+## only way to wear anything now, since the catalogue keeps its garments whether
+## they are on the body or not and there is no move to make. Reached through the
+## tab button rather than by calling into the home screen, because whether the
+## strip is wired is half of what is being checked.
+func _run_character_pockets(body_id: String) -> void:
+	if not _press("Inventory"):
+		push_error("_menu_shot: the editor came up with no Inventory tab")
+		return
+	await _wait(0.35)
+	var page := _page(InventoryPage.Section.POCKETS)
+	if page == null:
+		push_error("_menu_shot: the Inventory tab came up with no page")
+		return
+	# From bare, or a click on something the saved look was already wearing takes
+	# it off and the count below reads as tiles that failed to equip.
+	page.worn_slots().clear()
+	await _wait(0.1)
+	var wardrobe := CharacterDB.apparel_ids(body_id)
+	for item_id in wardrobe:
+		await _click(page, item_id)
+	print("_menu_shot: catalogue %s" % _catalogue_state(page))
+	# The same tile again, which has to undress and then dress: a click that only
+	# ever equips leaves the tab with no way of taking anything off.
+	await _click(page, wardrobe[0])
+	print("_menu_shot: catalogue after one toggle %s" % _catalogue_state(page))
+	await _click(page, wardrobe[0])
+	_report_fit(page, "pockets")
+	await _capture("menu_character_pockets")
+
+
+func _click(page: InventoryPage, item_id: String) -> void:
+	var slot := _tile(page, item_id)
+	if slot == null:
+		push_error("_menu_shot: %s is not in the catalogue" % item_id)
+		return
+	slot.picked.emit(slot)
+	await _wait(0.1)
+
+
+## How many tiles the grid is showing, how many of them are ringed as worn, and
+## what the body actually has on — the three have to agree or the ring is
+## decoration.
+func _catalogue_state(page: InventoryPage) -> String:
+	var shown := 0
+	var marked := 0
+	for node in page.find_children("*", "ItemSlot", true, false):
+		var slot := node as ItemSlot
+		if slot.container != page.spare_slots() or not slot.visible:
+			continue
+		shown += 1
+		if slot.selected:
+			marked += 1
+	return "tiles=%d ringed=%d wearing %s" % [shown, marked, page.worn_slots().items()]
+
+
+func _page(section: InventoryPage.Section) -> InventoryPage:
+	for candidate in _world.find_children("*", "InventoryPage", true, false):
+		var page := candidate as InventoryPage
+		if page.section == section:
+			return page
+	return null
+
+
+func _tile(page: InventoryPage, item_id: String) -> ItemSlot:
+	for node in page.find_children("*", "ItemSlot", true, false):
+		var slot := node as ItemSlot
+		if slot.container == page.spare_slots() and slot.item_id() == item_id:
+			return slot
+	return null
+
+
+func _press(label: String) -> bool:
+	for node in _world.find_children("*", "Button", true, false):
+		var button := node as Button
+		if button.text == label:
+			button.pressed.emit()
+			return true
+	return false
+
+
 ## Whether the editor's card is inside the room the home screen gave it, which is
 ## the one thing about this screen a shot of it does not show: a control cannot be
 ## smaller than its contents, so a card that wants more than the host drags the
@@ -159,17 +242,43 @@ func _run_character_bodies() -> void:
 ## dressed as well as undressed because a target button per worn garment is width
 ## the strip demands on one line, and that is the axis that goes first.
 func _report_fit(page: InventoryPage, when: String) -> void:
-	var card := page.get_parent().get_parent() as Control
+	var card := _card_above(page)
+	if card == null:
+		push_error("_menu_shot: no card above the editor page")
+		return
 	var host := card.get_parent() as Control
 	var wanted := card.get_combined_minimum_size()
-	var room := (host.get_parent() as Control).size \
-		+ Vector2(host.offset_right - host.offset_left, host.offset_bottom - host.offset_top)
+	# The general form, and it has to be: the host is held to the right of the
+	# window while the editor is open, so the share of its parent it is anchored
+	# across is most of the answer. Reading the parent's whole width — which is
+	# what this did while every screen was full-width — reported twice the room
+	# that was really there and passed a card overflowing by 400 px.
+	var parent := host.get_parent() as Control
+	var room := Vector2(
+		parent.size.x * (host.anchor_right - host.anchor_left)
+			+ host.offset_right - host.offset_left,
+		parent.size.y * (host.anchor_bottom - host.anchor_top)
+			+ host.offset_bottom - host.offset_top)
 	var over := (wanted - room).maxf(0.0)
 	print("_menu_shot: editor %s room %.0fx%.0f card wants %.0fx%.0f, over by %.0fx%.0f" % [
 		when, room.x, room.y, wanted.x, wanted.y, over.x, over.y])
 	if over != Vector2.ZERO:
 		push_error("_menu_shot: the %s editor card is %.0fx%.0f px bigger than its host" % [
 			when, over.x, over.y])
+
+
+## The drawn card the page sits inside, found by walking up rather than by
+## counting parents: the editor grew a tab strip and a page host between the two,
+## and a hop count silently started measuring the strip instead — which fits
+## whatever it is given and would have reported every overflow as a fit.
+func _card_above(page: Control) -> Control:
+	var found: Control = null
+	var node := page.get_parent() as Control
+	while node != null:
+		if node is PanelContainer:
+			found = node
+		node = node.get_parent() as Control
+	return found
 
 
 ## The settings shot above only ever catches the first section. The others are
