@@ -1,0 +1,55 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/coral_blue.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/coral.tres" id="3_surface"]
+
+; Knee-high and grown in threes, which is what fills the sand between the pink
+; heads. Its own seed and its own patch size, so the three small corals form
+; three overlapping reefs rather than one field of mixed colour.
+
+[resource]
+script = ExtResource("1_species")
+resource_name = "CoralBlue"
+model = ExtResource("2_model")
+mesh_named = "CoralBlue"
+material = ExtResource("3_surface")
+height = 0.95
+height_variation = 0.38
+width_scale = 1.15
+tilt = 13.0
+above_water = -30.0
+below = -8.0
+max_slope = 20.0
+steady_over = 2.2
+steady_within = 1.0
+ground_layer = 2
+minimum_claim = 0.06
+maximum_arid = 1.0
+maximum_frost = 1.0
+terrain_tint = false
+glow_patch_size = 8.0
+local_light_color = Color(0.08, 0.34, 1, 1)
+per_square_metre = 0.042
+clump_count = 3
+clump_radius = 1.4
+bare_share = 0.84
+patch_size = 34.0
+random_seed = 20260902
+draw_within = 240.0
+thin_from = 26.0
+thin_to = 100.0
+far_density = 0.07
+fade_band = 0.16
+shadow_within = 0.0
+distant_beyond = 4000.0
+collision_enabled = true
+collision_within = 12.0
+collision_radius_share = 0.34
+collision_height_share = 0.82
+impact_mode = 1
+health = 78.0
+health_per_metre = 12.0
+break_momentum_keep = 0.84
+break_effect = 2
+break_effect_color = Color(0.08, 0.34, 1, 1)

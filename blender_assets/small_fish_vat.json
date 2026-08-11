@@ -1,0 +1,100 @@
+{
+  "format": "normalized_position_delta_vat",
+  "version": 1,
+  "mesh_node": "SmallFishVAT",
+  "mesh_data": "SmallFishVATMesh",
+  "vertex_color": "Color",
+  "coordinate_space": "godot_y_up_object_local",
+  "axis_conversion": "Blender (x, y, z) -> Godot/glTF (x, z, -y)",
+  "vertex_count": 72,
+  "triangle_count": 150,
+  "frame_count": 24,
+  "frame_start": 0,
+  "frame_end": 23,
+  "fps": 24.0,
+  "width": 72,
+  "height": 24,
+  "delta_min": [
+    0.0,
+    0.0,
+    -0.04315047711133957
+  ],
+  "delta_max": [
+    0.0,
+    0.0,
+    0.00357929989695549
+  ],
+  "delta_range": [
+    0.0,
+    0.0,
+    0.04672977700829506
+  ],
+  "bounds_min": [
+    -0.047059983015060425,
+    0.0,
+    -0.0047741178423166275
+  ],
+  "bounds_max": [
+    0.047059983015060425,
+    0.04894126206636429,
+    0.020839691162109375
+  ],
+  "topology_sha256": "7639479d6d3a99252d2203ebf18067654cf519c1f08421db525ed762aab0aaca",
+  "texture": {
+    "file": "small_fish_vat.exr",
+    "format": "OpenEXR",
+    "channels": "RGBA32F",
+    "payload_channels": "RGB",
+    "normalization": "delta = delta_min + texel.rgb * (delta_max - delta_min)",
+    "row_zero": "frame_start at V=(0.5/height)",
+    "padding_vertices": 0,
+    "padding_frames": 0
+  },
+  "uv2": {
+    "layer": "VAT_ID",
+    "gltf_attribute": "TEXCOORD_1",
+    "x": "(vertex_id + 0.5) / width",
+    "y": 0.5,
+    "domain": "CORNER (same x copied to every loop of each vertex)"
+  },
+  "animation": {
+    "frames": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23
+    ],
+    "loop": true,
+    "loop_endpoint": 24,
+    "loop_endpoint_stored": false,
+    "loop_endpoint_max_error": 0.0,
+    "loop_note": "The duplicate endpoint matches frame_start and is omitted; after frame_end, interpolate/wrap to texture row zero."
+  },
+  "files": {
+    "mesh": "small_fish_vat.glb",
+    "texture": "small_fish_vat.exr",
+    "metadata": "small_fish_vat.json"
+  },
+  "glb_vertex_count": 77,
+  "glb_triangle_count": 150
+}

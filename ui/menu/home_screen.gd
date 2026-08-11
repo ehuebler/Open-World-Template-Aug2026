@@ -14,7 +14,7 @@ extends Node3D
 ## Three views, each a camera pose over the same scene:
 ##   HOME      character to the left, planet to the right, menu under it
 ##   ONLINE    pitched down onto the planet, create and join side by side
-##   SETTINGS  turned away from the planet into empty sky
+##   SETTINGS  the shared red settings card over the Tab menu background
 
 signal handed_over
 
@@ -83,17 +83,28 @@ const SKY_OUTLINE := Color(0.02, 0.01, 0.03, 0.92)
 ## Side of the pencil beside the name field, in pixels.
 const PENCIL_SIZE := 58.0
 
-## What New Game opens onto. They all start the same game for now; the list is
-## here so a fourth is one string rather than another button and another lambda.
-const MODES: Array[String] = ["Story Mode", "Crawler Mode"]
+## What New Game opens onto. The identifier is stored in
+## NetworkManager.session_options even before the modes grow different rules, so
+## save files and future mode systems do not have to infer it from a button label.
+const MODES: Array[Dictionary] = [
+	{"label": "Story Mode", "id": "story"},
+	{"label": "Crawler Mode", "id": "crawler"},
+	{"label": "Duels", "id": "duels"},
+	{"label": "Sandbox", "id": "sandbox"},
+]
+const DUELS_MODES: Array[Dictionary] = [
+	{"label": "Battle", "id": "battle"},
+	{"label": "Race", "id": "race"},
+]
 
 ## The editor's tabs, in [enum InventoryPage.Section] order because the row is
 ## indexed by it. Named as the in-game menu names the same two.
 const EDITOR_TABS: Array[String] = ["Hero Design", "Inventory"]
-## Weapon slots the editor draws, which has to match the player's own bar:
-## `OnlinePlayer.apply_rack` fills it positionally, so a rack of a different
-## length here would put weapons under different number keys in game.
-const EDITOR_WEAPON_SLOTS := 5
+## Numbered slots the existing editor draws. Ability data remains untouched; the
+## catalogue rail is rebuilt from finite owned equipment/hotbar/backpack contents.
+const EDITOR_WEAPON_SLOTS := CharacterDB.HOTBAR_SLOTS
+const TITLE_ART := preload("res://ui/menu/my_strange_planet_title.png")
+const SETTINGS_BACKGROUND := preload("res://generated/ui_background2.png")
 
 ## Height of the band at the foot of the window the menu row runs along, and how
 ## far its baseline sits off the bottom edge.
@@ -102,15 +113,13 @@ const MENU_ROW_INSET := 38.0
 ## Share of the window the character editor's card is allowed, measured from the
 ## right edge. The rest is the figure, which is the whole reason the editor has no
 ## preview of its own — see [method _character_editor].
-const EDITOR_CARD_SHARE := 0.56
-## Where a screen's card starts: under the title row for the full-width ones, and
-## higher for the editor, which is off to the right of the title rather than under
-## it. `dev/_menu_shot.tscn` prints what the card wants against what it is given.
+const EDITOR_CARD_SHARE := 0.625
+## Where a screen's card starts: below the upper navigation band for full-width
+## pages. The illustrated title itself belongs to HOME and is hidden on pages.
+## `dev/_menu_shot.tscn` prints what the card wants against what it is given.
 const TITLE_BAND := 136.0
 ## Higher again since the editor grew a tab strip, which is 54 px the card has to
-## find from somewhere. It only clears the title horizontally rather than
-## vertically now, which is enough: the title ends around 400 px in and the card
-## starts past the middle of the window.
+## find from somewhere.
 const EDITOR_TOP := 52.0
 
 const MOVE_TIME := 0.85
@@ -135,11 +144,15 @@ var _dragging := false
 var _view := View.HOME
 var _layer: CanvasLayer
 var _root: Control
-var _title: Label
+var _settings_background: TextureRect
+var _title: TextureRect
 var _menu: HBoxContainer
 ## Which set of entries the menu row is showing. New Game does not start a game
 ## any more, it asks which one, and the answer replaces the row it was pressed on.
 var _picking_mode := false
+## Duels has one more choice before handover. It is recorded now even though both
+## choices still start the regular world, ready for their distinct rules later.
+var _picking_duels_mode := false
 var _back: Button
 var _screen_host: MarginContainer
 var _screen: Control
@@ -153,6 +166,9 @@ var _handover_at := 0.0
 var _handover_target: OnlinePlayer
 var _body_from := Basis.IDENTITY
 var _awaiting_player := false
+## Raised while the invisible pre-game warm-up is running. The menu remains
+## unchanged, but a second New Game must not start another warm-up beside it.
+var _warming := false
 var _edit_button: Button
 var _name_row: HBoxContainer
 var _name_field: LineEdit
@@ -161,9 +177,8 @@ var _look: Dictionary = {}
 ## the screen so the look survives the editor being closed and opened again.
 var _worn_slots: ItemContainer
 var _apparel_rail: ItemContainer
-## Five weapon slots nothing can be put in, and the stats a new character starts
-## with. Held here for the same reason the containers are: the editor is thrown
-## away and rebuilt every time it is opened.
+## Three numbered hotbar slots and the stats a new character starts with. The
+## compatibility name remains because InventoryPage still calls these rack slots.
 var _editor_weapons: ItemContainer
 var _editor_stats: PlayerStats
 ## The editor's pages by section, which are the card's content rather than the
@@ -283,6 +298,9 @@ func _dress_preview() -> void:
 	for slot: String in ItemDB.SLOT_ORDER:
 		Wardrobe.unequip(_preview, slot)
 	SurfaceSkin.apply(_preview)
+	var body_id := CharacterDB.sanitize_body(str(_look.get("body", CharacterDB.DEFAULT_BODY)))
+	var skin_id := CharacterDB.sanitize_skin(body_id, str(_look.get("skin", "")))
+	SurfaceSkin.set_body_texture(_preview, CharacterDB.skin_texture(body_id, skin_id))
 	for slot: String in worn:
 		var item_id := str(worn[slot])
 		if item_id.is_empty() or not ItemDB.has_item(item_id):
@@ -359,17 +377,38 @@ func _build_overlay() -> void:
 	_root.theme = preload("res://ui/themes/main_theme.tres")
 	_layer.add_child(_root)
 
-	_title = _sky_label(String(ProjectSettings.get_setting("game/title", "Astraphel")), 51)
-	_title.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	_title.position = Vector2(56, 40)
+	_settings_background = TextureRect.new()
+	_settings_background.name = "SettingsBackground"
+	_settings_background.texture = SETTINGS_BACKGROUND
+	_settings_background.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_settings_background.stretch_mode = TextureRect.STRETCH_SCALE
+	_settings_background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_settings_background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_settings_background.visible = false
+	_root.add_child(_settings_background)
+
+	_title = TextureRect.new()
+	_title.name = "MyStrangePlanetTitle"
+	_title.texture = TITLE_ART
+	_title.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_title.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_title.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_title.offset_left = -500.0
+	_title.offset_top = 14.0
+	_title.offset_right = -30.0
+	_title.offset_bottom = 274.0
+	_title.pivot_offset = Vector2(235.0, 130.0)
+	# Clockwise in screen coordinates: the small MY line rises toward the actual
+	# upper-right corner while the wider two lines settle back into the frame.
+	_title.rotation = deg_to_rad(7.0)
 	_root.add_child(_title)
 
-	# Beside the title rather than under it. The cards below are as tall as the
-	# window allows, so a second line up here is a line taken off every screen,
-	# and the one that gets clipped is whichever button the form ends with.
+	# The artwork belongs to HOME only, so BACK keeps a stable upper-left home of
+	# its own rather than moving with the rotated title in the opposite corner.
 	_back = _sky_button("BACK", func() -> void: show_view(View.HOME))
 	_back.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	_back.position = Vector2(56.0 + _title.get_minimum_size().x + 56.0, 54.0)
+	_back.position = Vector2(56.0, 54.0)
 	_back.visible = false
 	_root.add_child(_back)
 
@@ -396,7 +435,7 @@ func _build_overlay() -> void:
 	# past both edges of the window when the contents are taller than it.
 	_screen_host = MarginContainer.new()
 	_screen_host.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	# Clear of the title row, which stays put behind every screen.
+	# Clear of the upper navigation band.
 	_screen_host.offset_top = TITLE_BAND
 	_screen_host.offset_bottom = -28.0
 	_screen_host.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -431,12 +470,18 @@ func _build_overlay() -> void:
 func _fill_menu_row() -> void:
 	for child in _menu.get_children():
 		child.queue_free()
+	if _picking_duels_mode:
+		for duels_mode: Dictionary in DUELS_MODES:
+			_menu.add_child(_sky_button(str(duels_mode["label"]),
+				start_new_game.bind("duels", str(duels_mode["id"]))))
+		_menu.add_child(_sky_button("Back", func() -> void: _pick_duels_mode(false)))
+		return
 	if _picking_mode:
-		# Both start the same game today. The seam for telling them apart is
-		# `start_new_game`, which is already the one place the world is handed
-		# the spawn and the look, and is where a mode would go beside them.
-		for mode: String in MODES:
-			_menu.add_child(_sky_button(mode, start_new_game))
+		for mode: Dictionary in MODES:
+			var callback: Callable = start_new_game.bind(str(mode["id"]))
+			if str(mode["id"]) == "duels":
+				callback = func() -> void: _pick_duels_mode(true)
+			_menu.add_child(_sky_button(str(mode["label"]), callback))
 		_menu.add_child(_sky_button("Back", func() -> void: _pick_mode(false)))
 		return
 	_menu.add_child(_sky_button("New Game", func() -> void: _pick_mode(true)))
@@ -449,6 +494,15 @@ func _pick_mode(picking: bool) -> void:
 	if _picking_mode == picking:
 		return
 	_picking_mode = picking
+	if not picking:
+		_picking_duels_mode = false
+	_fill_menu_row()
+
+
+func _pick_duels_mode(picking: bool) -> void:
+	if _picking_duels_mode == picking:
+		return
+	_picking_duels_mode = picking
 	_fill_menu_row()
 
 
@@ -612,6 +666,8 @@ func show_view(view: View) -> void:
 		_editor_pages.clear()
 	_menu.visible = view == View.HOME
 	_pick_mode(false)
+	_title.visible = view == View.HOME
+	_settings_background.visible = view == View.SETTINGS
 	_back.visible = view != View.HOME
 	# The editor carries a name field of its own, so the one under the figure would
 	# be a second field for the same name sitting beside it.
@@ -626,10 +682,8 @@ func show_view(view: View) -> void:
 	# standing there is the editor's preview. A full-width card would cover the
 	# one thing it is for.
 	#
-	# Being over there is also what lets it start higher than every other screen.
-	# The 136 px band exists to clear the title, and the title is 56 px from the
-	# left edge — so a card that begins past the middle of the window is not under
-	# it and the difference is height the equipment column needs.
+	# Being over there is also what lets it start higher than every other screen:
+	# it only needs to leave room for BACK, not the full-width navigation band.
 	var editing := view == View.CHARACTER
 	_screen_host.anchor_left = 1.0 - EDITOR_CARD_SHARE if editing else 0.0
 	_screen_host.offset_right = -28.0 if editing else 0.0
@@ -679,12 +733,11 @@ func _character_editor() -> Control:
 		# index, so a container replaced under them would leave every tile
 		# pointing at a freed object.
 		_apparel_rail = ItemContainer.new(_catalogue_size())
-		# The weapon bar you start with. It is the same container the in-game
-		# rack is, so clicking a weapon in the catalogue fills it here exactly as
-		# it does in game, and `_capture_worn` writes the result into the look.
+		# The numbered hotbar you start with. The current catalogue offers weapons;
+		# the broader filter also admits ordinary items when those are added.
 		_editor_weapons = ItemContainer.new(EDITOR_WEAPON_SLOTS)
 		for index in EDITOR_WEAPON_SLOTS:
-			_editor_weapons.set_filter(index, ItemDB.WEAPON)
+			_editor_weapons.set_filter(index, ItemDB.HOTBAR)
 		_editor_weapons.changed.connect(_on_editor_changed)
 		# The stats a new character starts with. `PlayerStats` needs nobody to
 		# exist, so the editor can show the numbers you are about to play with
@@ -760,8 +813,11 @@ func _new_editor_page(section: InventoryPage.Section) -> InventoryPage:
 	page.configure(_worn_slots, _editor_weapons, _apparel_rail,
 		_editor_stats, body_id, true)
 	page.set_player_name(NetworkManager.saved_player_name())
+	page.set_skin(str(_look.get("skin", CharacterDB.default_skin(body_id))))
 	page.set_tints(_look.get("tints", {}))
+	page.skin_picked.connect(_on_skin_picked)
 	page.tint_picked.connect(_on_tint_picked)
+	page.tint_cleared.connect(_on_tint_cleared)
 	page.name_entered.connect(_rename)
 	_editor_host.add_child(page)
 	return page
@@ -783,25 +839,34 @@ func _stock_editor(body_id: String) -> void:
 		var slot: String = ItemDB.SLOT_ORDER[index]
 		var item_id := str(worn.get(slot, ""))
 		_worn_slots.set_item(index, item_id if CharacterDB.apparel_fits(body_id, item_id) else "")
-	var rack: PackedStringArray = CharacterDB.racked_items(_look, _editor_weapons.size())
+	var rack: PackedStringArray = CharacterDB.hotbar_items(_look, _editor_weapons.size())
 	for index in _editor_weapons.size():
 		_editor_weapons.set_item(index, rack[index])
-	var owned := CharacterDB.apparel_ids(body_id)
-	owned.append_array(ItemDB.weapon_ids())
+
+	# This used to be the entire ItemDB catalogue, which meant reopening the home
+	# editor could recover a garment dropped in the world. It is a view of finite
+	# ownership now: everything worn, numbered, or in the backpack, listed once.
+	var owned := PackedStringArray()
+	for item_id: String in _worn_slots.items():
+		if not item_id.is_empty() and not owned.has(item_id):
+			owned.append(item_id)
+	for item_id: String in rack:
+		if not item_id.is_empty() and not owned.has(item_id):
+			owned.append(item_id)
+	for item_id: String in CharacterDB.backpack_items(
+			_look, CharacterDB.BACKPACK_SLOTS):
+		if not item_id.is_empty() and not owned.has(item_id):
+			owned.append(item_id)
 	for index in _apparel_rail.size():
 		_apparel_rail.set_item(index, owned[index] if index < owned.size() else "")
 	_stocking = false
 
 
-## Slots the rail needs to hold any body's catalogue, so that swapping bodies
-## never has to resize it. Every body's wardrobe rather than the largest, because
-## the sum is a couple of dozen tiles and a spare one is an invisible blank in a
-## grid that hides its empties.
+## Enough slots to show every physical place at once. The rail is a unique view,
+## so this is deliberately an upper bound; empty tail slots disappear in its grid.
 func _catalogue_size() -> int:
-	var total := ItemDB.weapon_ids().size()
-	for id in CharacterDB.body_ids():
-		total += CharacterDB.apparel_ids(id).size()
-	return total
+	return CharacterDB.BACKPACK_SLOTS + CharacterDB.HOTBAR_SLOTS \
+		+ ItemDB.SLOT_ORDER.size()
 
 
 func _on_editor_changed() -> void:
@@ -814,9 +879,9 @@ func _on_editor_changed() -> void:
 ## The two containers are where being worn and being carried are recorded; the
 ## look is a copy of them, taken whenever either moves.
 ##
-## Garments go in by slot and weapons by position, and that difference is not
+## Garments go in by slot and hotbar items by position, and that difference is not
 ## cosmetic: a garment's slot is what it *is*, so a sparse map survives a slot
-## being inserted into `SLOT_ORDER`, while a rack slot means nothing except which
+## being inserted into `SLOT_ORDER`, while a hotbar slot means nothing except which
 ## number key draws it.
 func _capture_worn() -> void:
 	var worn: Dictionary = {}
@@ -828,19 +893,60 @@ func _capture_worn() -> void:
 	var rack: Array = []
 	for index in _editor_weapons.size():
 		rack.append(_editor_weapons.get_item(index))
+	_look["hotbar"] = rack.duplicate()
+	# Compatibility for callers still reading the old key.
 	_look["rack"] = rack
+
+	# The rail is a view of ownership, not another place items live. Whatever is
+	# neither worn nor in a numbered slot belongs in the backpack. Rebuilding it
+	# this way is what makes replacing a hat lossless: the old hat is still on the
+	# rail and therefore falls back into storage while the new one leaves it.
+	var in_use := {}
+	for item_id: Variant in worn.values():
+		if not str(item_id).is_empty():
+			in_use[str(item_id)] = true
+	for item_id: Variant in rack:
+		if not str(item_id).is_empty():
+			in_use[str(item_id)] = true
+	var backpack: Array = []
+	for index in _apparel_rail.size():
+		var item_id := _apparel_rail.get_item(index)
+		if item_id.is_empty() or in_use.has(item_id) \
+				or backpack.size() >= CharacterDB.BACKPACK_SLOTS:
+			continue
+		backpack.append(item_id)
+	_look["backpack"] = backpack
 	CharacterDB.save_look(_look)
 
 
 ## There is no body picker any more: [method CharacterDB.playable_ids] offers one
-## body, so a picker would be a single button that does nothing. Turning the
-## astronaut back on is the `playable` flag in `CharacterDB.BODIES`, and what has to
-## come back with it is a row of buttons calling `_editor_page.set_body`, restocking
-## through `_stock_editor` and respawning the figure — the containers and the look
-## already handle a body change, and only the control for choosing it is gone.
+## body, so a picker would be a single button that does nothing. The texture row
+## is not that picker: both choices remain this body and therefore keep its
+## clothes and physical measurements.
+func _on_skin_picked(skin_id: String) -> void:
+	var body_id := CharacterDB.sanitize_body(str(_look.get("body", CharacterDB.DEFAULT_BODY)))
+	_look["skin"] = CharacterDB.sanitize_skin(body_id, skin_id)
+	CharacterDB.save_look(_look)
+	for page: Variant in _editor_pages.values():
+		if is_instance_valid(page):
+			(page as InventoryPage).set_skin(str(_look["skin"]))
+	_dress_preview()
+
+
 func _on_tint_picked(target: String, colour: Color) -> void:
 	var tints: Dictionary = (_look.get("tints", {}) as Dictionary).duplicate()
 	tints[target] = colour.to_html(false)
+	_look["tints"] = tints
+	CharacterDB.save_look(_look)
+	for page: Variant in _editor_pages.values():
+		if is_instance_valid(page):
+			(page as InventoryPage).set_tints(tints)
+	_dress_preview()
+
+
+func _on_tint_cleared(target: String) -> void:
+	var tints: Dictionary = (_look.get("tints", {}) as Dictionary).duplicate()
+	tints.erase(target)
 	_look["tints"] = tints
 	CharacterDB.save_look(_look)
 	for page: Variant in _editor_pages.values():
@@ -865,8 +971,8 @@ func _on_status_changed(message: String) -> void:
 # --- Handing over ------------------------------------------------------------
 
 
-func start_new_game() -> void:
-	if _handover_target != null or _awaiting_player:
+func start_new_game(game_mode := "story", duels_mode := "") -> void:
+	if _handover_target != null or _awaiting_player or _warming:
 		return
 	# The player starts exactly where the character they have been looking at was
 	# standing, facing the way it was facing. Anything else would be a jump on the
@@ -874,7 +980,24 @@ func start_new_game() -> void:
 	CharacterDB.save_look(_look)
 	_world().override_local_spawn(_preview.global_transform)
 	_world().override_local_look(_look)
-	NetworkManager.start_single_player()
+	# Before the session rather than after it, because the point is to be holding
+	# the player still while this happens. Once a session exists the world is
+	# theirs and every millisecond of it is a frame they are flying in.
+	await _warm_up()
+	NetworkManager.start_single_player(str(game_mode), str(duels_mode))
+
+
+## Pays for the descent in advance without replacing the menu with a loading
+## screen. [WorldWarmup] draws through its own offscreen viewport, so the meshes
+## that force texture and shader preparation never enter this camera's world.
+func _warm_up() -> void:
+	_warming = true
+	var warmup := WorldWarmup.new()
+	warmup.name = "WorldWarmup"
+	_world().add_child(warmup)
+	await warmup.run(_world(), _camera)
+	warmup.queue_free()
+	_warming = false
 
 
 func _on_session_started() -> void:
@@ -898,9 +1021,13 @@ func _begin_handover(player: OnlinePlayer) -> void:
 	_handover_target = player
 	player.controls_enabled = false
 	player.set_camera_mode(OnlinePlayer.CameraMode.THIRD_NEAR)
-	# The real body is standing in the preview's shoes, so the swap is invisible.
+	# The real body is standing in the preview's shoes. Hide one before showing
+	# the other so identical surfaces are never submitted together; queue_free()
+	# alone is deferred and used to leave one startup frame of black z-fighting.
 	if is_instance_valid(_preview):
+		_preview.visible = false
 		_preview.queue_free()
+	player.visible = true
 	if _move != null and _move.is_valid():
 		_move.kill()
 	_handover_from = _camera.global_transform

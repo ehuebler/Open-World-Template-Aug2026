@@ -26,6 +26,7 @@ Three problems shaped it:
 | `vivid_lib.gdshaderinc` | The planet frame, the colour wheel, noise and detail helpers |
 | `vivid_terrain.gdshader` | The planet's ground: biome, cliffs, sea bed, caustics |
 | `vivid_surface.gdshader` | Props, characters, garments, weapons, imported `.glb` |
+| `vivid_tech.gdshader` | Reflective magenta/turquoise film on the alien-tech formations |
 | `vivid_space.gdshader` | Sky and space, as one continuous climb between them |
 | `vivid_atmosphere.gdshader` | The band of lit air seen from outside it |
 | `vivid_water.gdshader` | The sea, bent onto the sea-level sphere |
@@ -144,6 +145,23 @@ bump is smaller than a pixel it aliases into shimmer. Every detail field here is
 gated by `detail_near`/`detail_far`, and the terrain's macro field needs a second
 gate of its own (`macro_near`/`macro_far`): from orbit its 70 m blotches fall under
 a pixel and boil into speckle.
+
+### Alien technology
+
+`vivid_tech.gdshader` is the narrow exception to the general-purpose surface:
+`TechFormationSites` needs a fixed magenta/turquoise identity rather than the
+planet's regional wheel. Its reflection is still Godot's Schlick-GGX response —
+low roughness, high dielectric specular and **zero metallic** — while a small
+view-angle term in `EMISSION` supplies the thin-film colour shift at the edges.
+That term never replaces the light, so the 562 real panels in
+`tech_fragment.glb` keep their own highlights and shadows.
+
+There is deliberately **no painted grid** over that geometry. Continuous
+world-space noise only breaks up the highlight, and the fine normal variation
+fades through `detail_near` / `detail_far`; every visible square and bar remains
+one of the mesh's real protrusions. That distinction matters now that one
+instance can be stretched from a room-sized buried block into a 300 m slab:
+a shader grid would sit over both at the same unrelated scale.
 
 ## Sky and space
 

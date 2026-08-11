@@ -1,0 +1,19 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_fish.gdshader" id="1_fish"]
+
+; The reef swarm. base_color stays white and saturation runs high, because the
+; colour of one of these fish arrives as the MultiMesh instance colour and this
+; shader multiplies it in: the model itself was repainted from black to a pale
+; grey in build_reef_assets.py precisely so there is something for a hue to
+; multiply. Turning base_color down here would tint the whole swarm and undo
+; the point of it.
+
+[resource]
+resource_name = "ReefSwarmFish"
+shader = ExtResource("1_fish")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/saturation = 1.5
+shader_parameter/roughness = 0.5
+shader_parameter/specular = 0.45
+shader_parameter/sheen = 0.4

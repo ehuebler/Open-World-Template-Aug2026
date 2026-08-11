@@ -1,0 +1,16 @@
+---
+description: Require authored PNG color-paint patterns for procedural flora and fauna
+alwaysApply: true
+---
+
+# Flora Color-Paint Contract
+
+- Every flora, fungus, coral, geological growth, and small-creature variant must have an associated runtime PNG color-paint texture. Preview renders do not count.
+- Do not ship new or regenerated organic assets with only flat material colors or vertex-color blocks.
+- Keep color paint deterministic and regenerable from the asset recipe. Record the PNG path and paint style in the asset manifest.
+- Export usable `TEXCOORD_0` UVs and retain `COLOR_0` for semantic masks, instance tinting, and emission selection.
+- Paint deliberate, species-appropriate patterns: bark bands/knots, leaf veins and margins, petal markings, mushroom spots/gills, grass streaks, coral striations, cactus ribs/areoles, rock strata/lichen, or wing/body markings.
+- Patterns must remain broad and mip-safe at gameplay distance; avoid single-pixel noise, razor-thin lines, and contrast that will shimmer when minified.
+- Wire each PNG explicitly through its `PlantSpecies` or equivalent runtime resource. A generated file that is not sampled by the game is incomplete.
+- Preserve existing biome tint, night-emission masks, VAT data, collision, and MultiMesh batching when adding paint.
+- Validate at least one close preview and one normal gameplay-distance view after changing a paint recipe.

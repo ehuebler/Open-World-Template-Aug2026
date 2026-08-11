@@ -1,0 +1,49 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/tree_spiral.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/tree_glow.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/tree_spiral_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "SpiralTree"
+height = 10.5
+height_variation = 0.48
+width_scale = 0.95
+tilt = 4.0
+above_water = 24.0
+below = 340.0
+max_slope = 20.0
+steady_over = 3.4
+steady_within = 1.35
+ground_layer = 1
+minimum_claim = 0.055
+maximum_arid = 0.4
+minimum_frost = 0.0
+maximum_frost = 0.6
+local_light_color = Color(0.12, 0.48, 1, 1)
+local_light_energy = 1.35
+per_square_metre = 0.0009
+bare_share = 0.55
+patch_size = 135.0
+random_seed = 20261302
+draw_within = 280.0
+thin_from = 100.0
+thin_to = 210.0
+far_density = 0.13
+shadow_within = 75.0
+collision_enabled = true
+collision_within = 30.0
+collision_radius_share = 0.07
+collision_height_share = 0.9
+impact_mode = 1
+health = 192.0
+health_per_metre = 25.2
+toughness = 1
+break_momentum_keep = 0.65
+break_effect = 1
+break_effect_color = Color(0.35, 0.22, 0.16, 1)

@@ -35,8 +35,15 @@ collision_mask = 1
 collide_with_areas = false
 
 [node name="Character" parent="." instance=ExtResource("2_character")]
+; The player root is physics-interpolated. Local animation/lean is authored on
+; render frames and should remain immediate while inheriting the root's smoothed
+; world motion.
+physics_interpolation_mode = 2
 
 [node name="Head" type="Node3D" parent="."]
+; Mouse look remains render-rate responsive; the interpolated player parent still
+; smooths the head's translation between physics ticks.
+physics_interpolation_mode = 2
 position = Vector3(0, 1.29, 0)
 
 [node name="CameraArm" type="SpringArm3D" parent="Head"]

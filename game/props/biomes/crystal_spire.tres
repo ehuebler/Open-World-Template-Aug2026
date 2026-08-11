@@ -1,0 +1,44 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/crystal_spire.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/crystal_spire_glow.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/crystal_spire_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "SkyCrystalSpire"
+height = 190.0
+height_variation = 0.58
+width_scale = 1.0
+tilt = 4.0
+above_water = 10.0
+below = 550.0
+max_slope = 17.0
+steady_over = 32.0
+steady_within = 22.0
+maximum_arid = 0.88
+maximum_frost = 0.0
+local_light_color = Color(0.06, 0.78, 1, 1)
+local_light_energy = 2.8
+glow_patch_size = 120.0
+per_square_metre = 4e-06
+fractional_density = true
+clump_count = 3
+clump_radius = 170.0
+clump_resurvey = true
+bare_share = 0.94
+patch_size = 1180.0
+random_seed = 20261513
+draw_within = 3200.0
+thin_from = 900.0
+thin_to = 2650.0
+far_density = 0.65
+shadow_within = 700.0
+collision_enabled = true
+collision_within = 480.0
+collision_primitive = 3
+impact_mode = 3

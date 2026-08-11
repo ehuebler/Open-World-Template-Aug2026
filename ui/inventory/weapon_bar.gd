@@ -1,13 +1,12 @@
 class_name WeaponBar
 extends Control
 
-## The row of weapon slots along the bottom of the HUD, and the cell readout for
-## whatever is in hand.
+## The five logical action slots along the bottom of the HUD, in input order:
+## LMB, RMB, 1, 2, 3. The first two bind the private ability container and the
+## numbered three bind the hotbar.
 ##
-## The bar shows the same container the wardrobe's weapon rack fills in, so a
-## weapon put on the rack is on the bar without anything being copied between the
-## two. Tiles are the ordinary inventory tile with its input turned off: they are a
-## readout here, not somewhere to rummage.
+## Tiles are ordinary inventory tiles with input turned off: they are a readout
+## here, not somewhere to rummage.
 
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
 
@@ -16,12 +15,16 @@ const GAP := 4
 const STRIP := 82.0
 const BOTTOM_MARGIN := 16.0
 
-var _container: ItemContainer
+var _abilities: ItemContainer
+var _hotbar: ItemContainer
 var _slots: Array[ItemSlot] = []
+var _ability_slots: Array[ItemSlot] = []
+var _hotbar_slots: Array[ItemSlot] = []
 var _icons: ItemIcons
 var _cell_plate: PanelContainer
 var _cell_label: Label
 var _selected := 0
+var _holstered := true
 
 
 func _ready() -> void:
@@ -37,21 +40,38 @@ func _ready() -> void:
 	_build()
 
 
-## Points the bar at the container it reports, and redraws whenever it changes.
+## Compatibility binding for callers that only know about the old weapon
+## container. New code should bind both halves with [method bind_loadout].
 func bind(container: ItemContainer) -> void:
-	_container = container
-	for index in _slots.size():
-		_slots[index].bind(container, index)
-	if not container.changed.is_connected(refresh):
-		container.changed.connect(refresh)
+	bind_loadout(null, container)
+
+
+func bind_loadout(ability_container: ItemContainer, hotbar_container: ItemContainer) -> void:
+	for old_container: ItemContainer in [_abilities, _hotbar]:
+		if old_container != null and old_container.changed.is_connected(refresh):
+			old_container.changed.disconnect(refresh)
+	_abilities = ability_container
+	_hotbar = hotbar_container
+	_bind_slots()
+	for container: ItemContainer in [_abilities, _hotbar]:
+		if container != null and not container.changed.is_connected(refresh):
+			container.changed.connect(refresh)
 	refresh()
 
 
+## Compatibility: index is a numbered slot, not an index into the five drawn
+## tiles. Selecting a numbered slot takes the HUD out of ability mode.
 func select(index: int) -> void:
 	_selected = index
-	for slot_index in _slots.size():
-		_slots[slot_index].selected = slot_index == index
-		_slots[slot_index].queue_redraw()
+	_holstered = false
+	_update_selection()
+
+
+## Empty hands make both mouse ability slots active. There is nothing in them yet,
+## but showing the mode prevents F from looking like it selected an invisible slot.
+func holster() -> void:
+	_holstered = true
+	_update_selection()
 
 
 ## Shows a line under the bar, or hides the plate when passed nothing: an empty
@@ -82,13 +102,22 @@ func _build() -> void:
 	row.add_theme_constant_override(&"separation", GAP)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	column.add_child(row)
-	for index in OnlinePlayer.WEAPON_SLOTS:
+	for index in OnlinePlayer.ABILITY_SLOTS:
+		var slot := ItemSlot.new()
+		slot.interactive = false
+		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		slot.badge = "LMB" if index == 0 else "RMB"
+		row.add_child(slot)
+		_slots.append(slot)
+		_ability_slots.append(slot)
+	for index in OnlinePlayer.HOTBAR_SLOTS:
 		var slot := ItemSlot.new()
 		slot.interactive = false
 		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		slot.badge = str(index + 1)
 		row.add_child(slot)
 		_slots.append(slot)
+		_hotbar_slots.append(slot)
 
 	_cell_plate = PanelContainer.new()
 	_cell_plate.visible = false
@@ -112,8 +141,30 @@ func _build() -> void:
 	_icons = ItemIcons.new()
 	add_child(_icons)
 	_icons.icon_ready.connect(_on_icon_ready)
-	_icons.request(ItemDB.items_for_slot(ItemDB.WEAPON))
-	select(_selected)
+	var icon_ids: Array = []
+	for item_id: String in ItemDB.hotbar_ids():
+		icon_ids.append(item_id)
+	for ability_id: String in ItemDB.ability_ids():
+		icon_ids.append(ability_id)
+	_icons.request(icon_ids)
+	_bind_slots()
+	_update_selection()
+
+
+func _bind_slots() -> void:
+	for index in _ability_slots.size():
+		_ability_slots[index].bind(_abilities, index)
+	for index in _hotbar_slots.size():
+		_hotbar_slots[index].bind(_hotbar, index)
+
+
+func _update_selection() -> void:
+	for slot in _ability_slots:
+		slot.selected = _holstered
+		slot.queue_redraw()
+	for index in _hotbar_slots.size():
+		_hotbar_slots[index].selected = not _holstered and index == _selected
+		_hotbar_slots[index].queue_redraw()
 
 
 func _on_icon_ready(_id: String, _texture: Texture2D) -> void:

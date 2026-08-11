@@ -1,0 +1,45 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/basalt_hex_field.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/rock.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/basalt_hex_field_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "HexLavaFormation"
+height = 4.0
+height_variation = 0.25
+width_scale = 1.12
+tilt = 5.0
+above_water = 3.0
+below = 540.0
+max_slope = 28.0
+steady_over = 12.0
+steady_within = 8.0
+minimum_arid = 0.32
+maximum_frost = 0.0
+per_square_metre = 0.00011
+clump_count = 3
+clump_radius = 26.0
+bare_share = 0.72
+patch_size = 240.0
+random_seed = 20261507
+draw_within = 720.0
+thin_from = 210.0
+thin_to = 560.0
+far_density = 0.22
+shadow_within = 240.0
+collision_enabled = true
+collision_within = 90.0
+collision_primitive = 3
+impact_mode = 1
+health = 120.0
+health_per_metre = 15.6
+toughness = 2
+break_momentum_keep = 0.68
+break_effect = 2
+break_effect_color = Color(0.12, 0.1, 0.09, 1)

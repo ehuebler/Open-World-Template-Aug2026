@@ -24,6 +24,8 @@ const LanDiscoveryScript := preload("res://core/lan_discovery.gd")
 const TextModerationScript := preload("res://core/text_moderation.gd")
 const DEFAULT_PORT := 7777
 const DEFAULT_MAX_PLAYERS := 8
+const GAME_MODES: Array[String] = ["story", "crawler", "duels", "sandbox"]
+const DUELS_MODES: Array[String] = ["battle", "race"]
 
 var state: SessionState = SessionState.IDLE
 var is_single_player := false
@@ -58,15 +60,19 @@ func _ready() -> void:
 		call_deferred("_start_from_command_line")
 
 
-func start_single_player() -> void:
+func start_single_player(game_mode := "story", duels_mode := "") -> void:
 	_reset_session(false)
 	is_single_player = true
 	is_host = true
 	local_player_name = saved_player_name()
+	var selected_mode := sanitize_game_mode(game_mode)
 	session_options = {
 		"name": "Single Player",
 		"max_players": 1,
 		"port": 0,
+		"mode": selected_mode,
+		"duels_mode": (
+			sanitize_duels_mode(duels_mode) if selected_mode == "duels" else ""),
 	}
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	players[1] = _sanitize_player_metadata(_local_look_metadata(1))
@@ -86,6 +92,10 @@ func host_game(options: Dictionary) -> void:
 	session_options["name"] = _clean_lobby_name(str(options.get("name", "%s's game" % local_player_name)))
 	session_options["visibility"] = str(options.get("visibility", "public"))
 	session_options["code"] = str(options.get("code", "")).strip_edges()
+	session_options["mode"] = sanitize_game_mode(str(options.get("mode", "story")))
+	session_options["duels_mode"] = (
+		sanitize_duels_mode(str(options.get("duels_mode", "battle")))
+		if session_options["mode"] == "duels" else "")
 	if not TextModerationScript.is_allowed(local_player_name) or not TextModerationScript.is_allowed(session_options["name"]):
 		_fail("Player and lobby names must use appropriate language.")
 		return
@@ -151,6 +161,8 @@ func _start_from_command_line() -> void:
 		"max_players": DEFAULT_MAX_PLAYERS,
 		"visibility": "public",
 		"code": "",
+		"mode": "story",
+		"duels_mode": "",
 	}
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--port="):
@@ -165,6 +177,10 @@ func _start_from_command_line() -> void:
 			options["visibility"] = "private"
 		elif argument.begins_with("--lobby-code="):
 			options["code"] = argument.trim_prefix("--lobby-code=")
+		elif argument.begins_with("--game-mode="):
+			options["mode"] = argument.trim_prefix("--game-mode=")
+		elif argument.begins_with("--duels-mode="):
+			options["duels_mode"] = argument.trim_prefix("--duels-mode=")
 	host_game(options)
 
 
@@ -186,7 +202,7 @@ func update_lobby_metadata(changes: Dictionary) -> void:
 	if not is_host or is_single_player:
 		return
 	for key in changes:
-		if key in ["name", "map", "mode", "passworded"]:
+		if key in ["name", "map", "mode", "duels_mode", "passworded"]:
 			session_options[key] = changes[key]
 	_lan_discovery().update_host_metadata(_lobby_metadata())
 
@@ -269,6 +285,7 @@ func _register_player(metadata: Dictionary) -> void:
 	players[sender] = clean
 	_set_player_metadata.rpc(sender, clean)
 	_receive_roster.rpc_id(sender, players)
+	_receive_session_options.rpc_id(sender, _shared_session_options())
 	player_registered.emit(sender, clean)
 	_lan_discovery().update_host_metadata(_lobby_metadata())
 	_set_status(state, "%s joined" % clean["name"])
@@ -282,6 +299,11 @@ func _set_player_metadata(peer_id: int, metadata: Dictionary) -> void:
 @rpc("authority", "reliable")
 func _receive_roster(roster: Dictionary) -> void:
 	players = roster.duplicate(true)
+
+
+@rpc("authority", "reliable")
+func _receive_session_options(options: Dictionary) -> void:
+	session_options = options.duplicate(true)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -331,18 +353,45 @@ func _lobby_metadata() -> Dictionary:
 		"players": players.size(),
 		"max_players": int(session_options.get("max_players", DEFAULT_MAX_PLAYERS)),
 		"map": str(session_options.get("map", "world")),
-		"mode": str(session_options.get("mode", "co-op")),
+		"mode": str(session_options.get("mode", "story")),
+		"duels_mode": str(session_options.get("duels_mode", "")),
 		"visibility": str(session_options.get("visibility", "public")),
 		"passworded": str(session_options.get("visibility", "public")) == "private",
 	}
 
 
+## Session configuration safe to hand to clients. The private code is
+## deliberately absent: clients prove they know it while registering and never
+## receive the host's copy back.
+func _shared_session_options() -> Dictionary:
+	return {
+		"name": str(session_options.get("name", "Game")),
+		"map": str(session_options.get("map", "world")),
+		"mode": str(session_options.get("mode", "story")),
+		"duels_mode": str(session_options.get("duels_mode", "")),
+		"max_players": int(session_options.get("max_players", DEFAULT_MAX_PLAYERS)),
+		"visibility": str(session_options.get("visibility", "public")),
+	}
+
+
+func sanitize_game_mode(value: String) -> String:
+	var clean := value.strip_edges().to_lower()
+	return clean if clean in GAME_MODES else "story"
+
+
+func sanitize_duels_mode(value: String) -> String:
+	var clean := value.strip_edges().to_lower()
+	return clean if clean in DUELS_MODES else "battle"
+
+
 func _sanitize_player_metadata(metadata: Dictionary) -> Dictionary:
 	var look := {
 		"body": CharacterDB.sanitize_body(str(metadata.get("body", CharacterDB.DEFAULT_BODY))),
+		"skin": "",
 		"worn": {},
 		"tints": {},
 	}
+	look["skin"] = CharacterDB.sanitize_skin(str(look["body"]), str(metadata.get("skin", "")))
 	var worn_raw: Variant = metadata.get("worn", {})
 	if worn_raw is Dictionary:
 		for slot: Variant in worn_raw:
@@ -356,6 +405,7 @@ func _sanitize_player_metadata(metadata: Dictionary) -> Dictionary:
 		"name": _clean_name(str(metadata.get("name", "Player"))),
 		"peer_id": int(metadata.get("peer_id", 0)),
 		"body": look["body"],
+		"skin": look["skin"],
 		"worn": look["worn"],
 		"tints": look["tints"],
 	}
@@ -367,6 +417,8 @@ func _local_look_metadata(peer_id: int) -> Dictionary:
 		"name": local_player_name,
 		"peer_id": peer_id,
 		"body": look.get("body", CharacterDB.DEFAULT_BODY),
+		"skin": look.get("skin", CharacterDB.default_skin(
+			str(look.get("body", CharacterDB.DEFAULT_BODY)))),
 		"worn": look.get("worn", {}),
 		"tints": look.get("tints", {}),
 	}

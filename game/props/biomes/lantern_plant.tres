@@ -1,0 +1,32 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_plant.gdshader" id="1_shader"]
+
+[resource]
+resource_name = "Biome Lantern Plant"
+shader = ExtResource("1_shader")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/saturation = 1.42
+shader_parameter/brightness = 1.14
+shader_parameter/tone_variation = 0.2
+shader_parameter/roughness = 0.56
+shader_parameter/specular = 0.24
+shader_parameter/translucency = 0.42
+shader_parameter/region_albedo = 0.16
+shader_parameter/region_sheen = 0.22
+shader_parameter/region_rim = 0.32
+shader_parameter/rigidity = 1.8
+shader_parameter/calm_from = 14.0
+shader_parameter/calm_to = 44.0
+shader_parameter/wind_sway = 9.0
+shader_parameter/wind_speed = 0.86
+shader_parameter/gust_length = 26.0
+shader_parameter/push_sway = 30.0
+shader_parameter/max_bend = 38.0
+shader_parameter/night_emission_color = Color(1, 0.86, 0.32, 1)
+shader_parameter/night_emission_energy = 2.6
+shader_parameter/night_emission_albedo = 0.7
+shader_parameter/night_pulse_amount = 0.22
+shader_parameter/night_pulse_speed = 0.3
+shader_parameter/night_twinkle_amount = 0.72
+shader_parameter/night_twinkle_speed = 1.35

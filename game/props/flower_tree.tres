@@ -1,0 +1,43 @@
+[gd_resource type="ShaderMaterial" load_steps=3 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_surface.gdshader" id="1_surface"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/flower_tree_paint.png" id="2_paint"]
+
+; The replacement tree keeps COLOR_0 as its semantic fallback, while the
+; external PNG supplies broad bark grooves, knots and amber raised ribbons.
+; This is the same regenerable paint contract used by the biome flora.
+;
+; This is a static surface rather than vivid_plant: tree-head angles are
+; different transforms in their own MultiMesh, not vertex bends, and the thick
+; trunk should not react like grass when someone walks past it.
+
+[resource]
+resource_name = "FlowerTree"
+shader = ExtResource("1_surface")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/base_texture = ExtResource("2_paint")
+shader_parameter/base_uv_scale = Vector2(1, 1)
+shader_parameter/use_vertex_color = false
+shader_parameter/saturation = 1.18
+shader_parameter/brightness = 1.1
+shader_parameter/roughness = 0.76
+shader_parameter/metallic = 0.0
+shader_parameter/specular = 0.22
+shader_parameter/roughness_variation = 0.22
+shader_parameter/texture_relief = 0.42
+shader_parameter/relief_width = 2.0
+shader_parameter/detail_scale = 3.4
+shader_parameter/detail_amount = 0.07
+shader_parameter/bump_scale = 5.0
+shader_parameter/bump_strength = 0.1
+shader_parameter/macro_scale = 0.22
+shader_parameter/macro_amount = 0.09
+shader_parameter/detail_near = 18.0
+shader_parameter/detail_far = 100.0
+shader_parameter/region_albedo = 0.11
+shader_parameter/region_sheen = 0.2
+shader_parameter/region_rim = 0.28
+shader_parameter/emission_energy = 0.0
+shader_parameter/distance_growth = true
+shader_parameter/growth_full_within = 280.0
+shader_parameter/growth_hidden_beyond = 360.0

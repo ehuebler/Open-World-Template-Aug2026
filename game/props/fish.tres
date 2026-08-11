@@ -1,0 +1,12 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_fish.gdshader" id="1_fish"]
+
+[resource]
+resource_name = "VatFish"
+shader = ExtResource("1_fish")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/saturation = 1.24
+shader_parameter/roughness = 0.58
+shader_parameter/specular = 0.38
+shader_parameter/sheen = 0.24

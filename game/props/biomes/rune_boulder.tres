@@ -1,0 +1,48 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/rune_boulder.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/rune_boulder_glow.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/rune_boulder_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "TattooRuneBoulder"
+height = 3.6
+height_variation = 0.35
+width_scale = 1.14
+tilt = 16.0
+above_water = 2.0
+below = 575.0
+max_slope = 34.0
+steady_over = 7.0
+steady_within = 4.8
+maximum_frost = 0.0
+local_light_color = Color(0.68, 0.12, 1, 1)
+local_light_energy = 1.9
+glow_patch_size = 32.0
+per_square_metre = 7.5e-05
+fractional_density = true
+clump_count = 5
+clump_radius = 22.0
+bare_share = 0.75
+patch_size = 280.0
+random_seed = 20261510
+draw_within = 620.0
+thin_from = 175.0
+thin_to = 490.0
+far_density = 0.2
+shadow_within = 180.0
+collision_enabled = true
+collision_within = 65.0
+collision_primitive = 3
+impact_mode = 1
+health = 96.0
+health_per_metre = 13.2
+toughness = 2
+break_momentum_keep = 0.74
+break_effect = 2
+break_effect_color = Color(0.68, 0.12, 1, 1)

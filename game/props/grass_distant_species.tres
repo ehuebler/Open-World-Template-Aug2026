@@ -1,0 +1,76 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/grass_far_vat.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/grass.tres" id="3_surface"]
+[ext_resource type="Resource" path="res://game/props/grass_far_vat.tres" id="4_vat"]
+
+; A lightweight horizon around the dense grass field.
+;
+; This is deliberately a separate GroundCover species and node. Extending the
+; dense field itself from 48 m to the tree horizon would make it hold the full eighteen
+; tufts per square metre in every streamed tile even after distance thinning
+; stopped most of them from drawing. This layer stores only 1.4 eight-blade
+; tufts per square metre, so the visible radius is much larger without
+; turning the hidden MultiMesh buffers into the dominant memory cost.
+;
+; It overlaps the near field rather than ending at an inner ring. At one
+; thirteenth of the near density that overlap is invisible as a separate layer,
+; avoids a circular seam at 48 m, and makes the lawn underfoot slightly fuller.
+
+[resource]
+script = ExtResource("1_species")
+resource_name = "PlanetDistantGrass"
+model = ExtResource("2_model")
+mesh_named = "GrassFar"
+material = ExtResource("3_surface")
+vat = ExtResource("4_vat")
+height = 0.33
+height_variation = 0.42
+width_scale = 1.75
+tilt = 11.0
+above_water = 7.2
+below = 5000.0
+max_slope = 22.0
+steady_over = 1.5
+steady_within = 0.72
+ground_layer = 1
+minimum_claim = 0.02
+maximum_arid = 1.0
+maximum_frost = 1.0
+terrain_tint = true
+glowing_patches = 0.3
+glow_patch_size = 26.0
+glow_seed = 20260818
+per_square_metre = 1.4
+clump_count = 4
+clump_radius = 1.3
+bare_share = 0.0
+patch_size = 90.0
+random_seed = 20260817
+; PlantSpecies fades over the outer 12% beyond draw_within. 321.5 therefore
+; reaches zero at almost exactly 360 m, matching the flower trees'
+; growth_hidden_beyond distance. Approaching from above or afar now brings both
+; layers out of the ground together.
+draw_within = 321.5
+; Later thinning, and deliberately not one blade more.
+;
+; The density here is left where it was, having been tried higher and put back.
+; This layer is held in full across the whole 321 m circle whether it is drawn or
+; not — that is the cost the two-field split exists to avoid — so blades bought
+; here are mostly paid for out at the tree line where nobody asked for any. At
+; 3.0 the held buffer went from 301k instances to 644k to put 124k on screen and
+; the field wanted sixteen seconds of standing still to stream in. Even 2.0 cost
+; 129k held instances to take the ground at 80 m from 1.1 blades a square metre
+; to 1.9, which is not a difference anybody can see. The middle distance belongs
+; to the dense field, which plants over a circle a twenty-fifth of the area.
+;
+; What is free is where the thinning runs. Moving it out to 70..130 m means the
+; band the dense field has just handed over is not immediately thinned again,
+; and past 130 m this is the 0.16 blades a square metre it always was.
+thin_from = 70.0
+thin_to = 130.0
+far_density = 0.12
+fade_band = 0.22
+shadow_within = 0.0
+distant_beyond = 0.0

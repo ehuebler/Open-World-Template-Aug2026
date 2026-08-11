@@ -1,0 +1,40 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/boulder_colossus.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/rock.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/boulder_colossus_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "ColossalBoulderSite"
+height = 3.8
+height_variation = 0.3
+width_scale = 1.1
+tilt = 7.0
+above_water = 12.0
+below = 540.0
+max_slope = 16.0
+steady_over = 30.0
+steady_within = 20.0
+maximum_frost = 0.0
+per_square_metre = 7e-06
+fractional_density = true
+clump_count = 6
+clump_radius = 150.0
+clump_resurvey = true
+bare_share = 0.93
+patch_size = 920.0
+random_seed = 20261511
+draw_within = 2200.0
+thin_from = 650.0
+thin_to = 1750.0
+far_density = 0.55
+shadow_within = 520.0
+collision_enabled = true
+collision_within = 420.0
+collision_primitive = 3
+impact_mode = 3

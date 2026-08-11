@@ -14,6 +14,10 @@ signal notice(message: String, is_error: bool)
 const TextModerationScript := preload("res://core/text_moderation.gd")
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
 const DEFAULT_PORT := 7777
+const GAME_MODE_LABELS: Array[String] = ["Story", "Crawler", "Duels", "Sandbox"]
+const GAME_MODE_IDS: Array[String] = ["story", "crawler", "duels", "sandbox"]
+const DUELS_MODE_LABELS: Array[String] = ["Battle", "Race"]
+const DUELS_MODE_IDS: Array[String] = ["battle", "race"]
 
 var _player_name := "Player"
 var _lobby_list: VBoxContainer
@@ -46,6 +50,20 @@ func _build_create_column() -> void:
 	var lobby := MenuWidgets.field(form, "Lobby name", "%s's Lobby" % _player_name, "Lobby name")
 	var max_players := MenuWidgets.number_field(form, "Max players", 2, 32, 8)
 
+	var duels_group := MenuWidgets.option_row(
+		"Duels mode", DUELS_MODE_LABELS, 0, func(_index: int) -> void: pass)
+	duels_group.visible = false
+	var mode_group := MenuWidgets.option_row(
+		"Game mode", GAME_MODE_LABELS, 0,
+		func(index: int) -> void:
+			duels_group.visible = GAME_MODE_IDS[index] == "duels"
+	)
+	form.add_child(mode_group)
+	var game_mode := mode_group.get_child(1) as OptionButton
+
+	form.add_child(duels_group)
+	var duels_mode := duels_group.get_child(1) as OptionButton
+
 	var access := VBoxContainer.new()
 	access.add_theme_constant_override("separation", 5)
 	form.add_child(access)
@@ -71,6 +89,7 @@ func _build_create_column() -> void:
 		var lobby_name := lobby.text.strip_edges()
 		var is_private := visibility.selected == 1
 		var lobby_code := code.text.strip_edges()
+		var selected_mode := GAME_MODE_IDS[game_mode.selected]
 		if not _validate(_player_name, lobby_name):
 			return
 		if is_private and not _is_valid_code(lobby_code):
@@ -81,6 +100,9 @@ func _build_create_column() -> void:
 			"name": lobby_name,
 			"lobby_name": lobby_name,
 			"max_players": int(max_players.value),
+			"mode": selected_mode,
+			"duels_mode": (
+				DUELS_MODE_IDS[duels_mode.selected] if selected_mode == "duels" else ""),
 			"visibility": "private" if is_private else "public",
 			"code": lobby_code if is_private else "",
 		})
@@ -176,8 +198,12 @@ func _make_lobby_row(data: Dictionary) -> PanelContainer:
 	name_label.add_theme_color_override("font_color", PALETTE.text_primary)
 	details.add_child(name_label)
 	var passworded := bool(data.get("passworded", false))
-	var meta := MenuWidgets.caption("%s  -  %s/%s players" % [
+	var mode_name := str(data.get("mode", "story")).capitalize()
+	if mode_name == "Duels":
+		mode_name += " (%s)" % str(data.get("duels_mode", "battle")).capitalize()
+	var meta := MenuWidgets.caption("%s  -  %s  -  %s/%s players" % [
 		"Private" if passworded else "Public",
+		mode_name,
 		data.get("players", data.get("player_count", 0)),
 		data.get("max_players", "?"),
 	])

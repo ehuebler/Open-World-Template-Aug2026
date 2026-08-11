@@ -1,0 +1,43 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/grass_fan.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/grass_variant.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/grass_fan_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "FanGrass"
+height = 0.48
+height_variation = 0.42
+width_scale = 1.5
+tilt = 11.0
+above_water = 7.0
+below = 220.0
+max_slope = 24.0
+steady_over = 1.4
+steady_within = 0.7
+ground_layer = 1
+minimum_claim = 0.03
+maximum_arid = 0.55
+maximum_frost = 0.48
+terrain_tint = true
+glowing_patches = 0.06
+glow_patch_size = 42.0
+glow_seed = 20261103
+per_square_metre = 0.15
+local_light_color = Color(0.08, 0.48, 0.88, 1)
+local_light_energy = 0.65
+clump_count = 4
+clump_radius = 1.15
+bare_share = 0.48
+patch_size = 58.0
+random_seed = 20261104
+draw_within = 150.0
+thin_from = 22.0
+thin_to = 72.0
+far_density = 0.075
+shadow_within = 0.0

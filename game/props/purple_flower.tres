@@ -1,0 +1,64 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/purple_flower_near_vat.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/flower.tres" id="3_surface"]
+[ext_resource type="PackedScene" path="res://blender_assets/purple_flower_far_vat.glb" id="4_far"]
+[ext_resource type="Resource" path="res://game/props/purple_flower_near_vat.tres" id="5_near_vat"]
+[ext_resource type="Resource" path="res://game/props/purple_flower_far_vat.tres" id="6_far_vat"]
+
+; The purple flower, as the thing GroundCover scatters.
+;
+; The two meshes in the model are the same bloom at 520 and 110 triangles; see
+; blender_assets/source/build_landing.py, which is where both come from and
+; where the budgets are argued. The far one takes over at thirty metres, which
+; is about where the near one's silhouette stops being distinguishable from it.
+;
+; Density is the number to be careful with, because it is the one that costs.
+; It is candidates a square metre and not plants: about a quarter of them
+; survive the patch mask and the ground rules, so this is roughly four times the
+; density that comes up. The visible circle now reaches 320 m, but it reaches
+; its sparse density by 100 m; the extra distance is a horizon of flowers, not
+; near-field density stretched over five times the area.
+
+[resource]
+script = ExtResource("1_species")
+resource_name = "PurpleFlower"
+model = ExtResource("2_model")
+distant_model = ExtResource("4_far")
+mesh_named = "PurpleFlower"
+distant_mesh_named = "Far"
+material = ExtResource("3_surface")
+vat = ExtResource("5_near_vat")
+distant_vat = ExtResource("6_far_vat")
+height = 1.02
+height_variation = 0.34
+tilt = 7.0
+above_water = 12.0
+below = 140.0
+max_slope = 26.0
+steady_over = 2.2
+steady_within = 0.85
+; Every colony flower carries night emission. The noise still varies its local
+; strength and gives GroundCover well-spaced anchors for the small pool of real
+; OmniLights; it is not used to make most of the meadow stay dark.
+glowing_patches = 1.0
+glow_patch_size = 10.0
+glow_seed = 20260823
+per_square_metre = 0.42
+bare_share = 0.36
+patch_size = 24.0
+random_seed = 20260807
+draw_within = 320.0
+thin_from = 24.0
+thin_to = 100.0
+far_density = 0.06
+fade_band = 0.14
+; Animated petals and leaves are much thinner than one shadow-map texel. Their
+; silhouettes therefore jump between texels as the VAT sway moves them, which
+; reads as the flat grass terrain flickering rather than as useful contact
+; shadow. The grass species already disables its shadows for the same reason;
+; keep all small animated flora out of the directional shadow pass and leave
+; the large, stable flower trees to ground the field instead.
+shadow_within = 0.0
+distant_beyond = 30.0

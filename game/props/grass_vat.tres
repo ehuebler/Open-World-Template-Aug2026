@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="VatClip" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://game/props/vat_clip.gd" id="1_clip"]
+[ext_resource type="Texture2D" path="res://blender_assets/grass_vat.exr" id="2_positions"]
+
+; Sixteen frames at 24 fps is two thirds of a second of clip, so this number is
+; very nearly the number of complete sways a blade makes per second. At the 0.88
+; it was baked and shipped at, a blade of grass finished a whole cycle in three
+; quarters of a second — a vibration rather than a sway, and at this density
+; what a field of it reads as is the ground boiling rather than grass moving.
+;
+; Measured at the colony ship with the camera pinned and consecutive frames
+; differenced, that clip alone was 96 per cent of everything that changed on
+; screen: more than the moving sun, the ship's shadow, the terrain texture and
+; the shader's own wind bend put together, the last of which did not register at
+; all. Slowing it to a sway every two seconds takes 42 per cent off that.
+;
+; `dev/_player_test.gd --shimmer --sway` sweeps this against the phase spread
+; and prints both, and is the thing to re-run before changing it.
+[resource]
+script = ExtResource("1_clip")
+resource_name = "GrassSwayVAT"
+positions = ExtResource("2_positions")
+metadata_path = "res://blender_assets/grass_vat.json"
+; Halved. Set on the clip rather than on `grass.tres` because VatClip writes
+; `vat_playback_speed` onto the material as it binds, so the material's own copy
+; of the value never survives to be drawn with.
+;
+; The other half of the grass boil, and the half that keeps some life in it. How
+; much a still frame differs from the next one falls almost exactly with this:
+; at a half it measured 6.3 against 10.2, at a quarter 3.3. Slower motion over
+; sub-pixel blades is less of the picture changing its mind per frame, and there
+; is no distance at which that stops being true — which is why this is worth
+; turning down as well as fading out, rather than only fading out.
+playback_speed = 0.18

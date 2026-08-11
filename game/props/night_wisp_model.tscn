@@ -1,0 +1,10 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="QuadMesh" id="QuadMesh_wisp"]
+size = Vector2(0.24, 1)
+subdivide_height = 7
+
+[node name="NightWispModel" type="Node3D"]
+
+[node name="WispRibbon" type="MeshInstance3D" parent="."]
+mesh = SubResource("QuadMesh_wisp")

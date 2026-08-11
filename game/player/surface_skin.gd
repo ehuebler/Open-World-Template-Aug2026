@@ -55,6 +55,30 @@ static func material_for(source: Material) -> ShaderMaterial:
 	return material
 
 
+## Replaces the albedo texture on a mesh that has already passed through
+## [method paint]. Character skins use this seam: both settler designs share one
+## imported body and only this texture differs, while garments keep the texture
+## authored into their own `.glb`.
+static func set_texture(mesh_instance: MeshInstance3D, texture: Texture2D) -> void:
+	if texture == null or mesh_instance.mesh == null:
+		return
+	for surface in mesh_instance.mesh.get_surface_count():
+		var material := mesh_instance.get_surface_override_material(surface) as ShaderMaterial
+		if material != null:
+			material.set_shader_parameter(&"base_texture", texture)
+
+
+## The imported body mesh is named `Character` on both bodies. Matching that
+## node rather than "everything not in Wardrobe" is what prevents a held weapon
+## under the same skeleton from inheriting the player's skin after a late look
+## refresh.
+static func set_body_texture(root: Node, texture: Texture2D) -> void:
+	if texture == null:
+		return
+	for node in root.find_children("Character", "MeshInstance3D", true, false):
+		set_texture(node as MeshInstance3D, texture)
+
+
 ## Multiplies the albedo already painted onto every surface of `mesh_instance`.
 ## Used by the character editor so a tint is a wash over the authored colour
 ## rather than a replacement that throws the shading away.

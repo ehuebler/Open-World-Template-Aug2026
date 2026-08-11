@@ -18,7 +18,7 @@ const BODIES := {
 ## build_character_3.py calling into it, and re-running the first alone leaves
 ## the second on the old poses with no error anywhere. Both should report the
 ## same lean and roughly the same reach, scaled by the difference in height.
-const POSED := ["Idle", "Run", "JumpRise", "Fall", "Float", "Fly", "Swim", "Tread"]
+const POSED := ["Idle", "Run", "JumpRise", "Fall", "AirRun", "Float", "Fly", "Swim", "Tread"]
 
 ## Clips that play straight into one another, and so have to agree at the join.
 ## `[from, to, what]`, measured at the end of the first and the start of the

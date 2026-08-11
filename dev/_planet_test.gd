@@ -488,6 +488,12 @@ func _tour() -> void:
 	await _shot_from("planet_limb", _features.get("peak", Vector3.UP), _shape.radius * 0.35, 0.0)
 	await _shot_from("planet_coast", _features.get("coast", Vector3.UP), 900.0, 6000.0)
 	await _shot_from("planet_mountains", _features.get("peak", Vector3.UP), 500.0, 4000.0)
+	# The same peak from under it, for the same reason the desert gets two ranges.
+	# How pointed a summit is only reads against something to be pointed next to:
+	# from 500 m a range is a silhouette and every profile between a spire and a
+	# dome draws the same grey wedge, so the number that decides which of those it
+	# is cannot be judged from the shot above.
+	await _shot_from("planet_peak_low", _features.get("peak", Vector3.UP), 70.0, 900.0)
 	# Two ranges over the same desert, because terracing and strata fail at
 	# different ones: benches read from the air and the courses in a riser only
 	# resolve from close to.

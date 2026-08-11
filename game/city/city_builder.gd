@@ -29,6 +29,13 @@ const SURFACE: ShaderMaterial = preload("res://game/city/city_road_surface.tres"
 
 ## Which town this builds. See [Settlements].
 @export var site: StringName = Settlements.LANDING
+## Whether the town is built at all. Off leaves the node standing and empty rather than
+## deleted, so the wiring survives being switched back on, and it takes the town's own
+## waypoints down with the streets — they are signs on the thing that is not there.
+##
+## The pads are separate and belong to the terrain: see [member PlanetShape.settled],
+## which is what decides whether the ground is flattened for a town in the first place.
+@export var enabled := true
 ## The planet to build on. Left empty it walks up to the nearest [Planet] ancestor,
 ## which is where one of these belongs.
 @export var planet: Planet
@@ -58,6 +65,10 @@ func build() -> void:
 	piers.clear()
 	network = null
 	_mesh = null
+	# After the clearing, so switching it off in the editor takes the streets down
+	# rather than leaving the last build standing.
+	if not enabled:
+		return
 
 	var host := planet if planet != null else _host()
 	if host == null or host.shape == null:
@@ -118,8 +129,13 @@ func _raise_waypoints() -> void:
 		# Only what the row actually names, so [Landmark]'s own defaults stand for the
 		# rest. Restating them here is how the ranges drifted apart the first time: a
 		# retuned default reached every landmark in the world scene and none of these.
+		#
+		# `waypoint` is in the list although no settlement currently sets it. The
+		# planet's hand-placed landmarks are all silent now bar the colony ship, and
+		# a town switched back on would otherwise be the one way to get a marker up
+		# without a say in the matter.
 		for field: String in ["clearance", "tint", "show_beyond", "aimed_beyond",
-				"hide_beyond"]:
+				"hide_beyond", "waypoint"]:
 			if waypoint.has(field):
 				mark.set(field, waypoint[field])
 		mark.planet = planet if planet != null else _host()

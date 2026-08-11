@@ -865,7 +865,7 @@ def pose_frame(rig, action, frame):
 
 
 def fit_report(body, rig, specs, garments,
-               clips=("Walk", "Run", "CrouchIdle", "JumpRise", "Fall"),
+               clips=("Walk", "Run", "CrouchIdle", "JumpRise", "Fall", "HeroLand"),
                samples=5):
     """Worst interpenetration per garment over a few frames of the bendiest clips.
 

@@ -8,7 +8,8 @@ worn on the face at 440 px, and `--clip=Run@8` poses the rig at one frame of one
 baked clip instead of standing it in its rest pose. Garments are cut from the
 body and offset along its normals, so at rest they cannot clip by construction
 and a rest shot proves nothing about fit — every fault is at a joint under a
-pose.
+pose. `--skin=integrated_robotic` swaps the settler's generated texture without
+rebuilding it, so both selectable designs can be shot from the same file.
 """
 
 import os
@@ -50,6 +51,7 @@ def main():
     head = "--head" in argv
     hidden = []
     clip = ""
+    skin = ""
     at = 0.0
     for entry in argv:
         if entry.startswith("--out="):
@@ -60,6 +62,22 @@ def main():
             clip = entry.split("=", 1)[1]
         if entry.startswith("--at="):
             head, at = True, float(entry.split("=", 1)[1])
+        if entry.startswith("--skin="):
+            skin = entry.split("=", 1)[1]
+
+    if skin:
+        body = bpy.data.objects.get("Character")
+        filename = "character_3_{0}.png".format(skin)
+        path = os.path.join(os.path.dirname(os.path.dirname(OUT_DIR)),
+                            "blender_assets", filename)
+        if body is None or not os.path.isfile(path):
+            raise SystemExit("no body or generated skin at " + path)
+        material = body.data.materials[0] if body.data.materials else None
+        texture = material.node_tree.nodes.get("SettlerSkinTexture") \
+            if material is not None and material.use_nodes else None
+        if texture is None:
+            raise SystemExit("body material has no SettlerSkinTexture node")
+        texture.image = bpy.data.images.load(path, check_existing=False)
 
     rig = bpy.data.objects.get("CharacterRig")
     if rig is not None:

@@ -1,0 +1,49 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/mushroom_giant.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/mushroom_giant_glow.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/mushroom_giant_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "GiantMushroom"
+height = 6.2
+height_variation = 0.62
+width_scale = 1.05
+tilt = 7.0
+above_water = 10.0
+below = 190.0
+max_slope = 18.0
+steady_over = 3.0
+steady_within = 1.2
+ground_layer = 1
+minimum_claim = 0.06
+maximum_arid = 0.3
+maximum_frost = 0.28
+local_light_color = Color(0.3, 0.08, 1, 1)
+local_light_energy = 1.8
+per_square_metre = 0.0007
+bare_share = 0.45
+patch_size = 88.0
+random_seed = 20261403
+draw_within = 230.0
+thin_from = 75.0
+thin_to = 165.0
+far_density = 0.1
+shadow_within = 55.0
+collision_enabled = true
+collision_within = 24.0
+collision_radius_share = 0.11
+collision_height_share = 0.72
+impact_mode = 2
+health = 144.0
+health_per_metre = 10.8
+break_momentum_keep = 1.0
+bounce_up_share = 1.1
+bounce_min_up = 24.0
+bounce_max_up = 95.0
+break_effect_color = Color(0.3, 0.08, 1, 1)

@@ -1,0 +1,54 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/coral_green.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/coral.tres" id="3_surface"]
+
+; The commonest of the four and the tallest of the small ones, so the reef has
+; something between the sand and the pink heads at every scale.
+
+[resource]
+script = ExtResource("1_species")
+resource_name = "CoralGreen"
+model = ExtResource("2_model")
+mesh_named = "CoralGreen"
+material = ExtResource("3_surface")
+height = 1.25
+height_variation = 0.4
+width_scale = 1.0
+tilt = 14.0
+above_water = -30.0
+below = -8.0
+max_slope = 20.0
+steady_over = 2.2
+steady_within = 1.0
+ground_layer = 2
+minimum_claim = 0.06
+maximum_arid = 1.0
+maximum_frost = 1.0
+terrain_tint = false
+glow_patch_size = 8.0
+local_light_color = Color(0.08, 1, 0.3, 1)
+per_square_metre = 0.056
+clump_count = 3
+clump_radius = 1.5
+bare_share = 0.76
+patch_size = 28.0
+random_seed = 20260904
+draw_within = 240.0
+thin_from = 26.0
+thin_to = 100.0
+far_density = 0.07
+fade_band = 0.16
+shadow_within = 0.0
+distant_beyond = 4000.0
+collision_enabled = true
+collision_within = 12.0
+collision_radius_share = 0.37
+collision_height_share = 0.84
+impact_mode = 1
+health = 90.0
+health_per_metre = 12.6
+break_momentum_keep = 0.8
+break_effect = 2
+break_effect_color = Color(0.08, 1, 0.3, 1)

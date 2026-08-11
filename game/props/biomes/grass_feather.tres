@@ -1,0 +1,43 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/grass_feather.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/grass_variant.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/grass_feather_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "FeatherGrass"
+height = 0.72
+height_variation = 0.48
+width_scale = 1.35
+tilt = 13.0
+above_water = 7.0
+below = 260.0
+max_slope = 23.0
+steady_over = 1.5
+steady_within = 0.74
+ground_layer = 1
+minimum_claim = 0.035
+maximum_arid = 0.48
+maximum_frost = 0.58
+terrain_tint = true
+glowing_patches = 0.12
+glow_patch_size = 34.0
+glow_seed = 20261101
+per_square_metre = 0.11
+local_light_color = Color(0.34, 0.06, 0.78, 1)
+local_light_energy = 0.75
+clump_count = 3
+clump_radius = 1.0
+bare_share = 0.62
+patch_size = 72.0
+random_seed = 20261102
+draw_within = 165.0
+thin_from = 24.0
+thin_to = 78.0
+far_density = 0.07
+shadow_within = 0.0

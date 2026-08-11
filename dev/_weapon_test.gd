@@ -13,9 +13,14 @@ extends Node
 
 const WORLD := preload("res://game/world.tscn")
 const SHOT_DIR := "res://dev/captures/"
+const SETTINGS_PATH := "user://settings.cfg"
 
 var _player: OnlinePlayer
 var _review: Camera3D
+var _failures := 0
+var _ability_events: Array[int] = []
+var _settings_existed := false
+var _settings_bytes := PackedByteArray()
 ## Bone poses read off the skeleton are a frame behind the modifier that moved
 ## them, so the hands are measured through attachments, which are not.
 var _hand_probes: Dictionary = {}
@@ -26,9 +31,12 @@ var _ground := Transform3D.IDENTITY
 
 
 func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	_snapshot_settings()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	NetworkManager.is_single_player = true
 	NetworkManager.is_host = true
+	NetworkManager.players.clear()
 	NetworkManager.players[1] = {"name": "Player", "peer_id": 1}
 	# The world opens the home screen and spawns nobody while the session reads as
 	# idle, so the state has to say "in game" before it comes up.
@@ -39,8 +47,8 @@ func _ready() -> void:
 	_player = get_tree().get_first_node_in_group("network_players") as OnlinePlayer
 	var site := get_tree().current_scene.find_child("LandingSite", true, false) as Node3D
 	if _player == null or site == null:
-		push_error("weapon_test: player=%s site=%s" % [_player, site])
-		get_tree().quit(1)
+		_expect(false, "player=%s site=%s" % [_player, site])
+		await _finish()
 		return
 	_ground = site.global_transform
 	_review = Camera3D.new()
@@ -48,25 +56,23 @@ func _ready() -> void:
 	add_child(_review)
 	_add_hand_probes()
 	await _run()
-	get_tree().quit()
+	await _finish()
 
 
 func _run() -> void:
-	# Slots 1 and 3, leaving gaps, so the wheel has something to skip over.
-	_player.weapons.set_item(0, "sword")
-	_player.weapons.set_item(2, "laser_rifle")
 	# Out on clear grass, and in third person: the body is drawn as shadow only
 	# while the player's own camera is inside its head, whatever camera is looking.
 	_place(Vector3(11.0, 0.4, 11.0), PI)
 	_player._camera_mode = 1
 	await _wait(40)
 
+	await _arm_from_backpack()
 	await _selection()
+	await _ability_routing()
 	await _sword()
 	await _walking()
 	await _rifle()
 	await _first_person()
-	await _rack()
 
 
 ## Number keys reach every slot; the wheel only stops on the filled ones.
@@ -74,30 +80,97 @@ func _selection() -> void:
 	_player.select_weapon(0)
 	await _wait(10)
 	var report := "1:%s" % _player.held_item()
+	_expect(_player.held_item() == "sword", "slot 1 draws the sword")
 	_player.select_weapon(1)
 	await _wait(10)
 	report += "  2(empty):'%s'" % _player.held_item()
+	_expect(_player.held_item().is_empty() and _player.is_holstered(),
+		"empty slot 2 holsters")
 	_player._cycle_weapon(1)
 	await _wait(10)
 	report += "  wheel up:%s" % _player.held_item()
+	_expect(_player.held_item() == "laser_rifle",
+		"wheel skips forward over empty slot 2")
 	_player._cycle_weapon(1)
 	await _wait(10)
 	report += "  again:%s" % _player.held_item()
+	_expect(_player.held_item() == "sword", "wheel wraps to slot 1")
 	_player._cycle_weapon(-1)
 	await _wait(10)
 	report += "  wheel down:%s" % _player.held_item()
+	_expect(_player.held_item() == "laser_rifle",
+		"reverse wheel wraps to slot 3")
 	_report("selection", report)
 
-	# Through the real event path this time, so a mis-mapped action cannot pass by
-	# being called directly.
+	# Through the real event path, so a mis-mapped physical key cannot pass.
 	_key(KEY_1)
 	await _wait(10)
-	report = "key 1:%s" % _player.held_item()
-	_click(MOUSE_BUTTON_LEFT)
+	_expect(_player.held_item() == "sword", "physical 1 selects hotbar slot 1")
+	_key(KEY_2)
+	await _wait(10)
+	_expect(_player.held_item().is_empty(), "physical 2 selects the empty slot")
+	_key(KEY_3)
+	await _wait(10)
+	_expect(_player.held_item() == "laser_rifle",
+		"physical 3 selects hotbar slot 3")
+	_key(KEY_1)
+	await _wait(10)
+	_key(KEY_F)
+	await _wait(10)
+	_expect(_player.held_item().is_empty() and _player.is_holstered(),
+		"physical F holsters")
+
+
+## Empty ability slots are safe, populated slots own LMB/RMB only while the
+## hotbar is holstered, and a drawn weapon overrides both mouse channels.
+func _ability_routing() -> void:
+	_ability_events.clear()
+	if not _player.ability_activated.is_connected(_on_ability_activated):
+		_player.ability_activated.connect(_on_ability_activated)
+
+	_player.abilities.clear()
+	_player.holster()
+	_dispatch_action(&"attack")
+	_dispatch_action(&"aim")
+	_expect(_ability_events.is_empty(),
+		"empty LMB/RMB ability slots are safe no-ops")
+
+	var ability_ids := ItemDB.ability_ids()
+	if ability_ids.size() < 2:
+		print("weapon_test: SKIP  populated LMB/RMB routing (fewer than two definitions)")
+		return
+
+	# Observe dispatch without actually launching a beam or movement ability.
+	var controller := _player._ability_controller as AbilityController
+	var activated := Callable(controller, "_on_activated")
+	var released := Callable(controller, "_on_released")
+	if controller != null and _player.ability_activated.is_connected(activated):
+		_player.ability_activated.disconnect(activated)
+	if controller != null and _player.ability_released.is_connected(released):
+		_player.ability_released.disconnect(released)
+
+	_player.abilities.set_item(0, ability_ids[0])
+	_player.abilities.set_item(1, ability_ids[1])
+	_player.holster()
+	_dispatch_action(&"attack")
+	_dispatch_action(&"aim")
+	_expect(_ability_events == [0, 1],
+		"holstered LMB/RMB dispatch ability slots 1 and 2")
+
+	var event_count := _ability_events.size()
+	_player.select_hotbar(0)
+	_dispatch_action(&"attack")
+	_dispatch_action(&"aim")
+	_expect(_ability_events.size() == event_count,
+		"drawn hotbar item overrides LMB/RMB abilities")
+
+	_player.holster()
+	_player.abilities.clear()
+	if controller != null and not _player.ability_activated.is_connected(activated):
+		_player.ability_activated.connect(activated)
+	if controller != null and not _player.ability_released.is_connected(released):
+		_player.ability_released.connect(released)
 	await _wait(4)
-	report += "  click swings:%s" % _player._weapon_pose.swinging()
-	_report("input", report)
-	await _wait(45)
 
 
 func _sword() -> void:
@@ -207,63 +280,104 @@ func _first_person() -> void:
 	await _wait(20)
 
 
-## Weapons are armed the way a player arms them — into the backpack, then
-## shift-clicked onto the rack — rather than by writing to the weapons container.
-## The wardrobe they used to be taken off is gone; the admin tab is where an item
-## comes from now, so the backpack is where this starts.
-func _rack() -> void:
-	_player.weapons.clear()
-	_player.select_weapon(0)
-	_place(Vector3(0.0, 0.4, 1.7), 0.0)
-	await _wait(30)
-	for id in ["sword", "laser_rifle"]:
-		_player.backpack.set_item(_player.backpack.first_accepting(id), id)
-	# Opening the menu is what builds the tiles, and the tiles are the path being
-	# measured: a weapon that reaches the hand only when written straight to the
-	# container is a weapon the rack cannot actually arm.
-	_player._open_game_menu(GameMenu.Tab.INVENTORY)
-	# The menu stops a single-player world, which is right in the game and wrong
-	# here: the weapon pose runs after the locomotion clip, so a stopped body would
-	# be photographed holding the weapon in whatever pose it had before the hold was
-	# applied.
-	get_tree().paused = false
-	await _wait(60)
+## Arm from finite backpack ownership through the canonical RedCataloguePage.
+## The explicit target buttons leave slot two empty, proving this is the new
+## three-slot flow rather than the former five-entry rack.
+func _arm_from_backpack() -> void:
+	_player.holster()
+	_player.hotbar.clear()
+	_player.abilities.clear()
+	_player.backpack.clear()
+	_player.backpack.set_item(0, "sword")
+	_player.backpack.set_item(1, "laser_rifle")
+	_player._open_game_menu(GameMenu.Tab.ITEMS)
+	# UI Controls process while paused, but the pose checks following this setup
+	# need an advancing body immediately after the menu closes.
+	await _wait(8)
+	var menu := _game_menu()
+	if not _expect(menu != null, "Red Menu opens for backpack arming"):
+		get_tree().paused = false
+		return
+	var page := _active_catalogue(menu)
+	if not _expect(page != null, "Items uses RedCataloguePage"):
+		menu.close()
+		get_tree().paused = false
+		return
 
-	for id in ["sword", "laser_rifle"]:
-		var tile := _tile_for(_player.backpack, _player.backpack.find(id))
-		if tile == null:
-			_report("rack", "no backpack tile for %s" % id)
-			continue
-		tile.quick_move_requested.emit(tile)
-		await _wait(12)
-	_report("rack", "racked %s  held=%s  rack tiles=%d" % [
-		_player.weapons.items(), _player.held_item(), _rack_tiles()])
+	await _equip_from_backpack(page, "sword", 0)
+	await _equip_from_backpack(page, "laser_rifle", 2)
+	var targets := page.find_child("TargetButtons", true, false)
+	_expect(targets != null and targets.get_child_count() == 3,
+		"Items exposes exactly three numbered targets")
+	_expect(_player.hotbar.items()
+		== PackedStringArray(["sword", "", "laser_rifle"]),
+		"Red catalogue arms slots 1 and 3 losslessly from backpack")
+	_expect(_player.backpack.find("sword") < 0
+		and _player.backpack.find("laser_rifle") < 0,
+		"armed weapons leave their finite backpack sources")
+	_report("arming", "hotbar=%s backpack=%s" % [
+		_player.hotbar.items(), _player.backpack.items()])
 	await _shot("weapon_rack")
+	menu.close()
+	await _wait(4)
+	get_tree().paused = false
 
 
-func _rack_tiles() -> int:
-	var found := 0
-	for tile in _tiles(_player.hud):
-		if tile.container == _player.weapons:
-			found += 1
-	return found
+func _equip_from_backpack(
+	page: RedCataloguePage,
+	item_id: String,
+	target_index: int
+) -> void:
+	var tile := _red_tile(page, _player.backpack, item_id)
+	_expect(tile != null, "backpack exposes %s RedItemSlot" % item_id)
+	if tile == null:
+		return
+	tile.picked.emit(tile)
+	await _wait(2)
+	var target := page.find_child(
+		"TargetSlot%d" % (target_index + 1), true, false) as Button
+	_expect(target != null, "%s can select target %d" % [
+		item_id, target_index + 1])
+	if target == null:
+		return
+	target.pressed.emit()
+	await _wait(1)
+	var equip := page.find_child("EquipAction", true, false) as HoldActionButton
+	_expect(equip != null and not equip.completed.get_connections().is_empty(),
+		"%s hold-to-equip is signal-wired" % item_id)
+	if equip != null:
+		equip.completed.emit()
+	await _wait(3)
 
 
-func _tile_for(container: ItemContainer, index: int) -> ItemSlot:
-	if index < 0:
-		return null
-	for tile in _tiles(_player.hud):
-		if tile.container == container and tile.index == index:
-			return tile
+func _game_menu() -> GameMenu:
+	for child: Node in _player.hud.get_children():
+		if child is GameMenu:
+			return child as GameMenu
 	return null
 
 
-func _tiles(root: Node) -> Array[ItemSlot]:
-	var found: Array[ItemSlot] = []
-	for node in root.find_children("*", "Control", true, false):
-		if node is ItemSlot:
-			found.append(node as ItemSlot)
-	return found
+func _active_catalogue(menu: GameMenu) -> RedCataloguePage:
+	var host := menu.find_child("PageHost", true, false)
+	if host == null or host.get_child_count() != 1:
+		return null
+	return host.get_child(0) as RedCataloguePage
+
+
+func _red_tile(
+	page: RedCataloguePage,
+	container: ItemContainer,
+	item_id: String
+) -> RedItemSlot:
+	var grid := page.find_child("OwnedItemGrid", true, false)
+	if grid == null:
+		return null
+	for child: Node in grid.get_children():
+		if child is RedItemSlot:
+			var slot := child as RedItemSlot
+			if slot.container == container and slot.item_id() == item_id:
+				return slot
+	return null
 
 
 # --- Measurements -----------------------------------------------------------
@@ -371,14 +485,19 @@ func _key(code: Key) -> void:
 	Input.parse_input_event(release)
 
 
-func _click(button: MouseButton) -> void:
-	var press := InputEventMouseButton.new()
-	press.button_index = button
+func _dispatch_action(action: StringName) -> void:
+	var press := InputEventAction.new()
+	press.action = action
 	press.pressed = true
-	Input.parse_input_event(press)
-	var release := press.duplicate() as InputEventMouseButton
+	_player._unhandled_input(press)
+	var release := InputEventAction.new()
+	release.action = action
 	release.pressed = false
-	Input.parse_input_event(release)
+	_player._unhandled_input(release)
+
+
+func _on_ability_activated(index: int, _id: String) -> void:
+	_ability_events.append(index)
 
 
 func _wait(frames: int) -> void:
@@ -390,7 +509,19 @@ func _report(step: String, detail: String) -> void:
 	print("weapon_test: %-14s %s" % [step, detail])
 
 
+func _expect(condition: bool, message: String) -> bool:
+	if condition:
+		print("weapon_test: PASS  %s" % message)
+		return true
+	_failures += 1
+	push_error("weapon_test: FAIL  %s" % message)
+	return false
+
+
 func _shot(shot_name: String) -> void:
+	if DisplayServer.get_name() == "headless":
+		print("weapon_test: SKIP  %s.png (headless display)" % shot_name)
+		return
 	await RenderingServer.frame_post_draw
 	var image := get_viewport().get_texture().get_image()
 	var path := ProjectSettings.globalize_path(SHOT_DIR + shot_name + ".png")
@@ -398,3 +529,44 @@ func _shot(shot_name: String) -> void:
 	var error := image.save_png(path)
 	if error != OK:
 		print("weapon_test: shot %s failed: %s" % [shot_name, error_string(error)])
+
+
+func _snapshot_settings() -> void:
+	var path := ProjectSettings.globalize_path(SETTINGS_PATH)
+	_settings_existed = FileAccess.file_exists(path)
+	if _settings_existed:
+		_settings_bytes = FileAccess.get_file_as_bytes(path)
+
+
+func _restore_settings() -> void:
+	var path := ProjectSettings.globalize_path(SETTINGS_PATH)
+	if not _settings_existed:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+		return
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		push_error("weapon_test: could not restore %s" % path)
+		return
+	file.store_buffer(_settings_bytes)
+	file.close()
+
+
+func _finish() -> void:
+	get_tree().paused = false
+	Input.action_release("aim")
+	Input.action_release("move_forward")
+	Input.action_release("sprint")
+	var world := NetworkManager.active_world as GameWorld
+	if is_instance_valid(world):
+		world.queue_free()
+	await _wait(3)
+	_restore_settings()
+	NetworkManager.players.clear()
+	NetworkManager.state = NetworkManager.SessionState.IDLE
+	NetworkManager.is_single_player = false
+	NetworkManager.is_host = false
+	print("weapon_test: %s" % (
+		"all checks passed" if _failures == 0
+		else "%d check(s) failed" % _failures))
+	get_tree().quit(1 if _failures > 0 else 0)

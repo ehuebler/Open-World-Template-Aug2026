@@ -67,6 +67,12 @@ const POOL_BLUE := Color(0.13, 0.58, 0.70)
 ## the light and hand back the blue, and reading as a paler shade of the snow
 ## beside it is what made the arctic one flat white field with no coastline in it.
 const ICE := Color(0.76, 0.90, 0.97)
+## The south-pole caldera. Kept nearly neutral so the terrain splatter chooses
+## photographed stone, while the oxide warmth and shader-side ember fissures
+## stop the whole biome reading as one black disc from above.
+const VOLCANIC_BASALT := Color(0.075, 0.065, 0.07)
+const VOLCANIC_ASH := Color(0.17, 0.145, 0.14)
+const VOLCANIC_OXIDE := Color(0.30, 0.095, 0.035)
 
 ## Alpha at the waterline. Vertex alpha carries how wet the ground is, and the
 ## shader reads anything above zero as water; starting the ramp here rather than
@@ -110,6 +116,15 @@ const SEA_ICE_WETNESS := 0.3
 ## 8.2 km gives a handful of landmasses rather than a marbled mess.
 @export var continent_wavelength := 8200.0
 @export var mountain_wavelength := 1500.0
+## Distance between mountain *ranges*, as against between peaks.
+##
+## The second of the two ridge fields the mountains are shaped from. Deliberately
+## much coarser than [member mountain_wavelength] rather than the near-neighbour
+## a shader graph would reach for: two fields a hair apart only produce more of
+## the same crests, whereas one at two and a half times the span describes where
+## the uplift *is*, and the peaks then gather into ranges with plain between them
+## instead of being spread evenly over every rough acre.
+@export var massif_wavelength := 3800.0
 @export var hill_wavelength := 300.0
 @export var detail_wavelength := 52.0
 @export var river_wavelength := 2400.0
@@ -148,11 +163,86 @@ const SEA_ICE_WETNESS := 0.3
 ## out in the dark and nothing at all where it could break the surface.
 @export var seabed_relief := 34.0
 @export var land_height := 260.0
-@export var mountain_height := 300.0
+## Height of the mountains, which is now the height of the *summits* only.
+##
+## Raised from the 300 it was, and it had to be. The shaping below flattens
+## everything below its lower stop into plain, so where the old cubed ridge
+## spread a broad hundred-and-twenty-metre swell across all rough country, this
+## spends the whole allowance on the fraction that is actually mountain. Same
+## budget, concentrated. Still inside the tenth of the radius the silhouette can
+## carry: 260 of continent and 400 of summit is 660 against 800.
+@export var mountain_height := 400.0
 @export var hill_height := 24.0
 @export var detail_height := 2.4
 @export var river_depth := 45.0
 @export var lake_depth := 38.0
+
+@export_group("Mountain shape")
+## The mountains are two ridge fields mixed and then put through a hard remap,
+## which is the terrain-artist recipe — two noise nodes, a mix, a colour ramp, a
+## displacement — written as arithmetic. It replaced a single ridged field cubed,
+## and the reason is what cubing does: it pulls the whole noise range down at
+## once, so it flattens plains and summits alike and leaves only a thin crease
+## along every zero contour of every octave standing. That crease, at five
+## octaves, is the field of sharp little spikes that used to be everywhere.
+##
+## The remap is what fixes it, because it separates the two decisions that
+## cubing had welded together. [member mountain_plain] decides *where* there are
+## mountains, by putting a floor under the field that plain ground never clears.
+## [member mountain_sharpness] decides what the mountains that remain look like.
+## Sharp points are still entirely available — more so, since the exponent now
+## works on a normalised band rather than on raw noise — but they are now
+## somewhere specific rather than a texture over the whole planet.
+##
+## How much of the broad field is mixed into the fine one, 0 to 1.
+##
+## Mixed and not multiplied. Multiplying would scale every crest by whatever the
+## broad field happened to be underneath it, thinning the ranges it was supposed
+## to be picking out; mixing leaves crests at full height and lets the floor
+## below do the selecting, so a crest survives exactly where the broad field is
+## high enough to carry it over.
+@export_range(0.0, 1.0) var mountain_mix := 0.45
+## The remap's lower stop: field values at or below this are flat ground.
+##
+## The most powerful number in this group and the one to reach for first. The
+## mixed field sits around 0.74 with most of its mass between 0.55 and 0.95, so
+## this is a knob with a narrow useful range and a lot of authority inside it —
+## 0.6 makes most of the rough country mountainous, 0.85 leaves a few ranges in a
+## lot of plain. It reads as "how much of the planet is mountain" and nothing
+## else here changes that.
+@export_range(0.0, 1.0) var mountain_plain := 0.72
+## The remap's upper stop: field values at or above this are at full height.
+##
+## What pulling it below 1 buys is *flat* summits, because a clipped peak is a
+## plateau — which is the difference between an alpine ridge line and a table
+## mountain. Left at 1 here, and that is the setting that answers the brief:
+## anything lower and the summits come off level, so from underneath one every
+## profile between a spire and a dome draws the same flat-topped wedge and the
+## sharpness below has nothing left to act on. At 0.97 this planet's highest
+## ground was a smooth snow tableland.
+##
+## The desert keeps its tables regardless, which is why giving them up here costs
+## nothing: terracing in [method mesa] makes those, out of arid ground, and it is
+## a better mesa than clipping this ever was because it stacks benches rather
+## than shearing one flat top.
+@export_range(0.0, 1.0) var mountain_peak := 1.0
+## Profile of the climb from plain to summit.
+##
+## Above 1 the slope is concave and the peak is a spire; below 1 it is convex and
+## the peak is a dome. This is the sharp-points control, and it is a better one
+## than the old cubed ridge because it is applied after the remap has normalised
+## the band — the exponent shapes the mountain instead of also deciding how much
+## of the planet is one.
+@export_range(0.2, 6.0) var mountain_sharpness := 2.6
+## How much sharper the roughest country is than the smoothest, as a multiplier
+## on [member mountain_sharpness].
+##
+## Sharp crags are wanted in some places and not as a planet-wide texture, and
+## the roughness field is already the thing that says which places: it decides
+## how tall the mountains are, so letting it decide how pointed they are too
+## means crags arrive with the terrain that should have them. At 1 the whole
+## planet shares one profile.
+@export_range(1.0, 4.0) var mountain_crag := 1.8
 
 @export_group("Water")
 ## Share of the surface below sea level. The raw noise's own zero crossing drifts
@@ -231,6 +321,38 @@ const SEA_ICE_WETNESS := 0.3
 @export var hoodoo_height := 17.0
 ## Distance between spires, in metres.
 @export var hoodoo_wavelength := 21.0
+## The level the spire field has to reach before a column stands.
+##
+## How rare a hoodoo is, and the number that decides whether these read as rock
+## or as a sawtooth pattern laid over the desert. It was effectively 0.80, and
+## the trouble with 0.80 is that the field averages about 0.74 — so a third of
+## every bench lip cleared it and the columns came out shoulder to shoulder,
+## which is not what a hoodoo is. A hoodoo is a survivor, the last of a bench
+## that eroded away from around it, and survivors are sparse by definition.
+##
+## The field's mass sits between about 0.55 and 0.95, so the useful range here is
+## narrow and the top of it is very sensitive: 0.90 is a crowd, 0.97 is a handful
+## of landmarks per escarpment.
+@export_range(0.5, 0.99) var hoodoo_stand := 0.94
+## Distance between hoodoo amphitheatres, in metres.
+##
+## Which escarpments grow spires and which are bare rock. Without this the only
+## test was the bench lip, and a lip is a *contour* — it traces every bench in
+## the desert at once, so every one of them got columns. Worse, it fails hardest
+## where the ground is most interesting: as a slope steepens its benches crowd
+## together in plan, so the dashed lines of spires close up into a single
+## serrated wall running down the side of every canyon.
+##
+## Coarse on purpose. The answer wants to hold for a whole amphitheatre rather
+## than flicker along it, which is the difference between hoodoo country and
+## speckle.
+@export var badland_wavelength := 700.0
+## How much of the arid country is hoodoo country, as a level on that field.
+##
+## Higher leaves fewer, larger gaps between the places that have spires at all.
+## Around 0.62 the desert reads as mostly bare benches with the occasional
+## amphitheatre worth walking into.
+@export_range(0.0, 1.0) var badland_reach := 0.62
 
 @export_group("Polar cap")
 ## How much of the planet's surface is arctic, as a share of its area.
@@ -247,6 +369,29 @@ const SEA_ICE_WETNESS := 0.3
 @export_range(0.0, 0.3) var frost_blend := 0.06
 ## Which way is north, in planet-local space.
 @export var frost_axis := Vector3.UP
+
+@export_group("South-pole volcano")
+## A broad volcanic island centred on the antipode of [member frost_axis].
+## Geometry lives in the height field, so terrain LOD, collision, flora surveys,
+## the ground guard, and the map all receive the same caldera.
+@export var volcano_enabled := true
+@export var volcano_radius := 1450.0
+@export var volcano_island_height := 55.0
+@export var volcano_cone_radius := 980.0
+@export var volcano_cone_height := 500.0
+@export var volcano_crater_radius := 190.0
+@export var volcano_crater_depth := 145.0
+## Three breached directions. Each flow follows one and ends in the matching
+## lower pool described below.
+@export var volcano_flow_angles := Vector3(0.65, -1.55, 2.55)
+@export var volcano_channel_width := 34.0
+@export var volcano_channel_depth := 135.0
+## (distance from pole, visible radius, lava-surface elevation), in metres.
+@export var volcano_pool_one := Vector3(760.0, 130.0, 126.0)
+@export var volcano_pool_two := Vector3(870.0, 105.0, 76.0)
+@export var volcano_pool_three := Vector3(810.0, 120.0, 100.0)
+@export var volcano_pool_depth := 10.0
+@export var volcano_crater_lava_height := 420.0
 
 @export_group("Settlements")
 ## Whether the planet has towns on it at all. Clear it for the untouched noise, which
@@ -287,6 +432,16 @@ var _town_cap: PackedFloat32Array = []
 ## slow function. Typed, GDScript binds the method once and calls it directly.
 var _field: PlanetField
 
+## Marks abilities have left on the ground, applied after everything else so a
+## crater cuts through a city pad as readily as through open country.
+##
+## Held here rather than on [Planet] because this resource is the one thing the
+## mesh builder, the collision generator, the flora surveys and the player's
+## ground guard all read the terrain through. A deformation that lived anywhere
+## else would be a second version of the ground, and the two would disagree the
+## moment anything cached.
+var scars := TerrainScars.new()
+
 ## Where the arid field is cut to leave [member aridity] of the land desert.
 var _arid_edge := 0.0
 var _sea_bias := 0.0
@@ -295,6 +450,11 @@ var _pole := Vector3.UP
 ## is one dot product and one smoothstep on the hot path.
 var _frost_edge := 0.0
 var _frost_full := 0.0
+## Allows source changes to run before Windows releases the loaded GDExtension
+## DLL for relinking. New native fields identify themselves with a `volcano`
+## sample key; an older binary falls back to the identical pure functions below
+## and routes only south-pole chunks through Planet's scripted patch builder.
+var _native_volcano := false
 var _built := false
 
 
@@ -309,12 +469,14 @@ func prepare() -> void:
 	# designer edits and everything below it is a few thousand samples per chunk.
 	_field = PlanetField.new()
 	_field.configure(native_settings(self))
+	scars.planet_radius = radius
 	# Simplex clusters around zero rather than spreading evenly, so the useful
 	# half of this range is the middle: the ends are asking for a threshold the
 	# field almost never crosses, which is why it stops short of +-1.
 	_arid_edge = lerpf(-0.5, 0.5, 1.0 - aridity)
 	_sea_bias = float(_field.solve_sea_bias(SURVEY_SAMPLES, sea_fraction))
 	_pole = frost_axis.normalized() if frost_axis.length_squared() > 0.0 else Vector3.UP
+	_native_volcano = (_field.sample(-_pole) as Dictionary).has("volcano")
 	_frost_edge = 1.0 - 2.0 * clampf(frost_area + frost_blend * 0.5, 0.0, 1.0)
 	_frost_full = 1.0 - 2.0 * clampf(frost_area - frost_blend * 0.5, 0.0, 1.0)
 	if not settled:
@@ -371,6 +533,138 @@ func frost_inner() -> float:
 	return _frost_full
 
 
+## Centre of the volcanic biome in planet-local space.
+func volcano_axis() -> Vector3:
+	return -_pole
+
+
+## Smooth biome weight, one through the island and zero beyond its coast.
+func volcano_influence(direction: Vector3) -> float:
+	if not volcano_enabled or volcano_radius <= 0.0:
+		return 0.0
+	var south := volcano_axis()
+	var outer := cos(volcano_radius / maxf(radius, 1.0))
+	var inner := cos(volcano_radius * 0.82 / maxf(radius, 1.0))
+	return smoothstep(outer, inner, direction.normalized().dot(south))
+
+
+## Tangent-plane metres from the south pole. The cap is small enough that an
+## azimuthal distance is effectively exact, and unlike latitude/longitude this
+## remains well-defined at the pole itself.
+func volcano_coordinates(direction: Vector3) -> Vector2:
+	var south := volcano_axis()
+	var out := direction.normalized()
+	var cosine := clampf(out.dot(south), -1.0, 1.0)
+	var distance := acos(cosine) * radius
+	var tangent := out - south * cosine
+	if tangent.length_squared() < 0.0000001:
+		return Vector2.ZERO
+	tangent = tangent.normalized()
+	var east := south.cross(
+		Vector3.UP if absf(south.y) < 0.9 else Vector3.RIGHT).normalized()
+	var north := south.cross(east).normalized()
+	return Vector2(tangent.dot(east), tangent.dot(north)) * distance
+
+
+## Shared by the terrain basins, visible liquid meshes, and player query. A
+## Vector3 pool export is (distance, radius, surface elevation).
+func volcano_lava_pools() -> Array[Dictionary]:
+	var pools: Array[Dictionary] = [{
+		"offset": Vector2.ZERO,
+		"radius": volcano_crater_radius * 0.62,
+		"height": volcano_crater_lava_height,
+		"seed": 3,
+		"crater": true,
+	}]
+	var packed := [volcano_pool_one, volcano_pool_two, volcano_pool_three]
+	for index in packed.size():
+		var pool: Vector3 = packed[index]
+		var angle := volcano_flow_angles[index]
+		pools.append({
+			"offset": Vector2(cos(angle), sin(angle)) * pool.x,
+			"radius": pool.y,
+			"height": pool.z,
+			"seed": 11 + index * 7,
+			"crater": false,
+			"flow_angle": angle,
+		})
+	return pools
+
+
+func _volcano_channel(coordinates: Vector2) -> float:
+	var distance := coordinates.length()
+	if volcano_channel_depth <= 0.0 or volcano_channel_width <= 0.0 \
+			or distance <= volcano_crater_radius * 0.55 \
+			or distance >= volcano_cone_radius * 1.02:
+		return 0.0
+	var angle := coordinates.angle()
+	var channel := 0.0
+	for flow_angle: float in [
+			volcano_flow_angles.x,
+			volcano_flow_angles.y,
+			volcano_flow_angles.z,
+		]:
+		var delta := angle - flow_angle
+		if cos(delta) <= 0.0:
+			continue
+		var lateral := absf(sin(delta)) * distance
+		channel = maxf(channel, 1.0 - smoothstep(
+			volcano_channel_width, volcano_channel_width * 2.2, lateral))
+	var from_crater := smoothstep(
+		volcano_crater_radius * 0.55, volcano_crater_radius, distance)
+	var toward_foot := 1.0 - smoothstep(
+		volcano_cone_radius * 0.82, volcano_cone_radius * 1.02, distance)
+	var cone := smoothstep(volcano_cone_radius, volcano_crater_radius, distance)
+	return volcano_channel_depth * channel * from_crater * toward_foot * cone
+
+
+func _volcano_pool_basin(coordinates: Vector2, height: float) -> float:
+	var pools := [volcano_pool_one, volcano_pool_two, volcano_pool_three]
+	for index in pools.size():
+		var pool: Vector3 = pools[index]
+		var angle := volcano_flow_angles[index]
+		var centre := Vector2(cos(angle), sin(angle)) * pool.x
+		var away := coordinates.distance_to(centre)
+		var basin := 1.0 - smoothstep(pool.y, pool.y * 1.28, away)
+		if basin > 0.0:
+			height = lerpf(height, minf(height, pool.z - volcano_pool_depth), basin)
+	return height
+
+
+func _volcano_height(direction: Vector3, height: float, spacing: float) -> float:
+	var influence := volcano_influence(direction)
+	if influence <= 0.0:
+		return height
+	var coordinates := volcano_coordinates(direction)
+	var distance := coordinates.length()
+	var cone := smoothstep(volcano_cone_radius, volcano_crater_radius, distance)
+	var crater := 1.0 - smoothstep(
+		volcano_crater_radius * 0.62, volcano_crater_radius, distance)
+	var target := volcano_island_height + volcano_cone_height * cone \
+		- volcano_crater_depth * crater
+	var detail_fade := smoothstep(180.0, 55.0, spacing)
+	if detail_fade > 0.0 and cone > 0.0 and crater < 1.0:
+		target += _field.noise_at("_hills", direction) * 18.0 \
+			* cone * (1.0 - crater) * detail_fade
+	target -= _volcano_channel(coordinates)
+	var shaped := lerpf(height, target, influence)
+	return _volcano_pool_basin(coordinates, shaped)
+
+
+func _volcano_color(direction: Vector3, ground: Color) -> Color:
+	var influence := volcano_influence(direction)
+	if influence <= 0.0:
+		return ground
+	var soot := _field.noise_at("_hills", direction) * 0.5 + 0.5
+	var basalt := VOLCANIC_BASALT.lerp(
+		VOLCANIC_ASH, 0.24 + soot * 0.52)
+	var oxide := smoothstep(0.74, 0.94,
+		_field.noise_at("_roughness", direction) * 0.5 + 0.5)
+	basalt = basalt.lerp(VOLCANIC_OXIDE, oxide * 0.32)
+	basalt.a = 0.0
+	return ground.lerp(basalt, influence)
+
+
 # --- The height field -------------------------------------------------------
 
 ## Metres above sea level along a unit direction from the planet's centre.
@@ -387,12 +681,18 @@ func frost_inner() -> float:
 ## that faded would leave a distant chunk drawing the hills the city was built
 ## over while the player's ground guard — which always samples at the finest
 ## spacing — held them on the flat.
+## Scars are taken off last of all, after the towns. A crater in a landing pad
+## is a crater in a landing pad; there is no ground on this planet that an
+## ability is not allowed to damage.
 func elevation(direction: Vector3, spacing := 0.0) -> float:
 	var height: float = _field.elevation(direction, spacing)
+	if not _native_volcano:
+		height = _volcano_height(direction, height, spacing)
 	for index in _town_up.size():
 		if direction.dot(_town_up[index]) >= _town_cap[index]:
-			return cities[index].elevation(direction, height)
-	return height
+			height = cities[index].elevation(direction, height)
+			break
+	return height - scars.depth_at(direction, spacing)
 
 
 ## The parts an elevation was made of: what the water is, how rough the ground is,
@@ -402,10 +702,22 @@ func elevation(direction: Vector3, spacing := 0.0) -> float:
 func sample(direction: Vector3) -> Dictionary:
 
 	var parts: Dictionary = _field.sample(direction)
+	if not _native_volcano:
+		var volcanic := volcano_influence(direction)
+		if volcanic > 0.0:
+			parts["elevation"] = _volcano_height(
+				direction, float(parts["elevation"]), 0.0)
+			parts["dry"] = maxf(float(parts.get("dry", 0.0)), volcanic)
+			parts["river"] = 0.0
+			parts["lake"] = 0.0
+			parts["rough"] = maxf(float(parts.get("rough", 0.0)), volcanic)
+			parts["arid"] = maxf(float(parts.get("arid", 0.0)), volcanic)
+			parts["volcano"] = volcanic
 	for index in _town_up.size():
 		if direction.dot(_town_up[index]) >= _town_cap[index]:
 			parts["elevation"] = cities[index].elevation(direction, parts["elevation"])
 			break
+	parts["elevation"] = float(parts["elevation"]) - scars.depth_at(direction)
 	return parts
 
 
@@ -444,6 +756,10 @@ func normal_at(direction: Vector3, spacing: float) -> Vector3:
 ## cosine, which over-estimates the reach — a cosine never falls faster than its
 ## angle — and so can only ever err toward the slower path.
 func overlaps_town(centre: Vector3, arc: float) -> bool:
+	if not _native_volcano and volcano_enabled:
+		var reach := (volcano_radius + maxf(arc, 0.0)) / maxf(radius, 1.0)
+		if centre.normalized().dot(volcano_axis()) >= cos(reach):
+			return true
 	if _town_up.is_empty():
 		return false
 	var direction := centre.normalized()
@@ -452,6 +768,25 @@ func overlaps_town(centre: Vector3, arc: float) -> bool:
 		if direction.dot(_town_up[index]) >= _town_cap[index] - margin:
 			return true
 	return false
+
+
+## Whether a chunk this wide has anything on it the native field cannot build.
+##
+## The native height field knows about noise, water, deserts and ice, and
+## nothing about towns or scars — both of those are GDScript overrides applied
+## on this side of the boundary. A chunk that touches either has to be built the
+## slow way, through [method elevation], or it would come back with the pad or
+## the crater missing.
+##
+## [method overlaps_town] is left as it was for the callers that genuinely mean
+## "is there a settlement here".
+##
+## [param spacing] is how far apart the chunk's vertices will be. A scar too
+## small to survive that spacing is not a reason to take the slow path, which is
+## the difference between a two-metre burn costing one chunk and it costing
+## every ancestor of that chunk up to the whole face.
+func needs_script_build(centre: Vector3, arc: float, spacing := 0.0) -> bool:
+	return overlaps_town(centre, arc) or scars.overlaps(centre, arc, spacing)
 
 
 ## One chunk's mesh, built in the native field. See [method Planet._build_natively].
@@ -477,10 +812,13 @@ func color_at(direction: Vector3, height: float, normal: Vector3) -> Color:
 	# alpha channel is wetness and the shore is wet without being sea.
 	if height <= 0.0:
 		return ground
+	if not _native_volcano:
+		ground = _volcano_color(direction, ground)
 	for index in _town_up.size():
 		if direction.dot(_town_up[index]) >= _town_cap[index]:
-			return cities[index].tint(direction, ground)
-	return ground
+			ground = cities[index].tint(direction, ground)
+			break
+	return scars.tint(direction, ground)
 
 
 ## Every tuning number the native field needs, by the name it has here.
@@ -497,7 +835,7 @@ static func native_settings(shape: PlanetShape) -> Dictionary:
 			continue
 		var named: String = entry["name"]
 		var value: Variant = shape.get(named)
-		if value is float or value is int or value is Vector3:
+		if value is float or value is int or value is bool or value is Vector3:
 			settings[named] = value
 	# The constants go over too, so this file stays the one place the planet's
 	# palette and thresholds are written down. They could be literals on the
@@ -515,6 +853,8 @@ static func native_settings(shape: PlanetShape) -> Dictionary:
 		"SNOW": SNOW, "ICE": ICE, "MESA_MAROON": MESA_MAROON,
 		"MESA_RED": MESA_RED, "MESA_ORANGE": MESA_ORANGE,
 		"MESA_CREAM": MESA_CREAM, "DESERT_FLOOR": DESERT_FLOOR,
+		"VOLCANIC_BASALT": VOLCANIC_BASALT, "VOLCANIC_ASH": VOLCANIC_ASH,
+		"VOLCANIC_OXIDE": VOLCANIC_OXIDE,
 	}
 	return settings
 

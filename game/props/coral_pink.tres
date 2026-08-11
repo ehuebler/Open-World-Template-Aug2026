@@ -1,0 +1,64 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/coral_pink.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/coral.tres" id="3_surface"]
+
+; The big branching one, and the reason the reef has a skyline. Scattered
+; thinly and singly: one of these is three metres across, and a clump of them
+; would be a wall.
+;
+; The depth band is where the whole reef lives and it is the same on all four:
+; above_water and below are metres relative to sea level, so -30 .. -8 is the
+; sunlit shelf between the shallows a swimmer wades through and the dark. No
+; VAT — coral does not swim, it leans, and vivid_plant's wind rotation does
+; that for nothing.
+
+[resource]
+script = ExtResource("1_species")
+resource_name = "CoralPink"
+model = ExtResource("2_model")
+mesh_named = "CoralPink"
+material = ExtResource("3_surface")
+height = 2.7
+height_variation = 0.4
+width_scale = 1.0
+tilt = 9.0
+above_water = -30.0
+below = -8.0
+max_slope = 20.0
+steady_over = 2.2
+steady_within = 1.0
+ground_layer = 2
+minimum_claim = 0.06
+maximum_arid = 1.0
+maximum_frost = 1.0
+terrain_tint = false
+; The mesh emits from its vertex colour; this is the matching colour of the
+; pooled real light it offers to GroundCover for the nearby bed and swimmer.
+glow_patch_size = 8.0
+local_light_color = Color(1, 0.08, 0.34, 1)
+local_light_energy = 1.15
+per_square_metre = 0.009
+clump_count = 1
+clump_radius = 1.0
+bare_share = 0.8
+patch_size = 46.0
+random_seed = 20260901
+draw_within = 240.0
+thin_from = 26.0
+thin_to = 100.0
+far_density = 0.08
+fade_band = 0.16
+shadow_within = 0.0
+distant_beyond = 4000.0
+collision_enabled = true
+collision_within = 12.0
+collision_radius_share = 0.46
+collision_height_share = 0.86
+impact_mode = 1
+health = 120.0
+health_per_metre = 14.4
+break_momentum_keep = 0.68
+break_effect = 2
+break_effect_color = Color(1, 0.08, 0.34, 1)

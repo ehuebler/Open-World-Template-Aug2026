@@ -9,10 +9,12 @@ extends Node
 ## Saves one capture per view to dev/captures/ and quits. Pass `-- --freeze` to
 ## stop the pencil surfaces redrawing, so two runs are comparable, and
 ## `-- --handover` to also shoot the sweep from the home pose into third person,
-## which is the one thing here that cannot be checked from a single frame.
+## which is the one thing here that cannot be checked from a single frame. Pass
+## `-- --ingame-red` to start safely and capture the canonical Hero/Apparel menu.
 
 const WORLD: PackedScene = preload("res://game/world.tscn")
 const CAPTURE_DIR := "res://dev/captures"
+const SETTINGS_PATH := "user://settings.cfg"
 ## Long enough for the planet to get past its coarsest chunks, so the shots are of
 ## the thing the player sees rather than of a cube.
 const SETTLE_FRAMES := 90
@@ -33,9 +35,12 @@ var _home: HomeScreen
 ## look that is on screen, so restoring inside the character section is not
 ## enough and a sword racked for a screenshot stayed racked across launches.
 var _saved_look: Dictionary
+var _settings_existed := false
+var _settings_bytes := PackedByteArray()
 
 
 func _ready() -> void:
+	_snapshot_settings()
 	_saved_look = CharacterDB.load_look()
 	_world = WORLD.instantiate() as GameWorld
 	add_child(_world)
@@ -43,6 +48,7 @@ func _ready() -> void:
 	_home = _world.get_node_or_null("HomeScreen") as HomeScreen
 	if _home == null:
 		push_error("_menu_shot: the world came up with no home screen")
+		_restore_settings()
 		get_tree().quit(1)
 		return
 
@@ -54,6 +60,8 @@ func _ready() -> void:
 			_report_preview()
 		if entry["view"] == HomeScreen.View.CHARACTER:
 			await _run_character_bodies()
+		if entry["view"] == HomeScreen.View.SETTINGS:
+			_report_settings_background()
 
 	await _run_settings_tabs()
 
@@ -62,7 +70,13 @@ func _ready() -> void:
 	# own: dev/_menu_test.tscn.
 	if "--handover" in OS.get_cmdline_user_args():
 		await _run_handover()
+	elif "--ingame-red" in OS.get_cmdline_user_args():
+		await _run_ingame_red()
 	CharacterDB.save_look(_saved_look)
+	if is_instance_valid(_world):
+		_world.queue_free()
+	await get_tree().process_frame
+	_restore_settings()
 	get_tree().quit()
 
 
@@ -83,6 +97,25 @@ func _report_preview() -> void:
 		0.0 if animator == null else animator.current_animation_position,
 		skeleton.get_bone_global_pose(hips).origin.y,
 		skeleton.get_bone_global_rest(hips).origin.y])
+
+
+func _report_settings_background() -> void:
+	var background := _home.find_child(
+		"SettingsBackground", true, false) as TextureRect
+	if background == null:
+		push_error("_menu_shot: home Settings has no ui_background2")
+		return
+	var viewport_rect := get_viewport().get_visible_rect()
+	var background_rect := background.get_global_rect()
+	var fills_viewport := background_rect.position.distance_to(
+		viewport_rect.position) <= 1.0 \
+		and background_rect.size.distance_to(viewport_rect.size) <= 1.0
+	if background.texture != HomeScreen.SETTINGS_BACKGROUND \
+			or background.stretch_mode != TextureRect.STRETCH_SCALE \
+			or not fills_viewport:
+		push_error("_menu_shot: home Settings background is not full-screen ui_background2")
+		return
+	print("_menu_shot: home Settings uses full-screen ui_background2")
 
 
 ## New Game should never cut: the camera leaves the home pose and arrives behind
@@ -114,13 +147,72 @@ func _run_handover() -> void:
 	# figure's hand.
 	if player != null:
 		var wanted := CharacterDB.load_look()
-		print("_menu_shot: body wanted=%s got=%s, worn wanted=%s got=%s" % [
-			wanted["body"], player.body_id(),
+		print("_menu_shot: body wanted=%s got=%s, skin wanted=%s got=%s, worn wanted=%s got=%s" % [
+			wanted["body"], player.body_id(), wanted["skin"], player.skin_id(),
 			CharacterDB.worn_items(wanted), player.worn_items(),
 		])
-		print("_menu_shot: rack wanted=%s got=%s" % [
-			CharacterDB.racked_items(wanted, player.weapons.size()),
-			player.weapons.items(),
+		print("_menu_shot: three-slot hotbar wanted=%s got=%s" % [
+			CharacterDB.hotbar_items(wanted, player.hotbar.size()),
+			player.hotbar.items(),
+		])
+
+
+## Optional visual-only path for the in-game shell. Behavioral coverage belongs
+## to _menu_test; this path reports geometry and saves two representative frames.
+func _run_ingame_red() -> void:
+	_home.show_view(HomeScreen.View.HOME)
+	await _wait(HomeScreen.MOVE_TIME + 0.4)
+	_home.start_new_game()
+	await _wait(HomeScreen.HANDOVER_TIME + 0.5)
+	var player := _world.local_player()
+	if player == null:
+		push_error("_menu_shot: --ingame-red did not spawn a local player")
+		return
+	player._open_game_menu(GameMenu.Tab.HERO)
+	await _wait(0.25)
+	var menu := _game_menu(player)
+	if menu == null:
+		push_error("_menu_shot: --ingame-red did not open GameMenu")
+		return
+	_report_red_bounds(menu, "Hero")
+	await _capture("menu_ingame_hero")
+	menu.show_tab(GameMenu.Tab.APPAREL)
+	await _wait(0.25)
+	_report_red_bounds(menu, "Apparel")
+	await _capture("menu_ingame_apparel")
+	menu.close()
+	await get_tree().process_frame
+
+
+func _game_menu(player: OnlinePlayer) -> GameMenu:
+	for child: Node in player.hud.get_children():
+		if child is GameMenu:
+			return child as GameMenu
+	return null
+
+
+func _report_red_bounds(menu: GameMenu, page_name: String) -> void:
+	var viewport_rect := get_viewport().get_visible_rect()
+	for node_name: String in [
+		"ContentFrame",
+		"BottomSelector",
+		"AdminButton",
+		"SessionActions",
+	]:
+		var control := menu.find_child(node_name, true, false) as Control
+		if control == null:
+			push_error("_menu_shot: %s is missing %s" % [page_name, node_name])
+			continue
+		var bounds := control.get_global_rect()
+		var contained := viewport_rect.encloses(bounds)
+		print("_menu_shot: %s %-14s at %.0f,%.0f size %.0fx%.0f inside=%s" % [
+			page_name,
+			node_name,
+			bounds.position.x,
+			bounds.position.y,
+			bounds.size.x,
+			bounds.size.y,
+			contained,
 		])
 
 
@@ -141,6 +233,13 @@ func _run_character_bodies() -> void:
 	_report_fit(page, "undressed")
 	var saved := CharacterDB.load_look()
 	var body_id := CharacterDB.sanitize_body(saved["body"])
+	if _press("Integrated Robotic"):
+		await _wait(0.35)
+		await _capture("menu_character_integrated_robotic")
+		print("_menu_shot: texture picked %s" % CharacterDB.load_look()["skin"])
+	if _press("Clean Robotic"):
+		await _wait(0.35)
+		await _capture("menu_character_clean_robotic")
 	await _run_character_pockets(body_id)
 	if not _press("Hero Design"):
 		return
@@ -156,16 +255,22 @@ func _run_character_bodies() -> void:
 	page.tint_picked.emit("long_sleeve", Color(0.94, 0.68, 0.22))
 	await _wait(0.35)
 	await _capture("menu_character_tinted")
+	page.tint_cleared.emit(InventoryPage.TINT_BODY)
+	page.tint_cleared.emit("long_sleeve")
+	await _wait(0.35)
+	await _capture("menu_character_no_tint")
+	print("_menu_shot: no tint leaves %s" % CharacterDB.load_look()["tints"])
 	CharacterDB.save_look(saved)
+	# The ordinary shots leave the clean design selected. A handover run takes the
+	# other one through the preview → player seam as well; the outer cleanup puts
+	# the user's saved choice back after the player has been inspected.
+	if "--handover" in OS.get_cmdline_user_args() and _press("Integrated Robotic"):
+		await _wait(0.35)
 
 
-## The editor's second tab: the two filter rows and the catalogue under them.
-##
-## Also how the figure gets dressed, and deliberately so — clicking a tile is the
-## only way to wear anything now, since the catalogue keeps its garments whether
-## they are on the body or not and there is no move to make. Reached through the
-## tab button rather than by calling into the home screen, because whether the
-## strip is wired is half of what is being checked.
+## The editor's second tab is a finite view of the saved character's ownership.
+## It may contain apparel, weapons, both, or neither; the screenshot harness must
+## never manufacture ItemDB entries simply to make the grid look populated.
 func _run_character_pockets(body_id: String) -> void:
 	if not _press("Inventory"):
 		push_error("_menu_shot: the editor came up with no Inventory tab")
@@ -175,46 +280,70 @@ func _run_character_pockets(body_id: String) -> void:
 	if page == null:
 		push_error("_menu_shot: the Inventory tab came up with no page")
 		return
-	# From bare, or a click on something the saved look was already wearing takes
-	# it off and the count below reads as tiles that failed to equip.
-	page.worn_slots().clear()
-	await _wait(0.1)
-	var wardrobe := CharacterDB.apparel_ids(body_id)
-	for item_id in wardrobe:
-		await _click(page, item_id)
-	print("_menu_shot: catalogue %s" % _catalogue_state(page))
-	# The same tile again, which has to undress and then dress: a click that only
-	# ever equips leaves the tab with no way of taking anything off.
-	await _click(page, wardrobe[0])
-	print("_menu_shot: catalogue after one toggle %s" % _catalogue_state(page))
-	await _click(page, wardrobe[0])
-	await _rack_a_weapon(page)
+	var owned := _finite_owned_ids(page)
+	print("_menu_shot: finite catalogue count=%d ids=%s %s" % [
+		owned.size(), owned, _catalogue_state(page)])
+
+	# Toggle one garment only when this save really owns one. A second click puts
+	# its worn state back, leaving the capture run lossless even before cleanup.
+	var garment := ""
+	for item_id: String in owned:
+		if ItemDB.is_apparel(item_id) and CharacterDB.apparel_fits(body_id, item_id):
+			garment = item_id
+			break
+	if not garment.is_empty():
+		var before := _catalogue_state(page)
+		await _click(page, garment)
+		await _click(page, garment)
+		print("_menu_shot: finite apparel round trip %s -> %s" % [
+			before, _catalogue_state(page)])
+	else:
+		print("_menu_shot: finite catalogue has no owned apparel to toggle")
+
+	await _arm_owned_weapon(page, owned)
 	_report_fit(page, "pockets")
 	await _capture("menu_character_pockets")
 
 
-## The catalogue lists weapons as well, and a click puts one on the rack rather
-## than on the body. Reached through the Weapons filter and not by finding the
-## tile directly, because a weapon that cannot be *seen* on this tab is a weapon
-## nobody can pick however well the click behind it works.
-func _rack_a_weapon(page: InventoryPage) -> void:
+## If the finite save owns a weapon, show that its tile can arm one of exactly
+## three numbered slots. A character that owns no weapon is a valid empty view.
+func _arm_owned_weapon(
+	page: InventoryPage,
+	owned: PackedStringArray
+) -> void:
+	if page.rack_slots().size() != CharacterDB.HOTBAR_SLOTS:
+		push_error("_menu_shot: home hotbar has %d slots, expected %d" % [
+			page.rack_slots().size(), CharacterDB.HOTBAR_SLOTS])
+		return
 	if not _press("Weapons"):
 		push_error("_menu_shot: the catalogue has no Weapons filter")
 		return
 	await _wait(0.2)
-	var weapons := ItemDB.weapon_ids()
-	if weapons.is_empty():
+	var weapon := ""
+	for item_id: String in owned:
+		if ItemDB.is_weapon(item_id):
+			weapon = item_id
+			break
+	if weapon.is_empty():
+		print("_menu_shot: finite catalogue has no owned weapon to arm")
+		_press("Clothing")
+		await _wait(0.2)
 		return
-	# From an empty rack, or a click on the weapon a previous run left racked
-	# takes it off again and the handover check below reads as a rack that never
-	# filled. The dressing pass clears the body for the same reason.
-	page.rack_slots().clear()
-	await _wait(0.1)
 	print("_menu_shot: weapons filter %s" % _catalogue_state(page))
-	await _click(page, weapons[0])
-	print("_menu_shot: racked %s -> %s" % [weapons[0], page.rack_slots().items()])
+	if page.rack_slots().find(weapon) < 0:
+		await _click(page, weapon)
+	print("_menu_shot: armed owned %s -> %s" % [
+		weapon, page.rack_slots().items()])
 	_press("Clothing")
 	await _wait(0.2)
+
+
+func _finite_owned_ids(page: InventoryPage) -> PackedStringArray:
+	var owned := PackedStringArray()
+	for item_id: String in page.spare_slots().items():
+		if not item_id.is_empty() and not owned.has(item_id):
+			owned.append(item_id)
+	return owned
 
 
 func _click(page: InventoryPage, item_id: String) -> void:
@@ -456,11 +585,41 @@ func _surfaces(node: Node) -> Array[Node]:
 
 
 func _capture(capture_name: String) -> void:
+	if DisplayServer.get_name() == "headless":
+		print("_menu_shot: skipped %s.png (headless display)" % capture_name)
+		return
 	await RenderingServer.frame_post_draw
 	var image := get_viewport().get_texture().get_image()
+	var wanted := Vector2i(
+		int(ProjectSettings.get_setting("display/window/size/viewport_width", 1280)),
+		int(ProjectSettings.get_setting("display/window/size/viewport_height", 720))
+	)
+	if image.get_size() != wanted:
+		image.resize(wanted.x, wanted.y, Image.INTERPOLATE_LANCZOS)
 	var path := ProjectSettings.globalize_path("%s/%s.png" % [CAPTURE_DIR, capture_name])
 	DirAccess.make_dir_recursive_absolute(path.get_base_dir())
 	if image.save_png(path) == OK:
-		print("_menu_shot: saved %s" % path)
+		print("_menu_shot: saved %s (%dx%d)" % [path, wanted.x, wanted.y])
 	else:
 		push_error("_menu_shot: could not save %s" % path)
+
+
+func _snapshot_settings() -> void:
+	var path := ProjectSettings.globalize_path(SETTINGS_PATH)
+	_settings_existed = FileAccess.file_exists(path)
+	if _settings_existed:
+		_settings_bytes = FileAccess.get_file_as_bytes(path)
+
+
+func _restore_settings() -> void:
+	var path := ProjectSettings.globalize_path(SETTINGS_PATH)
+	if not _settings_existed:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+		return
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		push_error("_menu_shot: could not restore %s" % path)
+		return
+	file.store_buffer(_settings_bytes)
+	file.close()

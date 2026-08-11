@@ -175,6 +175,19 @@ vec3 deep_space(vec3 direction, float band) {
 }
 
 
+// Reads the fixed procedural star field through the inverse of the celestial
+// orbit. The visible stars therefore travel around frost_axis with the sun while
+// the planet, its clouds and its coloured regions remain still.
+vec3 celestial_direction(vec3 direction) {
+	vec3 axis = normalize(frost_axis);
+	float angle = -celestial_angle;
+	float cosine = cos(angle);
+	float sine = sin(angle);
+	return direction * cosine + cross(axis, direction) * sine
+		+ axis * dot(axis, direction) * (1.0 - cosine);
+}
+
+
 // Named to_sun rather than sun_direction: the frame's own sun_direction is a
 // global uniform, and a parameter shadowing it is a compile error.
 //
@@ -261,10 +274,11 @@ void sky() {
 		color = mix(atmosphere(EYEDIR, up, to_sun, region_color, region_strength,
 			daylight), space_color, vacuum);
 	} else {
-		float band = pow(1.0 - abs(dot(EYEDIR, normalize(galaxy_axis))), 4.0);
+		vec3 stars_at = celestial_direction(EYEDIR);
+		float band = pow(1.0 - abs(dot(stars_at, normalize(galaxy_axis))), 4.0);
 		band = mix(1.0, band, galaxy_band);
 		color = mix(atmosphere(EYEDIR, up, to_sun, region_color, region_strength,
-			daylight), deep_space(EYEDIR, band), vacuum);
+			daylight), deep_space(stars_at, band), vacuum);
 	}
 
 	// The disc itself, drawn over both skies. Sized from the uniform rather than

@@ -1,0 +1,29 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_tech.gdshader" id="1_tech"]
+
+; The formations are reflective through Godot's real specular response, not a
+; custom light function. A small emissive thin-film term keeps the magenta /
+; turquoise shift visible at night and at grazing angles without flattening the
+; hundreds of authored panel shadows.
+
+[resource]
+resource_name = "AlienTechFormation"
+shader = ExtResource("1_tech")
+shader_parameter/deep_color = Color(0.045, 0.012, 0.09, 1)
+shader_parameter/magenta = Color(1, 0.025, 0.72, 1)
+shader_parameter/turquoise = Color(0.012, 0.96, 0.91, 1)
+shader_parameter/film_albedo = 0.76
+shader_parameter/film_bands = 4.6
+shader_parameter/film_noise_scale = 0.16
+shader_parameter/film_emission = 0.9
+shader_parameter/roughness = 0.12
+shader_parameter/roughness_variation = 0.14
+shader_parameter/specular = 0.96
+shader_parameter/rim = 0.5
+shader_parameter/variation_scale = 0.2
+shader_parameter/variation_amount = 0.13
+shader_parameter/detail_near = 18.0
+shader_parameter/detail_far = 170.0
+shader_parameter/bump_scale = 22.0
+shader_parameter/bump_strength = 0.065

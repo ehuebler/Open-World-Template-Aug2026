@@ -1,0 +1,40 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/firefly_lantern.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/lantern_plant.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/firefly_lantern_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "LanternPodPlant"
+height = 1.15
+height_variation = 0.48
+width_scale = 1.05
+tilt = 11.0
+above_water = 8.0
+below = 200.0
+max_slope = 24.0
+steady_over = 1.8
+steady_within = 0.85
+ground_layer = 1
+minimum_claim = 0.045
+maximum_arid = 0.42
+maximum_frost = 0.34
+local_light_color = Color(1, 0.82, 0.28, 1)
+local_light_energy = 1.6
+per_square_metre = 0.02
+clump_count = 2
+clump_radius = 0.9
+bare_share = 0.68
+patch_size = 36.0
+random_seed = 20261405
+draw_within = 150.0
+thin_from = 26.0
+thin_to = 82.0
+far_density = 0.05
+shadow_within = 0.0
+collision_enabled = false

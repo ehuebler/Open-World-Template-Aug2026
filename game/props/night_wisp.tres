@@ -1,0 +1,24 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_night_phenomena.gdshader" id="1_shader"]
+
+[resource]
+render_priority = 1
+shader = ExtResource("1_shader")
+shader_parameter/primary_color = Color(0.24, 0.62, 1, 1)
+shader_parameter/secondary_color = Color(0.72, 0.26, 1, 1)
+shader_parameter/emission_energy = 3.6
+shader_parameter/opacity = 0.34
+shader_parameter/wisp_shape = true
+shader_parameter/billboard_axis_locked = true
+shader_parameter/wisp_curl = 0.26
+shader_parameter/wisp_curl_speed = 0.34
+shader_parameter/cycle_seconds = 17.0
+shader_parameter/visible_share = 0.62
+shader_parameter/fade_share = 0.17
+shader_parameter/shimmer_speed = 0.0
+shader_parameter/distance_fade_from = 220.0
+shader_parameter/distance_fade_to = 285.0
+shader_parameter/distance_fade_stagger = 16.0
+shader_parameter/night_only = true
+shader_parameter/glow_night_only = true

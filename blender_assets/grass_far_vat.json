@@ -1,0 +1,92 @@
+{
+  "format": "normalized_position_delta_vat",
+  "version": 1,
+  "mesh_node": "GrassFarVAT",
+  "mesh_data": "GrassFarVATMesh",
+  "vertex_color": "Color",
+  "coordinate_space": "godot_y_up_object_local",
+  "axis_conversion": "Blender (x, y, z) -> Godot/glTF (x, z, -y)",
+  "vertex_count": 48,
+  "triangle_count": 32,
+  "frame_count": 16,
+  "frame_start": 0,
+  "frame_end": 15,
+  "fps": 24.0,
+  "width": 48,
+  "height": 16,
+  "delta_min": [
+    -0.06150001287460327,
+    -0.00791122019290924,
+    -0.0
+  ],
+  "delta_max": [
+    0.06150001287460327,
+    0.021551191806793213,
+    0.0719200074672699
+  ],
+  "delta_range": [
+    0.12300002574920654,
+    0.029462411999702454,
+    0.0719200074672699
+  ],
+  "bounds_min": [
+    -0.3982591927051544,
+    0.0,
+    -0.49480998516082764
+  ],
+  "bounds_max": [
+    0.373762845993042,
+    0.35568001866340637,
+    0.4140723943710327
+  ],
+  "topology_sha256": "61676f54c6eaa0601aed3d42e941894db501f17e94c50dd920c6ffabd49f040f",
+  "texture": {
+    "file": "grass_far_vat.exr",
+    "format": "OpenEXR",
+    "channels": "RGBA32F",
+    "payload_channels": "RGB",
+    "normalization": "delta = delta_min + texel.rgb * (delta_max - delta_min)",
+    "row_zero": "frame_start at V=(0.5/height)",
+    "padding_vertices": 0,
+    "padding_frames": 0
+  },
+  "uv2": {
+    "layer": "VAT_ID",
+    "gltf_attribute": "TEXCOORD_1",
+    "x": "(vertex_id + 0.5) / width",
+    "y": 0.5,
+    "domain": "CORNER (same x copied to every loop of each vertex)"
+  },
+  "animation": {
+    "frames": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "loop": true,
+    "loop_endpoint": 16,
+    "loop_endpoint_stored": false,
+    "loop_endpoint_max_error": 0.0,
+    "loop_note": "The duplicate endpoint matches frame_start and is omitted; after frame_end, interpolate/wrap to texture row zero."
+  },
+  "files": {
+    "mesh": "grass_far_vat.glb",
+    "texture": "grass_far_vat.exr",
+    "metadata": "grass_far_vat.json"
+  },
+  "glb_vertex_count": 64,
+  "glb_triangle_count": 32
+}

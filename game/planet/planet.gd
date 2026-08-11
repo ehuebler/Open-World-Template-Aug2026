@@ -42,9 +42,22 @@ const FACES: Array[Array] = [
 @export var shape: PlanetShape
 
 @export_group("Detail")
-## Quads along one edge of a chunk. Total triangles per chunk is twice its square,
-## so this trades chunk count against triangles inside each one.
+## Quads along one edge of an ordinary chunk. Total triangles per chunk is twice
+## its square, so this trades chunk count against triangles inside each one.
+## Shallow chunks may multiply it through [member far_detail_depth].
 @export_range(4, 48, 2) var chunk_resolution := 16
+## Minimum *visual* depth of the planet seen from far away. The quadtree still
+## begins at depth 0 so its six root meshes can cover the globe immediately, but
+## depths below this use proportionally more quads: with 3, depth 0 uses 128 per
+## edge, depth 1 uses 64, depth 2 uses 32 and depth 3 uses 16. All four therefore
+## describe the same depth-3 grain and replacing one with the next causes no
+## coarse-to-medium texture/geometry step. Deeper levels refine normally up to
+## [member max_depth]. The live world sets 4, giving 256/128/64/32/16 and a
+## 49 m far grain while leaving the finest 1.5 m grain unchanged.
+##
+## Kept scene-configurable rather than made the universal default because tiny
+## standalone harness planets do not need a high-resolution root face.
+@export_range(0, 4) var far_detail_depth := 0
 ## Deepest subdivision. Vertex spacing at the surface is
 ## (pi / 2) * radius / (2 ^ max_depth) / chunk_resolution — about 1.5 m at the
 ## defaults, which is finer than a footstep.
@@ -61,13 +74,16 @@ const FACES: Array[Array] = [
 ## What it moves is where the ground stops being sharp, not how much of the planet
 ## is on screen: the whole visible cap is always drawn, coarser with distance, and
 ## no level here removes any of it. Cost is roughly the square of the scale, since
-## it is an area of ground being held at each level of detail — 155k, 301k and
-## 601k triangles from the air, by `_perf_test.tscn -- --distance`.
+## it is an area of ground being held at each level of detail. With the live
+## world's depth-4 far grain and 2.2 scene ratio, `_perf_test.tscn -- --distance`
+## measures about 900k, 1.01M and 1.30M triangles from low air. Most of that is
+## the new coarse floor shared by all three levels; switching Normal to Far adds
+## only the refinement beyond it.
 ##
-## Three rather than four. A 2.4 was measured and dropped: it cost 1.1M triangles
-## and twice the collision bodies, and could not be told from 1.6 in a photograph
-## from either the air or the ground. A level nobody can see is a level that only
-## costs.
+## Three rather than four. The old 2.4 level was measured and dropped: it cost
+## roughly twice the collision bodies and could not be told from 1.6 in a
+## photograph from either the air or the ground. A level nobody can see is a
+## level that only costs.
 const DETAIL_LEVELS: Array[Dictionary] = [
 	{"label": "Near", "scale": 0.6},
 	{"label": "Normal", "scale": 1.0},
@@ -128,13 +144,24 @@ var detail_level := 1
 ## Every pass over it is GDScript across about a thousand nodes and costs a few
 ## milliseconds, and there are two of them — deciding what to split and deciding
 ## what to draw. Run once a frame at 300 fps that was most of the frame, and it
-## bought nothing: which chunk deserves splitting does not change between frames
-## three milliseconds apart. At 200 m/s, thirty a second is a fresh look every
-## seven metres, against chunks that are twenty-four metres across.
+## bought nothing while standing still: which chunk deserves splitting does not
+## change between frames three milliseconds apart.
 ##
 ## Finished meshes are still handed to the scene every frame — that part is a
 ## tenth of a millisecond and it is what puts new ground on screen.
 @export_range(5, 240) var lod_updates_per_second := 30
+## Faster quadtree walk used only while the viewer is crossing the ground fast.
+##
+## At 1000 m/s the ordinary 30 Hz walk moves its refinement corridor in 33 m
+## jumps. Forty-five makes those steps 22 m while leaving a parked planet at the
+## cheaper rate above. `dev/_perf_test.gd -- --speed=1000 --lodhz=45` measured
+## no dropped frames and kept depth 8 or 9 underfoot throughout the crossing.
+@export_range(5, 240) var fast_lod_updates_per_second := 45
+## Speed band over which the walk rate eases from ordinary to fast. It starts
+## above every normal sprint, so walking and the 18 m/s grounded gait pay
+## nothing; by sustained flight the predictive corridor is fully responsive.
+@export var fast_lod_from_speed := 80.0
+@export var fast_lod_at_speed := 300.0
 
 @export_group("Lead")
 ## Seconds of travel the detail is built ahead of the viewer.
@@ -153,7 +180,7 @@ var detail_level := 1
 ##
 ## It is a *time* and not a distance because what it has to cover is a latency.
 ## Setting it to zero restores the old behaviour exactly.
-@export_range(0.0, 3.0, 0.05) var lead_time := 0.6
+@export_range(0.0, 3.0, 0.05) var lead_time := 0.8
 ## The furthest ahead the detail may be built, in metres.
 ##
 ## The cap is what keeps this from being expensive. The region refined is a
@@ -164,7 +191,7 @@ var detail_level := 1
 ## not `lead_time`, was what a fast viewer actually got: a second of warning was
 ## clipped to a third of one at `fly_speed`, which is most of the way back to
 ## having no lead at all.
-@export_range(0.0, 2000.0, 10.0) var lead_distance := 750.0
+@export_range(0.0, 2000.0, 10.0) var lead_distance := 1000.0
 ## Seconds the measured velocity is smoothed over. The refine pass is the most
 ## expensive thing in here, so the point it is centred on must not jitter: a
 ## velocity read off two positions one walk apart is noisy enough to swing the
@@ -178,6 +205,12 @@ const LEAD_MIN_SPEED := 8.0
 ## it would point the lead at wherever the viewer came from for the better part of
 ## a second, so the reading is thrown away and the drift restarted instead.
 const LEAD_TELEPORT_SPEED := 2000.0
+## How far the ground has to fall, in metres, before the colliders over it are
+## dropped ahead of the rebuild rather than left standing. Roughly a stride: a
+## cut shallower than this is a step to walk down, and the stale body sitting a
+## few centimetres proud of the new ground for a few frames is not something
+## anyone can feel. See [method _mark_stale] for what dropping one costs.
+const COLLIDER_DROP := 0.5
 ## How many chunks may be queued for a mesh, as a multiple of the pool's width,
 ## before the tree stops growing. Some queue is wanted — it is what keeps a slot
 ## from ever standing idle — so this is a backlog several builds deep and not a
@@ -278,6 +311,10 @@ var water: PlanetWater
 ## [member shape]; this is only what happens in it.
 var snowfield: Snowfield
 
+## Burn marks projected over the ground. The lasting record of a burn is the
+## scar in [member PlanetShape.scars]; this is the readable one.
+var scorches: ScorchDecals
+
 var _roots: Array[Chunk] = []
 var _pending: Dictionary = {}
 var _finished: Array[Chunk] = []
@@ -298,6 +335,9 @@ var _split_reach := 2.0
 ## the thing every per-frame pass is proportional to.
 var _walked := 0
 var _since_lod := 0.0
+## Rate selected for the next quadtree walk. Kept for statistics so a fast-flight
+## report can prove the adaptive path was actually active.
+var _lod_walk_rate := 30.0
 ## Depth of the finest drawn chunk the viewer is *over*, and how far its origin
 ## is. -1 while nothing is drawn over the viewer at all, which is a different
 ## answer from depth 0 and has to stay tellable apart from it: a root patch drawn
@@ -314,10 +354,16 @@ var _lead_direction := Vector3.ZERO
 var _lead_length := 0.0
 ## Drawn chunks within [member collision_range] still waiting for a body.
 var _floorless := 0
-## Times a build landed on a chunk that already held a mesh. `chunk.instance` is
-## the only handle anything has on that node, so an overwrite would leave the
-## displaced mesh drawn and unreachable forever. Zero is the only correct reading
-## and there is no throttle that makes a non-zero one acceptable.
+## Times a build landed on a chunk that already held a mesh *without* having been
+## asked to replace it. `chunk.instance` is the only handle anything has on that
+## node, so an overwrite would leave the displaced mesh drawn and unreachable
+## forever. Zero is the only correct reading and there is no throttle that makes
+## a non-zero one acceptable.
+##
+## A scar rebuild lands on a chunk that already holds a mesh every single time,
+## by design, and counting those here would bury the fault this exists to catch
+## under a steady stream of correct behaviour. `Chunk.rebuilding` tells them
+## apart.
 var _stranded := 0
 var _built_meshes := 0
 ## Worker-thread time spent building the meshes counted by [member _built_meshes],
@@ -336,6 +382,7 @@ var _show_micros := 0.0
 var _published_center := Vector3.INF
 var _published_sun := Vector3.ZERO
 var _published_pole := Vector3.ZERO
+var _published_speed := -1.0
 
 
 ## One node of one face's quadtree. Alive from the moment it is split into until
@@ -372,6 +419,21 @@ class Chunk extends RefCounted:
 	## Set when the parent collapses while a build is still running. The result is
 	## thrown away rather than cancelled, because a pool task cannot be recalled.
 	var discarded := false
+	## Set when the ground this chunk describes has changed under it — a crater
+	## or a burn was added inside its footprint — so the mesh it is holding is no
+	## longer what the height field says. It goes back through the ordinary
+	## request queue rather than being rebuilt on the spot, which is what keeps a
+	## burst of scars from turning into a frame spike: the same nearest-first
+	## budget that builds new ground rebuilds changed ground.
+	var stale := false
+	## Set while the build now on the pool is a *replacement* for a mesh this
+	## chunk already has, rather than the first one it has ever had. Recorded
+	## when the build is handed out, because [member stale] is cleared at that
+	## moment and the distinction is not available again by the time the mesh
+	## lands. What it buys is at [method _attach]: a replacement has to take over
+	## from ground that is already on screen without a gap, where a first build
+	## has to wait for the walk to choose it.
+	var rebuilding := false
 
 	func has_mesh() -> bool:
 		return instance != null
@@ -384,6 +446,7 @@ func _ready() -> void:
 	_publish_frame()
 	_raise_water()
 	_raise_snowfield()
+	_raise_scorches()
 	_raise_clouds()
 	_raise_atmosphere()
 	_follow_render_distance()
@@ -460,7 +523,15 @@ func _process(delta: float) -> void:
 	_dispatch_micros = float(Time.get_ticks_usec() - dispatching)
 
 	_since_lod += delta
-	if _since_lod < 1.0 / float(lod_updates_per_second):
+	# A parked viewer gets the cheap cadence; a fast one gets a corridor moved
+	# often enough that each walk still overlaps the last. `_drift` is the
+	# smoothed velocity from the previous walk, so this does not react to camera
+	# bob or one-frame transform noise.
+	var fast_share := smoothstep(fast_lod_from_speed,
+		maxf(fast_lod_at_speed, fast_lod_from_speed + 0.01), _drift.length())
+	_lod_walk_rate = lerpf(float(lod_updates_per_second),
+		float(fast_lod_updates_per_second), fast_share)
+	if _since_lod < 1.0 / maxf(_lod_walk_rate, 1.0):
 		# Zeroed rather than left alone, so an average over frames is an average
 		# of what those frames actually cost and not of the last one that walked.
 		# Dispatch is not among them: it ran above, on this frame.
@@ -536,10 +607,127 @@ func finest_spacing() -> float:
 	return spacing_at_depth(max_depth)
 
 
+## Cuts one mark into the ground and rebuilds whatever was drawing it.
+##
+## The single entry point for terrain deformation. Abilities, and anything else
+## that ever wants to dent the planet, describe the mark and hand it here; the
+## registry makes it part of the height field and this makes the world catch up
+## with the height field. Nothing outside this file needs to know that ground is
+## a quadtree of cached meshes.
+##
+## Returns the scar so a caller can keep hold of it — the laser deepens the same
+## mark for as long as it is held on one spot rather than laying a new one every
+## tick.
+func add_scar(scar: TerrainScars.Scar) -> TerrainScars.Scar:
+	shape.scars.add(scar)
+	mark_region_stale(scar.direction, scar.radius, scar.depth)
+	_mark_ground(scar)
+	return scar
+
+
+## Lays the lasting burn a scar is seen as.
+##
+## The scar's own darkening goes into the vertex colour of the rebuilt chunk,
+## which is the version that survives streaming and is right from a distance.
+## Close up the ground is drawn from a photographic material and a tint carried
+## by a handful of vertices under that does not read at all, so the mark that
+## makes a burn a burn is a decal, and for a scar it is one that does not fade.
+func _mark_ground(scar: TerrainScars.Scar) -> void:
+	if scorches == null or scar.char <= 0.0:
+		return
+	var at := global_transform * shape.surface_point(scar.direction)
+	scorches.scorch(at, up_at(at), scar.radius,
+		clampf(scar.char, 0.0, 1.0), true)
+
+
+## Tells the quadtree that the ground inside a patch has changed.
+##
+## Separate from [method add_scar] because a scar that is deepened in place
+## changes ground it is already registered over, and because the height field
+## could in principle be moved by something that is not a scar at all.
+##
+## [param drop] is how far the ground fell, and decides whether the colliders
+## over the patch are worth keeping until the rebuild lands. See [method
+## _mark_stale].
+func mark_region_stale(direction: Vector3, arc: float, drop := 0.0) -> void:
+	var at := direction.normalized()
+	for root in _roots:
+		_mark_stale(root, at, arc, drop)
+
+
+func _mark_stale(chunk: Chunk, at: Vector3, arc: float, drop: float) -> void:
+	# A child's footprint is inside its parent's, so a parent that cannot reach
+	# the patch settles the whole subtree under it in one comparison. Generous
+	# by the chunk's full width rather than its half-diagonal: marking a chunk
+	# that did not need it costs one rebuild, and missing one leaves a crater
+	# with a square of untouched ground in the middle of it.
+	#
+	# Measured between the two directions projected back to sea level, not
+	# between the points themselves. A chunk's origin is lifted to its own patch
+	# of ground, so on a mountain the raw distance to a sea-level direction is
+	# mostly the mountain's height: a crater cut on a thirty-metre rise compared
+	# its six-metre radius against a thirty-three-metre gap and marked nothing
+	# at all, leaving the height field dented and the mesh flat over it.
+	if chunk.origin.normalized().distance_to(at) * shape.radius \
+			> arc + chunk.arc:
+		return
+	# Coarse chunks are walked through but not marked. A chunk whose vertices
+	# are further apart than the patch is wide cannot draw it — the height field
+	# fades every scar out at spacings that would alias it — so rebuilding one
+	# produces the mesh it already has. Before this, a two-metre laser burn
+	# marked every ancestor it sat under, up to a root patch of tens of
+	# thousands of vertices, and each of those was then built a vertex at a time
+	# in GDScript to arrive at exactly the ground it started with. That was half
+	# a second of worker time per burn, four times a second while the beam was
+	# held. The children are still visited: they are the ones that can show it.
+	if chunk.has_mesh() and shape.scars.resolves(arc, spacing_at_depth(chunk.depth)):
+		chunk.stale = true
+		# A deep enough cut takes its colliders with it rather than waiting for
+		# the rebuild.
+		#
+		# A mesh may lag the height field by a few frames without anyone
+		# noticing; a collider may not. It is the thing bodies stand on, and one
+		# generated from ground that has since been dug away holds a player up
+		# on a surface that is no longer there — and then drops them into the
+		# hole the moment it is finally replaced, which is exactly the fall you
+		# feel after landing a punch. Between here and the rebuild the
+		# height-field guard is the floor, and the height field already has the
+		# crater in it. `_update_collision` puts a body back from the faces the
+		# rebuild produces.
+		#
+		# Only for cuts deeper than a stride, though, and the threshold is the
+		# whole of it. Dropping a body leaves drawn ground with nothing under it
+		# for as long as the rebuild takes, which is the one state this quadtree
+		# is otherwise careful never to be in — see `_floorless`. That is a fair
+		# trade for a crater, where the alternative is standing on a ledge of
+		# ground that no longer exists. It is a bad one for a laser groove: the
+		# beam cuts a fifth of a metre, four times a second, wherever the player
+		# happens to be looking, which is very often at their own feet. Paying
+		# the floor for that means the ground underneath is repeatedly not
+		# there, the guard catches the body a little lower each time, and the
+		# camera dips through a surface it should be standing on.
+		if drop >= COLLIDER_DROP and chunk.body != null:
+			chunk.body.queue_free()
+			chunk.body = null
+	for child in chunk.children:
+		_mark_stale(child, at, arc, drop)
+
+
 ## Vertex spacing of a chunk at a given depth, which is what its mesh is
 ## band-limited to.
 func spacing_at_depth(depth: int) -> float:
-	return PI * 0.5 * shape.radius / pow(2.0, depth) / float(chunk_resolution)
+	return PI * 0.5 * shape.radius / pow(2.0, depth) \
+		/ float(_resolution_at_depth(depth))
+
+
+## Resolution that preserves [member far_detail_depth] grain through the broad
+## root levels. Multiplying resolution while chunk width halves keeps the vertex
+## spacing identical, so those levels repartition the same surface rather than
+## visibly sharpening it one step at a time.
+func _resolution_at_depth(depth: int) -> int:
+	var floor_depth := mini(far_detail_depth, max_depth)
+	var skipped := maxi(floor_depth - depth, 0)
+	return chunk_resolution * (1 << skipped)
 
 
 ## Vertex spacing of the ground actually drawn under the viewer, right now.
@@ -649,6 +837,8 @@ func statistics() -> Dictionary:
 		"show_ms": _show_micros / 1000.0,
 		"nodes": _walked,
 		"reach": _split_reach,
+		"lod_hz": _lod_walk_rate,
+		"lead": _lead_length,
 	}
 
 
@@ -657,8 +847,25 @@ func statistics() -> Dictionary:
 ## Writes the globals the vivid shaders read. Guarded on change rather than
 ## written every frame: a global shader parameter counts as a uniform change, and
 ## the sky's radiance cubemap — which is the scene's ambient light — is rebuilt
-## whenever one moves.
+## whenever one moves. The sun is the one that now moves every frame, by design:
+## CelestialCycle turns it continuously and the Sky is set to realtime to match,
+## so freezing it again to save the rebuild would only stop the day.
 func _publish_frame() -> void:
+	# How fast the viewer is crossing the ground, which the terrain shader uses
+	# to calm the detail that has no mip chain to calm itself; see its Motion
+	# block. Taken from the drift already smoothed for the detail lead rather
+	# than measured again, so the ground and the quadtree agree about how fast
+	# this is going.
+	#
+	# On the material and not as a global, unlike everything below: a global
+	# shader parameter is a uniform change the sky answers with a radiance
+	# rebuild, and this one moves whenever the player touches the throttle.
+	# Rounded for the same reason — full precision here would write it every
+	# frame of every flight to say the speed changed by a millimetre a second.
+	var speed := snappedf(_drift.length(), 0.5)
+	if speed != _published_speed:
+		_published_speed = speed
+		SURFACE_MATERIAL.set_shader_parameter(&"eye_speed", speed)
 	var center := global_position
 	if center != _published_center:
 		_published_center = center
@@ -705,6 +912,12 @@ func _raise_snowfield() -> void:
 	snowfield.shape = shape
 	snowfield.viewer_source = viewer_position
 	add_child(snowfield, false, Node.INTERNAL_MODE_BACK)
+
+
+func _raise_scorches() -> void:
+	scorches = ScorchDecals.new()
+	scorches.name = "Scorches"
+	add_child(scorches, false, Node.INTERNAL_MODE_BACK)
 
 
 ## The weather, drawn as one sphere a kilometre or so up.
@@ -839,7 +1052,7 @@ func _refine(chunk: Chunk, eye: Vector3) -> void:
 	# Every level on the path gets a mesh, not just the leaves. A coarse ancestor
 	# is what covers the ground while its children are still on the thread pool,
 	# so without them the planet has a hole in it wherever the viewer is looking.
-	if not chunk.has_mesh() and not chunk.queued:
+	if (not chunk.has_mesh() or chunk.stale) and not chunk.queued:
 		_requests.append(chunk)
 	_walked += 1
 	# Measured to the path and not to the viewer, so a chunk about to be flown
@@ -1041,7 +1254,7 @@ func _dispatch(_eye: Vector3) -> void:
 			# clears `queued` the instant a build lands — so between that attach
 			# and the next walk, a chunk that is finished and drawn still looks
 			# like an outstanding request and gets built all over again.
-			if chunk.queued or chunk.has_mesh():
+			if chunk.queued or (chunk.has_mesh() and not chunk.stale):
 				continue
 			if chunk.distance < nearest_at:
 				nearest_at = chunk.distance
@@ -1049,6 +1262,11 @@ func _dispatch(_eye: Vector3) -> void:
 		if nearest == null:
 			return
 		nearest.queued = true
+		nearest.rebuilding = nearest.stale
+		# Cleared as the build is handed out rather than when it lands, so a
+		# scar added while this one is on the pool marks the chunk again and
+		# earns it a second rebuild instead of being silently swallowed.
+		nearest.stale = false
 		_pending[WorkerThreadPool.add_task(_build.bind(nearest))] = nearest
 
 
@@ -1080,8 +1298,12 @@ func _apply_finished() -> void:
 ## on screen above the refined chunks that replaced it, with no collider, because
 ## a collider belongs to the chunk and the chunk has moved on.
 func _attach(chunk: Chunk) -> void:
+	var shown := false
 	if chunk.instance != null:
-		_stranded += 1
+		if chunk.rebuilding:
+			shown = chunk.instance.visible
+		else:
+			_stranded += 1
 		chunk.instance.queue_free()
 		chunk.instance = null
 	var mesh := ArrayMesh.new()
@@ -1092,11 +1314,43 @@ func _attach(chunk: Chunk) -> void:
 	# Vertices are stored around the chunk's own origin, so a chunk 8 km from the
 	# planet's centre still has small coordinates and a tight bounding box.
 	instance.position = chunk.origin
-	instance.visible = false
+	# Ground that was on screen a moment ago goes straight back on screen.
+	#
+	# Waiting for the next `_show` walk to choose it is a hole in the planet, and
+	# not a brief one: meshes are attached every frame but the walk runs at
+	# `lod_updates_per_second`, so a rebuild landing just after one waits the
+	# best part of a walk interval with nothing drawn there at all. Nothing else
+	# covers it either — the parent that used to draw this patch retired its own
+	# mesh when this chunk took it over — so what is behind it is the inside of
+	# the world. A held laser commits several scars a second and it read as the
+	# terrain flickering out from under the beam.
+	#
+	# Only a replacement. A first build has no predecessor to inherit from and
+	# must still wait to be chosen, which is what stops half-built ground
+	# appearing through the coarse mesh that is standing in for it.
+	instance.visible = shown
 	# Internal, so the hundreds of them stay out of the Scene dock and out of the
 	# saved file when the quadtree is running in the editor.
 	add_child(instance, false, Node.INTERNAL_MODE_BACK)
 	chunk.instance = instance
+	chunk.rebuilding = false
+	# The collider was generated from the mesh that has just been replaced, so it
+	# goes with it — and it is replaced here and now rather than left to the next
+	# collision pass.
+	#
+	# Handing it to `_update_collision` looks equivalent and is not. That pass is
+	# budgeted by `bodies_per_frame` and shares its allowance with all the
+	# ordinary streaming, so a chunk can spend several frames drawn with nothing
+	# under it, which is the `_floorless` state this tree is otherwise careful
+	# never to enter. Under a held laser that is ground the player is standing on
+	# going away four times a second. There is no saving in deferring it either:
+	# the faces this build produced are in hand, the work is the same work, and
+	# only chunks that already had a body — the handful near the viewer — pay it.
+	if chunk.body != null:
+		chunk.body.queue_free()
+		chunk.body = null
+		if not chunk.collision_faces.is_empty():
+			chunk.body = _make_body(chunk)
 	_built_meshes += 1
 	_build_micros_total += chunk.build_micros
 
@@ -1105,11 +1359,12 @@ func _attach(chunk: Chunk) -> void:
 ## shape, which is read-only once prepared.
 func _build(chunk: Chunk) -> void:
 	var began := Time.get_ticks_usec()
-	if not shape.overlaps_town(chunk.origin, chunk.arc):
+	var resolution := _resolution_at_depth(chunk.depth)
+	if not shape.needs_script_build(chunk.origin, chunk.arc,
+			chunk.arc / float(resolution)):
 		_build_natively(chunk)
 		chunk.build_micros = float(Time.get_ticks_usec() - began)
 		return
-	var resolution := chunk_resolution
 	# One skirt ring outside the patch on every side, so the grid is the patch
 	# plus a border rather than a patch with special cases at its edges.
 	var side := resolution + 3
@@ -1214,7 +1469,7 @@ func _build(chunk: Chunk) -> void:
 ## port [CityPlan] as well or to teach the native field about something that is
 ## not terrain.
 func _build_natively(chunk: Chunk) -> void:
-	var resolution := chunk_resolution
+	var resolution := _resolution_at_depth(chunk.depth)
 	var axes: Array = FACES[chunk.face]
 	var patch: Dictionary = shape.build_patch(
 		axes[0], axes[1], axes[2], chunk.offset, chunk.size, resolution,

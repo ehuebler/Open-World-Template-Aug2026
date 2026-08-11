@@ -32,7 +32,7 @@ Controls:
 | V, held | Talk to everyone in the session |
 | Escape | Pause |
 
-While flying, the mouse is the steering: hold forward and you go wherever you are looking, including straight down, which is how a flight is ended — there is no cancel key, a flight ends where it lands. Space climbs. The controls and the current speed are on a card in the bottom-left corner for as long as the feet are off the ground.
+While flying, the mouse is the steering: hold forward and you go wherever you are looking, including straight down. There is no cancel key: ground ends a flight, while entering the sea hands it directly to swimming and carries 85% of the arrival speed into the water. The separate two-press launch from swimming remains a flight under water until it reaches the air. Space climbs. The controls and the current speed are on a card in the bottom-left corner for as long as the feet are off the ground.
 
 **Tab** opens your inventory anywhere: what you are wearing, a live model of it, your rack of weapons, and your pockets. At the wardrobe in the test world, **E** opens the same screen with the wardrobe's rail added to it. Drag a garment onto a body slot to put it on, or shift-click it to send it straight to the slot it belongs in. Weapons work the same way and go to the rack of five slots that the HUD bar mirrors. Hovering a tile names the item and describes it.
 
@@ -71,6 +71,7 @@ Add `--private --lobby-code=YOURCODE` to host a private headless lobby. Lobby co
 - Home screen, camera poses and the hand-over into gameplay: `ui/menu/home_screen.gd`; the forms it puts up are `ui/menu/settings_panel.gd` and `ui/menu/lobby_panel.gd`
 - Settings defaults and persistence: `core/settings_manager.gd`
 - Test world: `game/world.tscn`. The round props deliberately collide as straight-sided cylinders: art that curves in under itself overhangs the player's feet, and a capsule character wedges under that instead of sliding off it.
+- Alien-tech formations: `game/props/tech_formation_sites.gd` owns five deterministic 1.4 km-wide fields, including the north-pole floe. Each contains 36 instances ranging from the original room-sized shards to 300 m fragments, all from the one 562-panel mesh owned by `blender_assets/source/build_tech_fragment.py`; `game/props/tech_formation.tres` owns their reflective magenta/turquoise film. The five fields and the four tallest natural summits are orbital-range waypoints.
 - Player tuning: exported values in `game/player/player.gd`, including the whole `Flight` group
 - Items and their descriptions: `ItemDB.ITEMS` in `game/items/item_db.gd`
 - What the wardrobe starts stocked with: `STOCK` in `game/props/wardrobe_station.gd`
@@ -89,11 +90,13 @@ Press space in mid-air and the character takes off: it hovers upright with one k
 
 Flight is a fourth `Stance`, not a flag beside the other three. That one decision pays for most of the feature: the stance is already synced to every peer and already indexes the collider and eye-height tables, so a remote player animates and leans correctly with nothing added to the wire, and the host already knows which stance a submitted packet claims to be in. It borrows the standing capsule, which is why taking off and landing never have to ask whether there is room the way standing up out of a crouch does.
 
-Three things are worth knowing before retuning it.
+Four things are worth knowing before retuning it.
 
 **The boost is a target, not an acceleration.** `_cruise` is the speed the player is asking for; `boost_time`, `ease_time` and `brake_time` move it across the whole range, and the velocity chases it with an acceleration that grows with it. Keeping the two apart is what lets the boost read as a long wind-up while a turn at 200 m/s stays a wide arc and a turn at hovering speed stays a pivot. Steering comes off the **camera's** basis rather than the body's, so looking down and holding forward is a dive; only the head pitches, so the camera's own X stays level and a strafe never rolls the flight path.
 
 **The lean is the animation.** The two clips only cover the ends; everything between them is `character.rotation.x`, driven by one smoothed `_fly_blend` that also opens the field of view and picks the clip. It turns about the hips rather than the feet, because pitching about the feet would swing the head most of a body length forward and bury the shoulders. Pointed straight up, the same formula stands the body back upright; straight down, it goes head first.
+
+**Water entry is a momentum handoff.** A flight arriving from the air changes to `SWIM` as soon as it is clearly through the surface, keeps `swim_entry_keep` of its velocity in the same direction, and lets the ordinary water drag slow it from there. The stroke target and swim lean are seeded from that carried speed, so the body starts in `Swim` rather than briefly standing upright in `Tread`. A flight deliberately launched by double-pressing space while swimming is exempt until it clears the sea; once airborne, its next entry becomes a swim normally.
 
 **Space in clear air and space about to land are the same press.** The jump buffer exists to catch a press made just before touchdown, and a take-off would eat exactly those presses, so take-off additionally requires `TAKEOFF_CLEARANCE` of clear air below the feet. Under a metre, space is still asking to jump on landing. `dev/_player_test.gd` checks both halves, because getting one right silently breaks the other.
 
@@ -109,9 +112,28 @@ The test world's floor is 32 m across, which a boosted flight leaves in well und
 - One continuous 20.5k-quad body skin, decimated on export. There are no separate head/arm/leg objects and no seams to hide.
 - 23 bones named to match Godot's `SkeletonProfileHumanoid` (`Hips`, `Spine`, `Chest`, `UpperChest`, `Neck`, `Head`, `Left/RightShoulder`, `UpperArm`, `LowerArm`, `Hand`, `UpperLeg`, `LowerLeg`, `Foot`, `Toes`), so retargeting and `BoneMap` work without renaming. `Root` is a transport handle and carries no weights.
 - Modelled in an A-pose with at most four bone influences per vertex.
-- One material, `CharacterBody`. `PencilSkin` gives every imported surface its own copy of `player_suit.tres` and copies that surface's albedo colour and texture into the pencil shader, so recolouring anything in Blender needs no script change. The body, its garments, the wardrobe prop and the menu's model preview all go through it.
+- One material, `CharacterBody`. `SurfaceSkin` gives every imported surface its own copy of `player_suit.tres` and copies that surface's albedo colour and texture into the vivid shader, so recolouring anything in Blender needs no script change. The body, its garments, the wardrobe prop and the menu's model preview all go through it.
 - The `Apparel` collection in the `.blend` is **excluded from this export**, because `build_apparel.py` writes each garment as its own `.glb` for the wardrobe to put on and take off. Exporting them into the body would weld the clothes to the character.
 - Thirteen baked clips, imported as an `AnimationPlayer` beside the rig.
+
+### Settler robotic textures
+
+`blender_assets/player_character_3.glb` is the 1.60 m settler body. Its default look is `generated/textures/luke.png`; `character_3_clean_robotic.png` (red, cream and gold with cyan cores) and `character_3_integrated_robotic.png` (violet skin under graphite, silver and red armour with cyan lights) remain selectable alternatives. They are texture schemes on one body, not separate bodies: the skeleton, collider, animation set and `c3_*` apparel are shared.
+
+The supplied front/back concept sheets are elevations of different proportions, not UV maps, and the source sculpt has no UV coordinates. `blender_assets/source/character_3_skins.py` therefore owns the adaptation. `build_character_3.py` asks it to make one packed atlas, evaluates those two designs in the mesh's original 3D metres, and rasterises both PNGs through that atlas. Luke is painted directly against the same atlas and is put on the exported material as the default:
+
+```powershell
+& $blender --background --python blender_assets/source/build_character_3.py
+& $godot --headless --path . --import
+```
+
+The home-screen Hero Design tab lists all three schemes from `CharacterDB.SKINS`. The saved look and player metadata carry a `skin` id beside `body`; peers therefore draw the same scheme without duplicating the `.glb`. The colour wheel remains a multiplicative wash over the selected texture. **No tint** removes that sparse tint entry rather than saving white, so the authored texture is restored exactly and later texture edits are not hidden behind an override.
+
+Both skins can be rendered from the same generated `.blend` without rebuilding:
+
+```powershell
+& $blender --background generated/character_3_rigged.blend --python dev/_render_dressed.py -- --hide=apparel --skin=integrated_robotic --out=c3_integrated
+```
 
 ### Animation clips
 
@@ -120,7 +142,7 @@ The test world's floor is 32 m across, which a boosted flight leaves in well und
 | `Idle` | yes | Standing still |
 | `Walk`, `Run` | yes | Ground speed, resampled with `speed_scale` so the feet keep up |
 | `CrouchIdle`, `CrouchWalk` | yes | Crouch stance |
-| `JumpRise`, `Fall` | rise no, fall yes | Airborne, split on the sign of vertical velocity |
+| `JumpRise`, `Fall`, `AirRun` | rise and air-run no, fall yes | Airborne: rise/fall initially, then a held landing stride after one second |
 | `Land` | no | Touchdown, skipped if you land still running |
 | `Slide` | no | Slide stance; eases into the pose and holds it |
 | `Float`, `Fly` | yes | Flight stance, split on how much of the boost is in |
@@ -473,6 +495,120 @@ $blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
 The first writes `source/cave_room.blend` and the `.glb`, printing the chamber's measured size, the polygon budget per object, how much dripstone was placed, and the two shell integrity checks. The second writes previews to `source/previews/`: the chamber, the tunnel mouth from across the room, the arrival view from inside the passage, the ceiling, the crystals, and `cave_scale`, which stands the character in the room.
 
 Unlike the prop previews, `render_cave.py` sets up **no light rig** — the room's own crystals are the subject and a three-point rig would flood out the only thing worth looking at. The world is left nearly, but not quite, black: at zero, every surface the crystals do not reach renders as a flat silhouette and the dripstone in front of a glow turns into a paper cut-out.
+
+## Abilities
+
+Two of them, on the two mouse buttons whenever nothing is drawn: **Laser Eyes** on left, **Meteor Punch** on right. They are not weapons and they do not go in the weapon rack — `OnlinePlayer.abilities` is its own container, `ItemDB` marks their entries `KIND_ABILITY`, and the same slot filter that keeps a hat out of the weapon wheel keeps a sword out of an ability slot.
+
+They exist as a framework rather than as two special cases, because most of what an ability needs is the same for all of them. `game/abilities/ability.gd` holds the cooldown, the stances it is allowed from, and whether water stops it; `ability_controller.gd` is a node under the player that builds one ability per filled slot from the catalogue and drives press, hold and release. Adding a third ability is a script and an `ItemDB` entry.
+
+Their numbers live in `ItemDB.ITEMS` rather than in the scripts, so the ability that quotes 180 damage a second in the menu is the ability that deals it:
+
+```gdscript
+"laser_eyes": {
+	"title": "Laser Eyes",
+	"kind": KIND_ABILITY,
+	"script": "res://game/abilities/laser_eyes.gd",
+	"stats": {"damage": 180.0, "damage_unit": "/s", "duration": 4.0,
+		"range": 60.0, "cooldown": 3.0, "radius": 0.35},
+},
+```
+
+`ItemDB.stat_lines(id)` turns that into the lines the menu shows (`Damage   180 / s`, `Range   60 m`), so every ability is formatted by one table instead of by whoever wrote its panel.
+
+### What they do to the world
+
+Neither ability knows what it is hitting. Both describe a **volume** — `game/combat/damage_hit.gd`: a capsule, an amount, and how fast the amount falls off across it — and hand it to every field in the `flora_damage_fields` group, which works out for itself which of the things it owns are inside. That is what lets one laser tick damage grass, a tree trunk and the ground with the same object, and it is the only way to hit grass and shrubs at all, since they are `MultiMesh` instances with no colliders anywhere.
+
+What absorbs it is flora health. `PlantSpecies` now authors `health`, `health_per_metre` and a `toughness` band, and **derives** the old run-through break speed from them, so the two cannot drift apart; the migration set `health = break_speed * 12` across all 46 species, which preserves every previous break speed exactly. Toughness is what makes the beam slice grass instantly and grind on an orb giant. Damage short of a kill chars: it is written into the free alpha channel of the instance colour, which `shaders/vivid/vivid_plant.gdshader` reads to darken the albedo and kill the night emission, leaving the RGB semantic mask alone.
+
+The ground is `game/planet/terrain_scars.gd`, a bucketed registry hanging off `PlanetShape`. `elevation()` subtracts `scars.depth_at()` **last**, after the native field, the volcano and the town pads, so a crater cuts through a city pad as readily as through sand; `color_at()` takes the matching tint. A scar therefore lands in the same height field the mesh is built from, the collider generated from and the player's ground guard reads, so there is one answer to where the ground is rather than three that have to be kept in step. `Planet.mark_region_stale()` re-queues the affected chunks through the existing per-frame build budget, so a burst of craters degrades into a slightly slower refresh instead of a hitch — and only the chunks whose vertices are close enough together to draw the mark are re-queued at all, since the height field already fades a scar out at coarser spacings and rebuilding those would produce the ground they already have.
+
+A rebuilt mesh comes back **on screen immediately**, which a newly built one deliberately does not. A first build waits for the next quadtree walk to choose it, and should: the coarse ancestor covering that ground is still drawn, and letting half-refined patches appear the moment they land is how ground pops through the mesh standing in for it. A rebuild has no such cover — the ancestor retired its own mesh when this chunk took the ground over — so switching the replacement on only at the next walk leaves that patch with nothing drawn over it at all, and what is behind the ground is the inside of the planet. Meshes are attached every frame and the walk runs at 30 Hz, so it was up to a walk interval of hole, several times a second under a held beam. The two cases are told apart by `Chunk.rebuilding`, which also keeps the `stranded` counter meaningful: a rebuild lands on a chunk that already holds a mesh every single time by design, and counting those alongside the genuine overwrite-and-orphan fault would bury it.
+
+**Its collider comes back in the same breath, and that turned out to be the half that mattered.** Seeing through the ground while a beam is swept over it looks like a mesh problem and is not: the camera rides a `SpringArm3D`, which holds itself out of the scenery by casting at the **bodies** in it, so ground with no body under it is ground the arm cannot see. The camera runs into the hillside, draws its back faces, and you are looking through a mesh that was present and correct the entire time. Two things were opening that window several times a second, and both are shut:
+
+- A rebuild used to free its collider and leave `_update_collision` to make the next one. That pass is budgeted by `bodies_per_frame` and shares its allowance with all the ordinary streaming, so the chunk could spend frames drawn with nothing under it. The faces are in hand when the build lands, the work is the same work either way, and only chunks that already had a body — the handful near the viewer — pay it, so it is done there and then. Measured against the deferred version the difference is noise: 162 ms of laser-groove rebuild became 164 ms.
+- Marking a region stale used to drop every collider over it outright. That is right for a crater, where the alternative is standing on a ledge of ground that no longer exists, and it is what stopped the fall after a punch. It is wrong for a laser groove, which cuts 0.2 m four times a second wherever the player happens to be looking — very often at their own feet. `mark_region_stale` now takes the depth of the cut and only drops colliders past `COLLIDER_DROP`, a stride.
+
+The invariant this restores is `floorless` in `Planet.statistics()`: drawn ground within reach of a walker that has no body under it. Zero is the only steady-state answer, and a swept beam had been sitting at one chunk per scar.
+
+Vertex tint alone is not a burn. At the range a scorch mark is actually looked at, the ground is drawn from a photographic material and a tint spread over a handful of vertices does not read at all, so `game/planet/scorch_decals.gd` keeps a pooled ring of `Decal` nodes — fading ones for the beam, permanent ones for a committed scar. Marks landing on top of each other merge rather than stack, since a held beam lands ten a second on one spot and ten decals multiply into a hole with no soot edge left in it.
+
+### Laser Eyes
+
+Two beams from the eye offsets in `CharacterDB.BODIES`, converging on the aim point. Those offsets are in the **body's** space, not the Head bone's, and the distinction is not pedantry: the two characters' Head bones are turned half a circle from one another, so one set of numbers authored "so far forward along the bone" was always going to come out backwards, and it did — the settler fired out of the back of its neck for a while. `eye_points()` anchors the offset to the bone's rest pose and carries it through `pose * rest⁻¹`, which is the head's movement away from rest, so the beams sit on the face and follow it through a clip without anything having to know which way the bone happens to point. The numbers themselves are measured off each body by `dev/_eye_probe.tscn` — the front of the head at eye height, and for the settler the goggles, which are worn on the eyes and so state the eye line rather than estimating it. Both now sit 2 mm inside the skin. Damage runs at 10 Hz: a `damage_capsule` along the segment cuts everything standing in the beam, and a `damage_sphere` at the landing point takes the larger share. The ray that finds that landing point **passes through** plant colliders — up to eight of them — because a beam stopped by the first tree trunk is not a beam that cuts through a wood; the trunk is damaged by the capsule like everything else in the line, and the beam carries on to the ground. Sustained fire commits a shallow `GROOVE` scar, about 2 m across and 0.2 m deep, which is broad enough to register on a 1.5 m vertex grid. It refuses to fire while submerged and plays no animation clip, only the beams and the light.
+
+### Meteor Punch
+
+A stance rather than a thing standing next to the movement code: `Stance.METEOR` sits beside `HERO` and `CRASH` with its own `_meteor_move`. The launch takes whichever is larger, the speed already carried or 60 m/s, and accelerates toward 200 m/s along the look direction for 50 m. A 4 m cylinder swept from the fist feeds a damage volume every tick — swept rather than stamped, because at 200 m/s the fist covers three metres between ticks and a stamp leaves the flora in between standing. Flora is resolved but its answer is thrown away: a punch that could be slowed by a hedge is not a punch.
+
+Thrown from the air it is a dive, and the ground it hits opens as a `BOWL` about 6 m across and 2.5 m deep — more if it arrives faster, of which more below. Thrown from the feet it is a flat charge: the body lifts clear of the ground it launched off, and a surface only counts as struck if it **leans back into** the punch, since a flat charge grazes the floor it is travelling over on every tick and stopping on that would end the move where it started. Spend the reach with nothing hit and a dive returns to flight while a ground charge falls out of the sky and cuts a `CONE` ahead of its feet. Either ending hands off to `Stance.HERO`, whose pose and camera blend already existed for steep flight landings.
+
+**Diving at the planet is the case the numbers were all written against.** Flight tops out at 1000 m/s, five times the punch's own 200, and thrown at that speed the move used to fire and then quietly not happen — you arrived on the ground with no crater. Three separate things had to be true for that, and all three were:
+
+- The catalogue's top speed was read as a **ceiling**. `move_toward` toward 200 m/s from an 800 m/s dive is a brake, so the punch spent itself slowing the player down. It is a floor now: the punch can always reach the quoted speed under its own power and never takes speed away from someone who brought their own.
+- The fifty-metre reach was treated as a **lifetime**. At 600 m/s that is a twelfth of a second, so a dive from any real height spent its reach in the first fifty metres of the fall, handed the flight back, and came down as an ordinary landing. Reach is how far the punch carries under power, not how long it is allowed to last: a punch thrown out across the sky still gives the flight back when it runs out, but one aimed at the planet commits and rides it in. Committed by *time* to the ground rather than by distance — a second and a half of flight — because that is the quantity that scales with the thing it is about.
+- Arrival was only ever noticed as a **slide collision**. At flight speed the body crosses sixteen metres in a frame, straight through a chunk collider without generating one. `_catch_ground`'s swept test already caught the tunnelling and quietly planted the body on the surface; the punch just was not listening to it. It is an arrival now, filtered by the same facing test a slide contact gets so a flat charge still skims the ground it is travelling over.
+
+The hole then scales with the speed it was dug at, `sqrt` of the ratio to the quoted top speed and capped at twice — 12 m across and 5 m deep at the top end. Square root rather than linear because that is roughly how a real impact scales, and because the crater's footprint is terrain that has to be rebuilt: the cap keeps the biggest hole to four times the area rather than twenty-five. It costs almost nothing in practice — 28.6 ms against the ordinary punch's 27.8 — because the resolvability gate below means a wider mark still only invalidates the chunks fine enough to draw it.
+
+Landing in the hole took two more things than having cut it, and both were the same mistake in different places: something describing ground that no longer existed. The height field drops the moment the scar is registered, but the **collider** is generated from the mesh and was only replaced when the rebuild landed a few frames later, so the body spent those frames standing on the surface it had just removed and then fell the crater's depth when the new collider arrived. Marking a chunk stale now retires its collider immediately; a mesh may lag the field by a frame without anyone noticing, but the thing bodies stand on may not, and the height-field guard is a floor in the meantime. The other half is that nothing pulled the body *down*. `_catch_ground` only ever pushes a body out of ground it has ended up inside, and for ordinary terrain that is right — ground falling away from under you is just falling. A crater is the one case where the ground moving is the point, so a landed punch watches for its own hole and plants the feet on it, over a window rather than in one go, because a host cuts the hole on the frame it asks and a client is granted it a round trip later.
+
+The pose is `MeteorFly` in `blender_assets/source/build_animations.py`, authored upright like the other two flight clips so that the game's own forward lean is what turns a raised arm into a punch. It leans and cross-fades far faster than a flight does: fifty metres are gone in under a second, and the flight's own easing would spend most of that standing the body back up in mid-air.
+
+Ahead of the fist is the shock — `game/abilities/meteor_shock.gd` and `shaders/vivid/vivid_shock.gdshader`, a red bow wave standing off the punch the way a vapour cone stands off a plane going through the sound barrier. **Its radius is the fist's damage radius**, taken from the same constant, so what the player sees coming is exactly what the punch is about to cut and there is no second number to keep in step. The surface is a paraboloid built in code rather than a `SphereMesh`, because the shader places its travelling bands and both end fades by how far along the shell a fragment is and that has to be a number this side decides — and because a paraboloid is the right shape anyway, rounder at the nose than a cone and flatter at the skirt than a sphere. How far it is drawn out along the travel direction comes from the speed, so the shape itself reads as acceleration over the third of the reach the punch spends getting up to two hundred metres a second.
+
+Almost all of the look is one Fresnel term. A shock is a surface, not a volume: face on there is nothing to see, and edge on you are looking through metres of squeezed air, which is why it reads as a bright rim around a clear middle — and why an eight-metre shell can sit between the player and the world without hiding any of it. The trailing circle is drawn separately from that, because on a shell this wide the Fresnel alone lights only the two points of the rim that happen to be edge on, and the ring is what the shape is read from when the camera is behind the punch, which is where the camera nearly always is. Blending is premultiplied alpha rather than additive for the reason the laser is two passes: additive alone disappears against bright ground, of which this planet is mostly made.
+
+Like `LaserBeams`, it is driven from the player's presentation pass rather than from the ability, and for the same reason — the ability only exists on the machine that threw the punch. `Stance.METEOR` replicates like any other stance, so a remote punch is drawn by exactly the same code as a local one with nothing added to the wire. It is aimed along the velocity rather than the launch direction, which matters only at the one moment the two disagree: a ground charge that has run out of reach and started to fall wants its shock in front of where it is actually going.
+
+### Over the network
+
+Craters are few and cheap, so they are sent whole: any peer asks via `rpc_id(1)`, the host validates and broadcasts, and a client does not cut its own ground while it waits. Flora is the opposite — far too many instances to name — so what replicates is the **effect volume**, applied by every peer to its own deterministic flora, with the host additionally confirming the handful of break keys a few times a second in case they disagreed. Both the scar list and the accumulated breaks ride along in the join snapshot, so a late arrival sees the same battered ground.
+
+### Checking it
+
+Three headless suites and one that puts a real socket between two peers:
+
+```powershell
+godot --headless --path . dev/_ability_model_test.tscn
+godot --headless --path . dev/_flora_damage_test.tscn
+godot --headless --path . dev/_terrain_scar_test.tscn
+godot --headless --path . dev/_ability_net_test.tscn
+```
+
+The model test covers the catalogue, the stat formatting, slot filters, cooldowns and the stance and underwater gating. The flora test proves the migrated health reproduces every previous break speed exactly, then streams real cover in and cuts it with a beam and a blast. The scar test is the one worth reading: it checks that the crater is in the *same* height field the mesh, the collider and the player's ground guard all use, which is a claim about the live planet rather than about a data structure. It then throws two real punches. One from a standing start, measured against the cratered field on the frame it lands and again once the rebuilt collider has arrived — the fall into one's own hole showed up as 1.7 m out on the first of those and 1.5 m lost between them. One out of a 600 m/s dive from 400 m up, which is the case that used to hand the flight back and land with no crater at all. That second one is worth reading for what it has to assert *before* the interesting part: a punch thrown from anything but a flight takes the other branch of a spent reach and lands whatever the flight branch does, so without a check that the player is actually flying, the test passes against the bug. Last it holds the beam down for a 260-frame sweep and watches the ground all round the player: every sample point still drawn, the eye never under the surface, and `floorless` never off zero. The sweep is what the standing single-scar case cannot show, because the fault only appears when rebuilds overlap one another. The net test runs a host, a client and a late joiner as three branches in one process and sends everything across ENet.
+
+Watching a *rendered* sweep for the same thing was tried and thrown away, and the reason is worth keeping. Graded against the real sky it reported sixty holes that were all one patch of purple desert flowers, the sky here being much the same mauve; repainting the background a flat magenta fixed that and left it reporting nothing at all — including on a run with the visibility fault deliberately put back, and again with the quadtree walk slowed to 5 Hz to stretch the gap to a quarter of a second. Reading the framebuffer back stalls the harness below the rate it is trying to sample. A test that passes with a known fault in front of it is worse than no test, because its pass is the thing that stops you looking.
+
+The visual half is `dev/_ability_shot.tscn`, which is not headless because the dummy renderer never draws a frame:
+
+```powershell
+godot --path . dev/_ability_shot.tscn
+```
+
+It photographs both abilities close up and at the distance they are played at, plus the mark each leaves once the effect is over. Each also gets a shot from off to one side, which is not a gameplay view and is not meant to be: the game is played from behind the player's own head, and that is the one angle at which a beam fired from that head is a dot rather than a line.
+
+### What they cost
+
+`dev/_ability_perf_test.tscn` measures the frame while an ability is being used against the same view standing still, and prices each of the pieces on its own, because a frame time says something is wrong and never what:
+
+```powershell
+godot --path . dev/_ability_perf_test.tscn
+```
+
+Both abilities now run at the idle frame cost, with one spike left at the moment a crater forms. Getting there was four things, and the first was worth more than the other three together:
+
+**A mark only invalidates ground fine enough to draw it.** Every scar already fades out at vertex spacings too coarse to resolve it, which is what stops a two-metre burn aliasing into a spike. But `mark_region_stale` was marking every chunk whose footprint contained the burn — including the ancestors, up to root patches tens of thousands of vertices across — and `needs_script_build` was then routing each of those onto the per-vertex GDScript path to compute, slowly, the exact terrain it already had. One 2 m laser burn cost **550 ms of worker time** and a 64 ms frame, four times a second while the beam was held. Both now take the chunk's spacing into account, so a burn costs the one or two chunks that can show it. Average chunk build time across a session went from 6.9 ms to 1.6 ms.
+
+**Plant roots are cached where the damage sweep can read them.** `MultiMesh.buffer` hands out a copy through the rendering server — tens of microseconds a call, whatever the size — and the volume walk was fetching one per stand just to ask whether anything was in range, which for almost every stand it was not. `Tile.roots` keeps the origins alongside the existing `glow_points` cache, and the buffer is only fetched once a plant has actually been hit. Nothing moves a standing plant, so the cache holds until the tile is re-sown.
+
+**The rejection tests are arithmetic.** A volume is offered to seventeen fields holding three thousand streamed tiles between them, and cuts a dozen plants, so what matters is the cost of turning things away rather than the cost of the ones that stay. Tiles are rejected against the volume's bounding sphere before the capsule maths, plants against a squared distance that needs neither their height nor their up vector, and the whole flower-tree colony against one sphere. A beam volume went from 4.8 ms to 1.6 ms and a fist volume from 3.7 ms to 0.7 ms.
+
+**The fist deals damage on a clock, not every tick.** The laser always ran its damage at 10 Hz because each turn is also a packet; the punch was sweeping at 60 Hz, which was eight milliseconds a frame for the whole flight. It is 20 Hz now, and since the volume is swept from where the fist was to where it is, a slower clock makes each capsule longer rather than leaving gaps. Single-player sessions also stopped serialising every one of those ticks through the RPC layer to deliver them back to themselves — an offline peer is still a peer, so `has_multiplayer_peer()` was the wrong question.
+
+What is left is a single ~27 ms frame when a meteor crater lands, which is the terrain genuinely rebuilding: twelve chunks, their collision shapes, and the meshes going to the GPU. It is one dropped frame on the most violent thing in the game.
 
 ## Chat and voice
 

@@ -1,0 +1,57 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_plant.gdshader" id="1_plant"]
+
+[resource]
+resource_name = "PlanetGrass"
+shader = ExtResource("1_plant")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/saturation = 1.16
+shader_parameter/brightness = 1.45
+shader_parameter/tone_variation = 0.16
+shader_parameter/roughness = 0.82
+shader_parameter/specular = 0.2
+; Solid blades. There is no alpha anywhere in vivid_plant — grass has always
+; been drawn as opaque geometry — so the see-through look was never transparency
+; at all, it was this: BACKLIGHT at nearly three quarters, which is a petal's
+; setting and lights a blade from behind until it reads as a thin film. Zero
+; hands the blade back to its own albedo.
+shader_parameter/translucency = 0.0
+shader_parameter/region_albedo = 0.68
+shader_parameter/region_sheen = 0.34
+shader_parameter/region_rim = 0.42
+shader_parameter/rigidity = 1.5
+; Where the blades stop being animated, brought right in from the shader's 18
+; and 55.
+;
+; Measured standing perfectly still in a flower meadow with the wind off, this
+; one stand of grass was 78 per cent of everything that changed between frames:
+; freezing it alone took the picture from 10.7 to 2.4, and freezing every plant
+; on the planet only reached 0.7. None of it was aliasing — four-times
+; multisampling moved the number by a tenth — and none of it was the light. It
+; was eight thousand sub-pixel blades being re-posed every frame.
+;
+; The shader's own note puts a blade under a pixel from about eight metres, and
+; that is where this was first set. It changed nothing at all, which is the
+; useful result: at this density the blades are already narrower than a pixel at
+; two or three metres, so a fade that leaves the grass around the boots alone
+; cannot reach what is boiling. Two and a half metres is what it took.
+;
+; Phase was the other suspect and is innocent — putting every blade in step
+; measured 9.6 against 10.2, so they are not beating against each other; there
+; is simply too much motion in too little screen space.
+;
+; Nothing stops being drawn. Every blade is still there, still where it was and
+; still as dark, so the field reads as it did standing still; only its boiling
+; goes. The long fade out to ten metres is so there is no ring on the ground
+; where the motion stops.
+shader_parameter/calm_from = 2.0
+shader_parameter/calm_to = 8.0
+shader_parameter/wind_sway = 14.0
+shader_parameter/wind_speed = 1.0
+shader_parameter/gust_length = 20.0
+shader_parameter/push_sway = 57.0
+shader_parameter/max_bend = 66.0
+shader_parameter/purple_shift = 0.18
+shader_parameter/custom_z_is_glow = true
+shader_parameter/glow_strength = 3.8

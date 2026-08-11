@@ -19,6 +19,14 @@ extends Node
 ## rate, `--draw=unshaded` takes the surface shader out of the picture, and
 ## `--near=` moves the LOD's collision range.
 ##
+## `--mat=name:value` sets one uniform on the terrain material, which is how
+## anything living inside the surface shader gets priced: run the same build
+## twice, once with the feature turned off. Editing the material between runs
+## would measure the shader compiler as much as the feature.
+##
+##     -- --mat=texture_blend:0     the procedural ground
+##     -- --mat=texture_blend:0.85  the photographed one
+##
 ## `--distance` runs one stop at every level of [constant Planet.DETAIL_LEVELS]
 ## instead of the usual sweep, which is what the render distance setting is priced
 ## from. It reads at low air looking out: standing on the ground almost nothing is
@@ -250,6 +258,59 @@ func _inspect(quoted: String) -> void:
 	# a fault somebody has already found, so it wants to resolve the shape of it
 	# rather than to establish that the floor exists at all.
 	_probe_floor(direction, "settled", 10.0)
+	await _report_stance()
+
+
+## Where the body comes to rest, as against where the floor is.
+##
+## The probe above asks whether the collider is in the right place. This asks the
+## other half — whether the player is standing *on* it — and the two failures are
+## indistinguishable from inside the game: a body held a decimetre up and ground
+## drawn a decimetre low photograph identically. What tells them apart is
+## anything that grows out of the true surface, which is why this got written the
+## day the flowers went in and the player turned out to be wading over them.
+const STANCE_FRAMES := 120
+
+func _report_stance() -> void:
+	var shape: PlanetShape = _planet.shape
+	var space := get_viewport().world_3d.direct_space_state
+	# Over a couple of seconds rather than off one frame. A body at rest is not
+	# quite at rest — it settles, and the guard and the solver hand it back and
+	# forth by millimetres — so a single sample lands anywhere in that band and
+	# reads as a difference when nothing has changed.
+	var field_total := 0.0
+	var mesh_total := 0.0
+	var worst := -INF
+	var down := 0
+	for _i in STANCE_FRAMES:
+		await get_tree().physics_frame
+		var local := _planet.to_local(_player.global_position)
+		var out := local.normalized()
+		var over_field := local.length() - shape.radius \
+				- shape.elevation(out, _planet.spacing_underfoot())
+		field_total += over_field
+		worst = maxf(worst, over_field)
+		if _player.is_on_floor():
+			down += 1
+		var up := _planet.global_transform.basis * out
+		var query := PhysicsRayQueryParameters3D.create(
+				_player.global_position + up * 3.0, _player.global_position - up * 30.0)
+		query.collision_mask = 1
+		query.exclude = [_player.get_rid()]
+		var hit := space.intersect_ray(query)
+		if not hit.is_empty():
+			mesh_total += hit["position"].distance_to(_player.global_position + up * 3.0) - 3.0
+	# The capsule's lowest point in body space. If this is not zero then the body
+	# origin is not the feet, and every other number here has to be read against
+	# it rather than against the ground.
+	var sole := INF
+	var mount := _player.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if mount != null and mount.shape is CapsuleShape3D:
+		sole = mount.position.y - (mount.shape as CapsuleShape3D).height * 0.5
+	print("perf_test: stance    standing still, the feet sit %.3f m over the field on average (worst %.3f m), %.3f m over the collider" % [
+		field_total / float(STANCE_FRAMES), worst, mesh_total / float(STANCE_FRAMES)])
+	print("perf_test: stance    capsule sole %.3f m from origin, on the floor %d of %d frames, snap %.2f m, margin %.3f m" % [
+		sole, down, STANCE_FRAMES, _player.floor_snap_length, _player.safe_margin])
 
 
 ## The two spacings the ground can be asked about, and the depth behind them.
@@ -388,6 +449,9 @@ func _traverse() -> void:
 	# second says the pipe is working; this says whether it is keeping up.
 	var depth_total := 0.0
 	var depth_worst := 99
+	var lod_rate_total := 0.0
+	var lead_total := 0.0
+	var lead_peak := 0.0
 	while Time.get_ticks_msec() < until:
 		var started := Time.get_ticks_usec()
 		await get_tree().process_frame
@@ -402,6 +466,9 @@ func _traverse() -> void:
 		worst_requests = maxi(worst_requests, int(stats["requests"]))
 		depth_total += float(stats["depth"])
 		depth_worst = mini(depth_worst, int(stats["depth"]))
+		lod_rate_total += float(stats["lod_hz"])
+		lead_total += float(stats["lead"])
+		lead_peak = maxf(lead_peak, float(stats["lead"]))
 		if int(stats["pending"]) >= _planet.pending_limit:
 			starved += 1
 		worst_apply = maxf(worst_apply, float(stats["apply_ms"]))
@@ -437,6 +504,8 @@ func _traverse() -> void:
 	print("perf_test: dropped frames  %d of %d over 16.7 ms" % [dropped, samples.size()])
 	print("perf_test: underfoot       depth %.1f mean, %d worst, against max_depth %d while moving" % [
 		depth_total / count, depth_worst, _planet.max_depth])
+	print("perf_test: flight lead     %.0f m mean, %.0f m peak, quadtree walked at %.1f Hz mean" % [
+		lead_total / count, lead_peak, lod_rate_total / count])
 	print("perf_test: build pipe      %.1f of %d slots busy, pool full %d%% of frames, queue %.0f mean %d worst" % [
 		pending_total / count, _planet.pending_limit,
 		int(round(100.0 * float(starved) / count)),
@@ -566,6 +635,17 @@ func _apply_flags() -> void:
 				viewport.debug_draw = Viewport.DEBUG_DRAW_WIREFRAME
 			elif mode == "overdraw":
 				viewport.debug_draw = Viewport.DEBUG_DRAW_OVERDRAW
+		elif argument.begins_with("--mat="):
+			# One uniform on the terrain material, by name, as `_planet_test`
+			# spells it. Pricing a shader feature wants the same build measured
+			# with it on and off, and editing the material in between measures
+			# the shader compiler as much as it measures the feature.
+			for pair in argument.split("=", true, 1)[1].split(",", false):
+				var halves := pair.split(":", true, 1)
+				if halves.size() == 2:
+					Planet.SURFACE_MATERIAL.set_shader_parameter(
+						StringName(halves[0].strip_edges()), halves[1].to_float())
+					print("perf_test: mat %s = %s" % [halves[0], halves[1]])
 		elif argument.begins_with("--near="):
 			_planet.collision_range = float(argument.split("=")[1])
 		elif argument.begins_with("--splits="):
@@ -577,7 +657,13 @@ func _apply_flags() -> void:
 		elif argument.begins_with("--bodies="):
 			_planet.bodies_per_frame = int(argument.split("=")[1])
 		elif argument.begins_with("--lodhz="):
-			_planet.lod_updates_per_second = int(argument.split("=")[1])
+			# An explicit benchmark rate disables the adaptive distinction so
+			# `--lodhz=30` still means thirty throughout a 1000 m/s crossing.
+			var rate := int(argument.split("=")[1])
+			_planet.lod_updates_per_second = rate
+			_planet.fast_lod_updates_per_second = rate
+		elif argument.begins_with("--fastlodhz="):
+			_planet.fast_lod_updates_per_second = int(argument.split("=")[1])
 		elif argument.begins_with("--pending="):
 			_planet.pending_limit = int(argument.split("=")[1])
 		elif argument.begins_with("--speed="):

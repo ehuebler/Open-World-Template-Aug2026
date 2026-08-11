@@ -57,19 +57,15 @@ SRC_BLEND = os.path.join(ROOT, "generated", "character_3.blend")
 DRESSED_BLEND = os.path.join(ROOT, "generated", "dressed.blend")
 OUT_BLEND = os.path.join(ROOT, "generated", "character_3_rigged.blend")
 OUT_GLB = os.path.join(ASSET_DIR, "player_character_3.glb")
+DEFAULT_SKIN = os.path.join(ROOT, "generated", "textures", "luke.png")
 
-# The body and every garment ship white, and that is a requirement of how they
-# are coloured rather than a look. A tint multiplies the albedo it lands on, so
-# whatever is authored here is a ceiling on what the character editor can reach:
-# a boot baked at 0.17 grey can be tinted to any dark, and to no bright at all,
-# so nine of the ten swatches came out as the same near-black and the strip read
-# as broken. White is the only base under which every swatch arrives as itself.
-#
-# The cost of it is that an untinted figure is a blank, which is the right way
-# round: the colours belong to the player and this file has no business having
-# an opinion about them.
+# Garments ship white because their colour wheel is their entire authored
+# colour. The body does not: `character_3_skins.py` restates the two supplied
+# front/back robotic concepts against this mesh's measured body and bakes them
+# through the UV atlas it creates here; Luke is a third painting authored
+# directly on that atlas. A tint still multiplies any finished design at runtime,
+# while no tint leaves the authored paint intact.
 WHITE = (1.0, 1.0, 1.0, 1.0)
-SKIN_COLOUR = WHITE
 
 # Where the hair is cut out of the dressed sculpt, as a box in that sculpt's own
 # metres once it has been turned to face +Y. The other two regions are no longer
@@ -1041,7 +1037,7 @@ def transfer_weights(source: bpy.types.Object, target: bpy.types.Object) -> None
 # --------------------------------------------------------------------------
 
 def bake_locomotion(rig: bpy.types.Object, body: Body) -> None:
-    """Author the eleven clips against this body's own measurements."""
+    """Author the shared locomotion clips against this body's measurements."""
     anim = load_module("build_animations.py")
     bones = rig.data.bones
 
@@ -1102,13 +1098,20 @@ def export_garment(garment: bpy.types.Object, rig: bpy.types.Object) -> None:
           "({0:.0f} KB)".format(os.path.getsize(path) / 1024.0))
 
 
-def paint_body(mesh_obj: bpy.types.Object) -> None:
+def paint_body(mesh_obj: bpy.types.Object, texture_path: str) -> None:
     material = bpy.data.materials.get("SettlerSkin") or bpy.data.materials.new("SettlerSkin")
     material.use_nodes = True
     bsdf = material.node_tree.nodes.get("Principled BSDF")
     if bsdf is not None:
-        bsdf.inputs["Base Color"].default_value = SKIN_COLOUR
+        bsdf.inputs["Base Color"].default_value = WHITE
         bsdf.inputs["Roughness"].default_value = 0.72
+        texture = material.node_tree.nodes.get("SettlerSkinTexture")
+        if texture is None:
+            texture = material.node_tree.nodes.new("ShaderNodeTexImage")
+            texture.name = "SettlerSkinTexture"
+            texture.label = "Default selectable skin"
+        texture.image = bpy.data.images.load(texture_path, check_existing=False)
+        material.node_tree.links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
     mesh_obj.data.materials.clear()
     mesh_obj.data.materials.append(material)
 
@@ -1151,8 +1154,6 @@ def main() -> None:
         print("  {0} hand: wrist_x={1:.3f} elbow_x={2:.3f} digits={3}".format(
             label, wrist, body.elbow_x(side, wrist),
             [(round(d["base"].y, 3), d["size"]) for d in found]))
-    paint_body(mesh_obj)
-
     rig = build_armature(body)
     bind(mesh_obj, rig)
 
@@ -1162,6 +1163,13 @@ def main() -> None:
     print("exporting garments:")
     for garment in garments:
         export_garment(garment, rig)
+
+    # Unwrap after the shell garments have been cut. They inherit every mesh
+    # attribute the body has at that moment, and carrying this atlas into four
+    # untextured garment GLBs adds half a megabyte with nothing to draw from it.
+    skins = load_module("character_3_skins.py")
+    skins.build(mesh_obj, body, ASSET_DIR)
+    paint_body(mesh_obj, DEFAULT_SKIN)
 
     bake_locomotion(rig, body)
     print("wrote", OUT_BLEND)

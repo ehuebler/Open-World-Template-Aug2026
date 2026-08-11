@@ -1,0 +1,46 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/joshua_tree.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/tree.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/joshua_tree_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "JoshuaTree"
+height = 7.2
+height_variation = 0.64
+width_scale = 1.0
+tilt = 7.0
+above_water = 9.0
+below = 390.0
+max_slope = 20.0
+steady_over = 3.0
+steady_within = 1.25
+ground_layer = 2
+minimum_claim = 0.07
+minimum_arid = 0.62
+maximum_frost = 0.12
+per_square_metre = 0.0008
+bare_share = 0.55
+patch_size = 120.0
+random_seed = 20261603
+draw_within = 270.0
+thin_from = 90.0
+thin_to = 195.0
+far_density = 0.1
+shadow_within = 70.0
+collision_enabled = true
+collision_within = 26.0
+collision_radius_share = 0.09
+collision_height_share = 0.86
+impact_mode = 1
+health = 168.0
+health_per_metre = 24.0
+toughness = 1
+break_momentum_keep = 0.7
+break_effect = 1
+break_effect_color = Color(0.43, 0.25, 0.12, 1)

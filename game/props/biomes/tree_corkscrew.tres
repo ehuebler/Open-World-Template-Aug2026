@@ -1,0 +1,51 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/tree_corkscrew.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/tree_glow.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/tree_corkscrew_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "CorkscrewTree"
+height = 14.0
+height_variation = 0.58
+width_scale = 1.02
+tilt = 7.0
+above_water = 9.0
+below = 270.0
+max_slope = 18.0
+steady_over = 3.5
+steady_within = 1.35
+ground_layer = 1
+minimum_claim = 0.055
+minimum_arid = 0.3
+maximum_arid = 0.68
+maximum_frost = 0.2
+local_light_color = Color(0.12, 0.72, 0.58, 1)
+local_light_energy = 1.2
+per_square_metre = 0.00085
+clump_count = 2
+clump_radius = 8.0
+bare_share = 0.52
+patch_size = 154.0
+random_seed = 20261307
+draw_within = 350.0
+thin_from = 110.0
+thin_to = 270.0
+far_density = 0.14
+shadow_within = 105.0
+collision_enabled = true
+collision_within = 36.0
+collision_radius_share = 0.075
+collision_height_share = 0.88
+impact_mode = 1
+health = 216.0
+health_per_metre = 22.8
+toughness = 1
+break_momentum_keep = 0.58
+break_effect = 1
+break_effect_color = Color(0.27, 0.31, 0.18, 1)

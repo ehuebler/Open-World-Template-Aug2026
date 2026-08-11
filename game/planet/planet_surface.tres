@@ -1,6 +1,8 @@
-[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+[gd_resource type="ShaderMaterial" load_steps=4 format=3]
 
 [ext_resource type="Shader" path="res://shaders/vivid/vivid_terrain.gdshader" id="1_terrain"]
+[ext_resource type="Texture2DArray" path="res://game/planet/textures/ground_albedo.png" id="2_albedo"]
+[ext_resource type="Texture2DArray" path="res://game/planet/textures/ground_surface.png" id="3_surface"]
 
 ; Shared by every terrain chunk. One material for the lot, because everything
 ; that varies across the surface either rides on the mesh's vertices (the biome
@@ -11,6 +13,18 @@
 ; tour: past ~300 m one bump is smaller than a pixel, and keeping it on buys
 ; shimmer at the horizon and three noise fields per pixel for the whole visible
 ; hemisphere.
+;
+; The two texture arrays are the four ground materials, and the numbers under
+; them decide which one a pixel is standing on. They are worth reading as a set:
+; `grass_claim` is the floor everything else has to beat, and the other four are
+; each one material's case for itself. Raising `cliff_claim` puts rock further
+; down a slope; raising `shore_height` walks the beach inland.
+;
+; `texture_blend` is also the switch for the comparison, and the way to see what
+; the textures are worth is to run the tour twice:
+;
+;     --mat=texture_blend:0    the procedural ground, as it was
+;     --mat=texture_blend:0.85 the photographed one
 
 [resource]
 resource_name = "PlanetSurfaceVivid"
@@ -29,8 +43,84 @@ shader_parameter/detail_near = 40.0
 shader_parameter/detail_far = 300.0
 shader_parameter/macro_near = 1500.0
 shader_parameter/macro_far = 9000.0
-shader_parameter/ground_texture_scale = 0.25
-shader_parameter/ground_texture_blend = 0.0
+shader_parameter/ground_albedo = ExtResource("2_albedo")
+shader_parameter/ground_surface = ExtResource("3_surface")
+shader_parameter/texture_scale = 0.6
+shader_parameter/texture_blend = 0.85
+shader_parameter/texture_sharpness = 2.0
+shader_parameter/texture_bump = 0.4
+shader_parameter/texture_footprint = 5.0
+shader_parameter/texture_detail_range = 0.4
+shader_parameter/texture_bump_footprint = 5.0
+shader_parameter/texture_occlusion = 0.5
+shader_parameter/texture_near = 90.0
+shader_parameter/texture_far = 400.0
+; What the ground gives up while the eye is travelling, and it only gives up the
+; part that cannot survive travelling. Written by Planet each frame; see the
+; shader's Motion block for why a speed has to be told to a shader that can work
+; out everything else about a pixel from the pixel.
+;
+; The band starts above every speed reachable on foot, so walking and sprinting
+; get exactly the ground they were tuned against and nothing here can be
+; triggered by running.
+shader_parameter/eye_speed = 0.0
+shader_parameter/motion_calm_from = 22.0
+; Fifty-five and not ninety, which is the difference between most of the fix and
+; all of it. Flying at seventy over the grass, the frame-to-frame noise is 14663
+; with this off and 11652 with every scrap of ground detail deleted — that floor
+; being the world honestly moving past, which no shader can or should remove.
+; Reaching full calming at ninety only recovers 2113 of that 3011; reaching it at
+; fifty-five recovers 2902, so the ground at speed is within a hundred of as
+; quiet as a ground can be. Walking measures 7507 either way, to three digits the
+; same as with all of this switched off.
+shader_parameter/motion_calm_to = 55.0
+shader_parameter/motion_relief_keep = 0.12
+; Twenty-four measured the same as fourteen, so this stays at the narrower one
+; rather than blurring ground for nothing.
+shader_parameter/motion_footprint = 14.0
+shader_parameter/grain_under_texture = 0.6
+; Direction, radii and the tree mask are missing on purpose: FlowerTreeField
+; pushes them after growing the actual layout, and the tree radius stays 0 — the
+; whole term switched off — until it does.
+; Soft pink lights standing on the meadow, one per real crown, placed by
+; FlowerTreeField's mask. Higher than the 0.34 the flat discs needed because the
+; falloff now puts most of each mark below its peak; the peak itself is no
+; brighter, and all of it stays far below the nearby crown material's 3.8.
+shader_parameter/flora_tree_glow_color = Color(1, 0.1, 0.42, 1)
+shader_parameter/flora_tree_glow_energy = 0.45
+; A violet wash under the pink, not a second set of points. Lower than the 0.28
+; the old speckles used and yet much brighter overall, because this covers the
+; meadow instead of dotting a fraction of it.
+shader_parameter/flora_flower_glow_color = Color(0.22, 0.015, 0.58, 1)
+shader_parameter/flora_flower_glow_energy = 0.16
+; The flower footprint is supplied at runtime by LandingFlowers. It is a
+; density mask replayed from GroundCover's exact seeded scatter, not a circle
+; or a second decorative noise field authored on this material.
+; The meadow first, low, because the blooms stop being streamed early and the
+; ground has to catch them almost at once. The canopy well after it: crowns are
+; still drawn as real meshes much further out, and coming in under them would
+; lay a flat copy of the canopy over the solid one.
+;
+; Each reaches full within about one further wingspan of its start rather than
+; over the several hundred metres this first used. Spread any wider and a field
+; is still fading up at twice the height it was asked to appear at, which is a
+; field that does not appear at the height it was asked to.
+shader_parameter/flora_flower_glow_begin = 40.0
+shader_parameter/flora_flower_glow_full = 90.0
+shader_parameter/flora_tree_glow_begin = 80.0
+shader_parameter/flora_tree_glow_full = 150.0
+; Five kilometres up the fields subtend almost nothing, so both classes are down
+; to a third of their strength by then and hold there — enough that the night
+; side still shows where the colony planted, not enough to be its brightest
+; feature.
+shader_parameter/flora_glow_ceiling = 5000.0
+shader_parameter/flora_glow_remainder = 0.3
+shader_parameter/hue_reach = 7.0
+shader_parameter/grass_claim = 0.3
+shader_parameter/shore_height = 7.0
+shader_parameter/snow_above = 0.7
+shader_parameter/cliff_claim = 1.1
+shader_parameter/frost_claim = 1.3
 shader_parameter/cliff_color = Color(0.42, 0.35, 0.34, 1)
 shader_parameter/cliff_start = 0.22
 shader_parameter/cliff_end = 0.55

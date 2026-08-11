@@ -1,0 +1,48 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/glacier_shard.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/ice_glow.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/glacier_shard_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "GlacierShard"
+height = 5.0
+height_variation = 0.76
+width_scale = 1.1
+tilt = 15.0
+above_water = 2.0
+below = 520.0
+max_slope = 30.0
+steady_over = 3.0
+steady_within = 2.2
+ground_layer = 4
+minimum_claim = 0.08
+minimum_frost = 0.58
+local_light_color = Color(0.08, 0.35, 1, 1)
+local_light_energy = 0.9
+per_square_metre = 0.0016
+clump_count = 2
+clump_radius = 3.2
+bare_share = 0.45
+patch_size = 110.0
+random_seed = 20261503
+draw_within = 285.0
+thin_from = 95.0
+thin_to = 215.0
+far_density = 0.11
+shadow_within = 90.0
+collision_enabled = true
+collision_within = 28.0
+collision_primitive = 3
+impact_mode = 1
+health = 84.0
+health_per_metre = 12.0
+toughness = 3
+break_momentum_keep = 0.8
+break_effect = 2
+break_effect_color = Color(0.35, 0.72, 1, 1)

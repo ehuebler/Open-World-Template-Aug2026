@@ -1,0 +1,2099 @@
+{
+  "schema": "procedural_biome_asset_manifest",
+  "version": 2,
+  "generator": "blender_assets/source/build_biome_assets.py",
+  "coordinate_system": {
+    "authoring": "Blender Z-up, metres",
+    "runtime": "glTF/Godot Y-up, metres",
+    "axis_conversion": "Blender (x, y, z) -> glTF/Godot (x, z, -y)",
+    "ground_plane": "runtime Y=0"
+  },
+  "library_contract": {
+    "multi_mesh_ready": true,
+    "one_mesh_per_glb": true,
+    "one_primitive_per_mesh": true,
+    "vertex_colour": "COLOR_0",
+    "color_paint_uv": "TEXCOORD_0",
+    "external_color_paint": "one PNG per asset under biome_paint",
+    "skins": 0,
+    "animations": 0
+  },
+  "assets": {
+    "kelp_ribbon": {
+      "name": "kelp_ribbon",
+      "category": "aquatic",
+      "glb": "kelp_ribbon.glb",
+      "color_paint": "biome_paint/kelp_ribbon_paint.png",
+      "preview": "biome_previews/kelp_ribbon.png",
+      "authored_height": 2.8,
+      "triangle_count": 328,
+      "glb_vertex_count": 405,
+      "triangle_budget": {
+        "minimum": 260,
+        "maximum": 720
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.34,
+        "height": 2.55,
+        "centre": [
+          0.0,
+          1.275,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "dark holdfast; teal-to-sunlit green ribbons with amber tips",
+      "color_paint_style": "broad current stripes, reticulated veins, and bulb freckles",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "kelp_ribbon",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/kelp_ribbon_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 21092,
+      "paint_size_bytes": 52376,
+      "preview_size_bytes": 186694
+    },
+    "sea_fan": {
+      "name": "sea_fan",
+      "category": "aquatic",
+      "glb": "sea_fan.glb",
+      "color_paint": "biome_paint/sea_fan_paint.png",
+      "preview": "biome_previews/sea_fan.png",
+      "authored_height": 2.15,
+      "triangle_count": 900,
+      "glb_vertex_count": 957,
+      "triangle_budget": {
+        "minimum": 480,
+        "maximum": 1050
+      },
+      "collision_hint": {
+        "shape": "box",
+        "size": [
+          1.8,
+          2.0,
+          0.22
+        ],
+        "centre": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "plum structural veins grading to warm coral fan tips",
+      "color_paint_style": "broad current stripes, reticulated veins, and bulb freckles",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "sea_fan",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/sea_fan_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 48812,
+      "paint_size_bytes": 53860,
+      "preview_size_bytes": 164721
+    },
+    "bulb_seaweed": {
+      "name": "bulb_seaweed",
+      "category": "aquatic",
+      "glb": "bulb_seaweed.glb",
+      "color_paint": "biome_paint/bulb_seaweed_paint.png",
+      "preview": "biome_previews/bulb_seaweed.png",
+      "authored_height": 1.65,
+      "triangle_count": 728,
+      "glb_vertex_count": 1066,
+      "triangle_budget": {
+        "minimum": 420,
+        "maximum": 980
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.42,
+        "height": 1.45,
+        "centre": [
+          0.0,
+          0.725,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "deep blue-green stems, sea-glass bulbs, chartreuse blade tips",
+      "color_paint_style": "broad current stripes, reticulated veins, and bulb freckles",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "bulb_seaweed",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/bulb_seaweed_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 52592,
+      "paint_size_bytes": 53079,
+      "preview_size_bytes": 176150
+    },
+    "grass_feather": {
+      "name": "grass_feather",
+      "category": "grass",
+      "glb": "grass_feather.glb",
+      "color_paint": "biome_paint/grass_feather_paint.png",
+      "preview": "biome_previews/grass_feather.png",
+      "authored_height": 0.72,
+      "triangle_count": 484,
+      "glb_vertex_count": 737,
+      "triangle_budget": {
+        "minimum": 260,
+        "maximum": 720
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.22,
+        "height": 0.62,
+        "centre": [
+          0.0,
+          0.31,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "olive stems with alternating pale seed-feathers",
+      "color_paint_style": "long blade veins, alternating seed bands, and pale margins",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "grass_feather",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/grass_feather_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 36652,
+      "paint_size_bytes": 49669,
+      "preview_size_bytes": 176772
+    },
+    "grass_fan": {
+      "name": "grass_fan",
+      "category": "grass",
+      "glb": "grass_fan.glb",
+      "color_paint": "biome_paint/grass_fan_paint.png",
+      "preview": "biome_previews/grass_fan.png",
+      "authored_height": 0.58,
+      "triangle_count": 376,
+      "glb_vertex_count": 517,
+      "triangle_budget": {
+        "minimum": 220,
+        "maximum": 620
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.27,
+        "height": 0.5,
+        "centre": [
+          0.0,
+          0.25,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "deep green bases grading through fresh green blade faces",
+      "color_paint_style": "long blade veins, alternating seed bands, and pale margins",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "grass_fan",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/grass_fan_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 26312,
+      "paint_size_bytes": 50103,
+      "preview_size_bytes": 194686
+    },
+    "shrub_broadleaf": {
+      "name": "shrub_broadleaf",
+      "category": "shrub",
+      "glb": "shrub_broadleaf.glb",
+      "color_paint": "biome_paint/shrub_broadleaf_paint.png",
+      "preview": "biome_previews/shrub_broadleaf.png",
+      "authored_height": 1.35,
+      "triangle_count": 1140,
+      "glb_vertex_count": 1840,
+      "triangle_budget": {
+        "minimum": 620,
+        "maximum": 1280
+      },
+      "collision_hint": {
+        "shape": "sphere",
+        "radius": 0.63,
+        "centre": [
+          0.0,
+          0.72,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "warm bark under layered forest-green leaves with pale crowns",
+      "color_paint_style": "twig rings, leaf veins, margins, and flower freckles",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "shrub_broadleaf",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/shrub_broadleaf_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 89128,
+      "paint_size_bytes": 48804,
+      "preview_size_bytes": 179294
+    },
+    "shrub_heather": {
+      "name": "shrub_heather",
+      "category": "shrub",
+      "glb": "shrub_heather.glb",
+      "color_paint": "biome_paint/shrub_heather_paint.png",
+      "preview": "biome_previews/shrub_heather.png",
+      "authored_height": 0.95,
+      "triangle_count": 952,
+      "glb_vertex_count": 1376,
+      "triangle_budget": {
+        "minimum": 520,
+        "maximum": 1320
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.44,
+        "height": 0.82,
+        "centre": [
+          0.0,
+          0.41,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "muted twig and needle tones punctuated by mauve bell clusters",
+      "color_paint_style": "twig rings, leaf veins, margins, and flower freckles",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "shrub_heather",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/shrub_heather_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 67580,
+      "paint_size_bytes": 51103,
+      "preview_size_bytes": 194887
+    },
+    "shrub_silver": {
+      "name": "shrub_silver",
+      "category": "shrub",
+      "glb": "shrub_silver.glb",
+      "color_paint": "biome_paint/shrub_silver_paint.png",
+      "preview": "biome_previews/shrub_silver.png",
+      "authored_height": 1.05,
+      "triangle_count": 732,
+      "glb_vertex_count": 1124,
+      "triangle_budget": {
+        "minimum": 460,
+        "maximum": 1120
+      },
+      "collision_hint": {
+        "shape": "sphere",
+        "radius": 0.52,
+        "centre": [
+          0.0,
+          0.55,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "charcoal twigs with cool sage and silver leaf faces",
+      "color_paint_style": "twig rings, leaf veins, margins, and flower freckles",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "shrub_silver",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/shrub_silver_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 55164,
+      "paint_size_bytes": 50648,
+      "preview_size_bytes": 172177
+    },
+    "tree_canopy": {
+      "name": "tree_canopy",
+      "category": "tree",
+      "glb": "tree_canopy.glb",
+      "color_paint": "biome_paint/tree_canopy_paint.png",
+      "preview": "biome_previews/tree_canopy.png",
+      "authored_height": 5.8,
+      "triangle_count": 1628,
+      "glb_vertex_count": 2243,
+      "triangle_budget": {
+        "minimum": 980,
+        "maximum": 1780
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "capsule",
+            "radius": 0.32,
+            "height": 3.5,
+            "centre": [
+              0.0,
+              1.75,
+              0.0
+            ]
+          },
+          {
+            "shape": "sphere",
+            "radius": 1.65,
+            "centre": [
+              0.0,
+              4.25,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "umber branching visible beneath layered moss-green canopy leaves",
+      "color_paint_style": "chunky wavy bark bands and knots with veined leaf markings",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "tree_canopy",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/tree_canopy_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 109776,
+      "paint_size_bytes": 43897,
+      "preview_size_bytes": 159104
+    },
+    "tree_spiral": {
+      "name": "tree_spiral",
+      "category": "tree",
+      "glb": "tree_spiral.glb",
+      "color_paint": "biome_paint/tree_spiral_paint.png",
+      "preview": "biome_previews/tree_spiral.png",
+      "authored_height": 6.4,
+      "triangle_count": 964,
+      "glb_vertex_count": 1226,
+      "triangle_budget": {
+        "minimum": 900,
+        "maximum": 1740
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 1.05,
+        "height": 5.9,
+        "centre": [
+          0.0,
+          2.95,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "dark spiral trunk with golden-angle tiers of jade leaves",
+      "color_paint_style": "chunky wavy bark bands and knots with veined leaf markings",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "tree_spiral",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/tree_spiral_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 61040,
+      "paint_size_bytes": 46233,
+      "preview_size_bytes": 182074
+    },
+    "tree_umbrella": {
+      "name": "tree_umbrella",
+      "category": "tree",
+      "glb": "tree_umbrella.glb",
+      "color_paint": "biome_paint/tree_umbrella_paint.png",
+      "preview": "biome_previews/tree_umbrella.png",
+      "authored_height": 5.25,
+      "triangle_count": 1484,
+      "glb_vertex_count": 2148,
+      "triangle_budget": {
+        "minimum": 940,
+        "maximum": 1790
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "capsule",
+            "radius": 0.3,
+            "height": 3.8,
+            "centre": [
+              0.0,
+              1.9,
+              0.0
+            ]
+          },
+          {
+            "shape": "sphere",
+            "radius": 1.75,
+            "centre": [
+              0.0,
+              4.0,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "copper-brown trunk and radial green canopy with sun-faded edges",
+      "color_paint_style": "chunky wavy bark bands and knots with veined leaf markings",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "tree_umbrella",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/tree_umbrella_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 104724,
+      "paint_size_bytes": 45377,
+      "preview_size_bytes": 154450
+    },
+    "tree_skyneedle": {
+      "name": "tree_skyneedle",
+      "category": "tree",
+      "glb": "tree_skyneedle.glb",
+      "color_paint": "biome_paint/tree_skyneedle_paint.png",
+      "preview": "biome_previews/tree_skyneedle.png",
+      "authored_height": 13.5,
+      "triangle_count": 1910,
+      "glb_vertex_count": 3004,
+      "triangle_budget": {
+        "minimum": 1050,
+        "maximum": 2180
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.52,
+        "height": 12.8,
+        "centre": [
+          0.0,
+          6.4,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "fine charcoal bark rings below long blue-green leaves with pale vein flashes",
+      "color_paint_style": "chunky wavy bark bands and knots with veined leaf markings",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "tree_skyneedle",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/tree_skyneedle_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 144944,
+      "paint_size_bytes": 44919,
+      "preview_size_bytes": 185148
+    },
+    "tree_cloudbough": {
+      "name": "tree_cloudbough",
+      "category": "tree",
+      "glb": "tree_cloudbough.glb",
+      "color_paint": "biome_paint/tree_cloudbough_paint.png",
+      "preview": "biome_previews/tree_cloudbough.png",
+      "authored_height": 11.8,
+      "triangle_count": 2184,
+      "glb_vertex_count": 3155,
+      "triangle_budget": {
+        "minimum": 1200,
+        "maximum": 2240
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "capsule",
+            "radius": 0.72,
+            "height": 8.0,
+            "centre": [
+              0.0,
+              4.0,
+              0.0
+            ]
+          },
+          {
+            "shape": "sphere",
+            "radius": 7.2,
+            "centre": [
+              0.0,
+              9.15,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "deep walnut trunk below overlapping broad leaves painted with mossy margins and veins",
+      "color_paint_style": "chunky wavy bark bands and knots with veined leaf markings",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "tree_cloudbough",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/tree_cloudbough_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 153256,
+      "paint_size_bytes": 44962,
+      "preview_size_bytes": 143109
+    },
+    "tree_orb_giant": {
+      "name": "tree_orb_giant",
+      "category": "tree",
+      "glb": "tree_orb_giant.glb",
+      "color_paint": "biome_paint/tree_orb_giant_paint.png",
+      "preview": "biome_previews/tree_orb_giant.png",
+      "authored_height": 18.0,
+      "triangle_count": 2380,
+      "glb_vertex_count": 3545,
+      "triangle_budget": {
+        "minimum": 1250,
+        "maximum": 2580
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "capsule",
+            "radius": 2.8,
+            "height": 12.2,
+            "centre": [
+              0.0,
+              6.1,
+              0.0
+            ]
+          },
+          {
+            "shape": "sphere",
+            "radius": 7.0,
+            "centre": [
+              0.0,
+              14.0,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "massive dark banded trunk carrying a many-leaf spherical crown with chartreuse tips",
+      "color_paint_style": "chunky wavy bark bands and knots with veined leaf markings",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "tree_orb_giant",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/tree_orb_giant_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 171572,
+      "paint_size_bytes": 44404,
+      "preview_size_bytes": 203142
+    },
+    "tree_corkscrew": {
+      "name": "tree_corkscrew",
+      "category": "tree",
+      "glb": "tree_corkscrew.glb",
+      "color_paint": "biome_paint/tree_corkscrew_paint.png",
+      "preview": "biome_previews/tree_corkscrew.png",
+      "authored_height": 8.4,
+      "triangle_count": 1820,
+      "glb_vertex_count": 2401,
+      "triangle_budget": {
+        "minimum": 980,
+        "maximum": 2100
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 1.25,
+        "height": 8.0,
+        "centre": [
+          0.0,
+          4.0,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "paired plum corkscrew trunks with turquoise pinwheel leaves and broad gold markings",
+      "color_paint_style": "chunky wavy bark bands and knots with veined leaf markings",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "tree_corkscrew",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/tree_corkscrew_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 117888,
+      "paint_size_bytes": 47301,
+      "preview_size_bytes": 190648
+    },
+    "mushroom_cluster": {
+      "name": "mushroom_cluster",
+      "category": "fungus",
+      "glb": "mushroom_cluster.glb",
+      "color_paint": "biome_paint/mushroom_cluster_paint.png",
+      "preview": "biome_previews/mushroom_cluster.png",
+      "authored_height": 0.85,
+      "triangle_count": 840,
+      "glb_vertex_count": 1154,
+      "triangle_budget": {
+        "minimum": 500,
+        "maximum": 1180
+      },
+      "collision_hint": {
+        "shape": "sphere",
+        "radius": 0.47,
+        "centre": [
+          0.0,
+          0.4,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "cream stems under irregular terracotta caps and darker cap margins",
+      "color_paint_style": "stem striations, cap spots, margins, and radial gill bands",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "mushroom_cluster",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/mushroom_cluster_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 57148,
+      "paint_size_bytes": 49334,
+      "preview_size_bytes": 181256
+    },
+    "mushroom_lantern": {
+      "name": "mushroom_lantern",
+      "category": "fungus",
+      "glb": "mushroom_lantern.glb",
+      "color_paint": "biome_paint/mushroom_lantern_paint.png",
+      "preview": "biome_previews/mushroom_lantern.png",
+      "authored_height": 1.2,
+      "triangle_count": 720,
+      "glb_vertex_count": 1127,
+      "triangle_budget": {
+        "minimum": 520,
+        "maximum": 1240
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.42,
+        "height": 1.05,
+        "centre": [
+          0.0,
+          0.525,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "cool stems with pale chartreuse bell caps and luminous gill edges",
+      "color_paint_style": "stem striations, cap spots, margins, and radial gill bands",
+      "suggested_emission_style": "soft chartreuse vertex emission; preserve instance tint",
+      "emission_strength": 1.5,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "mushroom_lantern",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/mushroom_lantern_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 55396,
+      "paint_size_bytes": 50348,
+      "preview_size_bytes": 170865
+    },
+    "mushroom_giant": {
+      "name": "mushroom_giant",
+      "category": "fungus",
+      "glb": "mushroom_giant.glb",
+      "color_paint": "biome_paint/mushroom_giant_paint.png",
+      "preview": "biome_previews/mushroom_giant.png",
+      "authored_height": 3.2,
+      "triangle_count": 572,
+      "glb_vertex_count": 974,
+      "triangle_budget": {
+        "minimum": 480,
+        "maximum": 1280
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "capsule",
+            "radius": 0.38,
+            "height": 2.25,
+            "centre": [
+              0.0,
+              1.125,
+              0.0
+            ]
+          },
+          {
+            "shape": "sphere",
+            "radius": 1.1,
+            "centre": [
+              0.0,
+              2.45,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "earthy stem, wine cap, cream underside and layered radial gills",
+      "color_paint_style": "stem striations, cap spots, margins, and radial gill bands",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "mushroom_giant",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/mushroom_giant_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 47608,
+      "paint_size_bytes": 48116,
+      "preview_size_bytes": 180534
+    },
+    "rock_weathered": {
+      "name": "rock_weathered",
+      "category": "rock",
+      "glb": "rock_weathered.glb",
+      "color_paint": "biome_paint/rock_weathered_paint.png",
+      "preview": "biome_previews/rock_weathered.png",
+      "authored_height": 1.35,
+      "triangle_count": 320,
+      "glb_vertex_count": 960,
+      "triangle_budget": {
+        "minimum": 260,
+        "maximum": 720
+      },
+      "collision_hint": {
+        "shape": "convex_hull"
+      },
+      "suggested_vertex_colour_style": "noise-banded charcoal, lichen grey, and sand-worn upper planes",
+      "color_paint_style": "broad strata, softened cracks, lichen islands, and ice facets",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.92,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "rock_weathered",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/rock_weathered_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 45480,
+      "paint_size_bytes": 51683,
+      "preview_size_bytes": 170991
+    },
+    "rock_basalt": {
+      "name": "rock_basalt",
+      "category": "rock",
+      "glb": "rock_basalt.glb",
+      "color_paint": "biome_paint/rock_basalt_paint.png",
+      "preview": "biome_previews/rock_basalt.png",
+      "authored_height": 2.25,
+      "triangle_count": 448,
+      "glb_vertex_count": 864,
+      "triangle_budget": {
+        "minimum": 300,
+        "maximum": 780
+      },
+      "collision_hint": {
+        "shape": "box",
+        "size": [
+          1.35,
+          2.1,
+          1.2
+        ],
+        "centre": [
+          0.0,
+          1.05,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "near-black column sides with cool fractured top planes",
+      "color_paint_style": "broad strata, softened cracks, lichen islands, and ice facets",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.88,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "rock_basalt",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/rock_basalt_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 42004,
+      "paint_size_bytes": 47222,
+      "preview_size_bytes": 181481
+    },
+    "glacier_shard": {
+      "name": "glacier_shard",
+      "category": "rock",
+      "glb": "glacier_shard.glb",
+      "color_paint": "biome_paint/glacier_shard_paint.png",
+      "preview": "biome_previews/glacier_shard.png",
+      "authored_height": 2.6,
+      "triangle_count": 228,
+      "glb_vertex_count": 480,
+      "triangle_budget": {
+        "minimum": 180,
+        "maximum": 620
+      },
+      "collision_hint": {
+        "shape": "convex_hull"
+      },
+      "suggested_vertex_colour_style": "deep cyan cores grading to desaturated ice-blue shard ridges",
+      "color_paint_style": "broad strata, softened cracks, lichen islands, and ice facets",
+      "suggested_emission_style": "very low blue-white emission for readability in shadow",
+      "emission_strength": 0.18,
+      "material": {
+        "roughness": 0.34,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "glacier_shard",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/glacier_shard_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 23880,
+      "paint_size_bytes": 56343,
+      "preview_size_bytes": 178006
+    },
+    "boulder_round": {
+      "name": "boulder_round",
+      "category": "rock",
+      "glb": "boulder_round.glb",
+      "color_paint": "biome_paint/boulder_round_paint.png",
+      "preview": "biome_previews/boulder_round.png",
+      "authored_height": 2.2,
+      "triangle_count": 320,
+      "glb_vertex_count": 960,
+      "triangle_budget": {
+        "minimum": 260,
+        "maximum": 760
+      },
+      "collision_hint": {
+        "shape": "sphere",
+        "radius": 1.1,
+        "centre": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "broad charcoal freckles, pale lichen islands and weather-soft strata",
+      "color_paint_style": "broad strata, softened cracks, lichen islands, and ice facets",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.94,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "boulder_round",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/boulder_round_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 45476,
+      "paint_size_bytes": 51230,
+      "preview_size_bytes": 172063
+    },
+    "boulder_layered": {
+      "name": "boulder_layered",
+      "category": "rock",
+      "glb": "boulder_layered.glb",
+      "color_paint": "biome_paint/boulder_layered_paint.png",
+      "preview": "biome_previews/boulder_layered.png",
+      "authored_height": 3.1,
+      "triangle_count": 320,
+      "glb_vertex_count": 960,
+      "triangle_budget": {
+        "minimum": 260,
+        "maximum": 780
+      },
+      "collision_hint": {
+        "shape": "sphere",
+        "radius": 1.5,
+        "centre": [
+          0.0,
+          1.45,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "wide umber and ochre sediment ribbons broken by softened dark cracks",
+      "color_paint_style": "wide sediment ribbons, softened cracks, and lichen islands",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.91,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "boulder_layered",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/boulder_layered_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 45480,
+      "paint_size_bytes": 51472,
+      "preview_size_bytes": 157075
+    },
+    "boulder_colossus": {
+      "name": "boulder_colossus",
+      "category": "rock",
+      "glb": "boulder_colossus.glb",
+      "color_paint": "biome_paint/boulder_colossus_paint.png",
+      "preview": "biome_previews/boulder_colossus.png",
+      "authored_height": 12.0,
+      "triangle_count": 320,
+      "glb_vertex_count": 960,
+      "triangle_budget": {
+        "minimum": 260,
+        "maximum": 820
+      },
+      "collision_hint": {
+        "shape": "sphere",
+        "radius": 5.8,
+        "centre": [
+          0.0,
+          5.7,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "continent-dark lower shelves, broad sage lichen shelves and pale crowns",
+      "color_paint_style": "monumental shelf strata, broad cracks, and large lichen continents",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.96,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "boulder_colossus",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/boulder_colossus_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 45460,
+      "paint_size_bytes": 51177,
+      "preview_size_bytes": 172245
+    },
+    "basalt_hex_field": {
+      "name": "basalt_hex_field",
+      "category": "rock",
+      "glb": "basalt_hex_field.glb",
+      "color_paint": "biome_paint/basalt_hex_field_paint.png",
+      "preview": "biome_previews/basalt_hex_field.png",
+      "authored_height": 5.0,
+      "triangle_count": 784,
+      "glb_vertex_count": 1512,
+      "triangle_budget": {
+        "minimum": 520,
+        "maximum": 1180
+      },
+      "collision_hint": {
+        "shape": "box",
+        "size": [
+          4.5,
+          5.0,
+          4.2
+        ],
+        "centre": [
+          0.0,
+          2.5,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "near-black hexagonal cooling columns with vertical ash streaks and pale broken caps",
+      "color_paint_style": "vertical cooling striations, broad charcoal seams, ash bands, and pale fractured hex caps",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.9,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "basalt_hex_field",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/basalt_hex_field_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 72540,
+      "paint_size_bytes": 44815,
+      "preview_size_bytes": 174267
+    },
+    "basalt_citadel": {
+      "name": "basalt_citadel",
+      "category": "rock",
+      "glb": "basalt_citadel.glb",
+      "color_paint": "biome_paint/basalt_citadel_paint.png",
+      "preview": "biome_previews/basalt_citadel.png",
+      "authored_height": 14.0,
+      "triangle_count": 1232,
+      "glb_vertex_count": 2376,
+      "triangle_budget": {
+        "minimum": 700,
+        "maximum": 1580
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "box",
+            "size": [
+              7.5,
+              14.0,
+              7.5
+            ],
+            "centre": [
+              0.0,
+              7.0,
+              0.0
+            ]
+          },
+          {
+            "shape": "box",
+            "size": [
+              15.0,
+              5.0,
+              14.0
+            ],
+            "centre": [
+              0.0,
+              2.5,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "towering soot-black hex columns, graphite cooling seams and silver-grey caps",
+      "color_paint_style": "vertical cooling striations, broad charcoal seams, ash bands, and pale fractured hex caps",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.89,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "basalt_citadel",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/basalt_citadel_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 113244,
+      "paint_size_bytes": 43194,
+      "preview_size_bytes": 181867
+    },
+    "crystal_emerald": {
+      "name": "crystal_emerald",
+      "category": "rock",
+      "glb": "crystal_emerald.glb",
+      "color_paint": "biome_paint/crystal_emerald_paint.png",
+      "preview": "biome_previews/crystal_emerald.png",
+      "authored_height": 6.5,
+      "triangle_count": 414,
+      "glb_vertex_count": 864,
+      "triangle_budget": {
+        "minimum": 280,
+        "maximum": 920
+      },
+      "collision_hint": {
+        "shape": "convex_hull"
+      },
+      "suggested_vertex_colour_style": "deep bottle-green crystal bodies with mint facet bands and broad luminous veins",
+      "color_paint_style": "broad crystal facets, branching luminous veins, pale tips, and a mip-safe emission mask in PNG alpha",
+      "suggested_emission_style": "green facet veins glow in daylight and strengthen at night",
+      "emission_strength": 0.7,
+      "material": {
+        "roughness": 0.25,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ],
+        "color_paint_alpha": "broad mip-safe emission mask; never used as transparency"
+      },
+      "runtime_contract": {
+        "mesh_node": "crystal_emerald",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/crystal_emerald_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "emission_mask": "biome_paint/crystal_emerald_paint.png alpha"
+      },
+      "file_size_bytes": 41868,
+      "paint_size_bytes": 63894,
+      "preview_size_bytes": 202428
+    },
+    "crystal_amethyst": {
+      "name": "crystal_amethyst",
+      "category": "rock",
+      "glb": "crystal_amethyst.glb",
+      "color_paint": "biome_paint/crystal_amethyst_paint.png",
+      "preview": "biome_previews/crystal_amethyst.png",
+      "authored_height": 8.0,
+      "triangle_count": 506,
+      "glb_vertex_count": 1056,
+      "triangle_budget": {
+        "minimum": 340,
+        "maximum": 1040
+      },
+      "collision_hint": {
+        "shape": "convex_hull"
+      },
+      "suggested_vertex_colour_style": "smoky violet bases, amethyst planes and pale branching crystal veins",
+      "color_paint_style": "broad crystal facets, branching luminous veins, pale tips, and a mip-safe emission mask in PNG alpha",
+      "suggested_emission_style": "violet vein tattoos breathe and twinkle after sunset",
+      "emission_strength": 0.65,
+      "material": {
+        "roughness": 0.29,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ],
+        "color_paint_alpha": "broad mip-safe emission mask; never used as transparency"
+      },
+      "runtime_contract": {
+        "mesh_node": "crystal_amethyst",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/crystal_amethyst_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "emission_mask": "biome_paint/crystal_amethyst_paint.png alpha"
+      },
+      "file_size_bytes": 50892,
+      "paint_size_bytes": 65111,
+      "preview_size_bytes": 194468
+    },
+    "crystal_spire": {
+      "name": "crystal_spire",
+      "category": "rock",
+      "glb": "crystal_spire.glb",
+      "color_paint": "biome_paint/crystal_spire_paint.png",
+      "preview": "biome_previews/crystal_spire.png",
+      "authored_height": 18.0,
+      "triangle_count": 368,
+      "glb_vertex_count": 768,
+      "triangle_budget": {
+        "minimum": 300,
+        "maximum": 980
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "box",
+            "size": [
+              5.0,
+              18.0,
+              4.6
+            ],
+            "centre": [
+              0.0,
+              9.0,
+              0.0
+            ]
+          },
+          {
+            "shape": "sphere",
+            "radius": 5.0,
+            "centre": [
+              0.0,
+              2.5,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "dark teal roots rising through cyan facets to broad white-aqua energy seams",
+      "color_paint_style": "broad crystal facets, branching luminous veins, pale tips, and a mip-safe emission mask in PNG alpha",
+      "suggested_emission_style": "aqua seams remain visible under sun and cast stronger light at night",
+      "emission_strength": 0.78,
+      "material": {
+        "roughness": 0.22,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ],
+        "color_paint_alpha": "broad mip-safe emission mask; never used as transparency"
+      },
+      "runtime_contract": {
+        "mesh_node": "crystal_spire",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/crystal_spire_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "emission_mask": "biome_paint/crystal_spire_paint.png alpha"
+      },
+      "file_size_bytes": 37372,
+      "paint_size_bytes": 65599,
+      "preview_size_bytes": 186686
+    },
+    "rune_monolith": {
+      "name": "rune_monolith",
+      "category": "rock",
+      "glb": "rune_monolith.glb",
+      "color_paint": "biome_paint/rune_monolith_paint.png",
+      "preview": "biome_previews/rune_monolith.png",
+      "authored_height": 13.0,
+      "triangle_count": 176,
+      "glb_vertex_count": 352,
+      "triangle_budget": {
+        "minimum": 100,
+        "maximum": 420
+      },
+      "collision_hint": {
+        "shape": "box",
+        "size": [
+          6.2,
+          13.0,
+          4.4
+        ],
+        "centre": [
+          0.0,
+          6.5,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "purple-black standing stone crossed by broad angular turquoise tattoos",
+      "color_paint_style": "wide strata under looping glyphs, broken chevrons, and a mip-safe tattoo emission mask in PNG alpha",
+      "suggested_emission_style": "turquoise glyph paths emerge at dusk with asynchronous breathing",
+      "emission_strength": 0.62,
+      "material": {
+        "roughness": 0.82,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ],
+        "color_paint_alpha": "broad mip-safe emission mask; never used as transparency"
+      },
+      "runtime_contract": {
+        "mesh_node": "rune_monolith",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/rune_monolith_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "emission_mask": "biome_paint/rune_monolith_paint.png alpha"
+      },
+      "file_size_bytes": 17916,
+      "paint_size_bytes": 68937,
+      "preview_size_bytes": 202803
+    },
+    "rune_boulder": {
+      "name": "rune_boulder",
+      "category": "rock",
+      "glb": "rune_boulder.glb",
+      "color_paint": "biome_paint/rune_boulder_paint.png",
+      "preview": "biome_previews/rune_boulder.png",
+      "authored_height": 3.8,
+      "triangle_count": 320,
+      "glb_vertex_count": 960,
+      "triangle_budget": {
+        "minimum": 260,
+        "maximum": 780
+      },
+      "collision_hint": {
+        "shape": "sphere",
+        "radius": 1.9,
+        "centre": [
+          0.0,
+          1.75,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "dark plum stone carrying broad lavender loops, chevrons and glyph scars",
+      "color_paint_style": "wide strata under looping glyphs, broken chevrons, and a mip-safe tattoo emission mask in PNG alpha",
+      "suggested_emission_style": "lavender tattoo paths glow and occasionally twinkle at night",
+      "emission_strength": 0.58,
+      "material": {
+        "roughness": 0.88,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ],
+        "color_paint_alpha": "broad mip-safe emission mask; never used as transparency"
+      },
+      "runtime_contract": {
+        "mesh_node": "rune_boulder",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/rune_boulder_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "emission_mask": "biome_paint/rune_boulder_paint.png alpha"
+      },
+      "file_size_bytes": 45544,
+      "paint_size_bytes": 70282,
+      "preview_size_bytes": 207356
+    },
+    "cactus_barrel": {
+      "name": "cactus_barrel",
+      "category": "desert",
+      "glb": "cactus_barrel.glb",
+      "color_paint": "biome_paint/cactus_barrel_paint.png",
+      "preview": "biome_previews/cactus_barrel.png",
+      "authored_height": 1.25,
+      "triangle_count": 732,
+      "glb_vertex_count": 1102,
+      "triangle_budget": {
+        "minimum": 360,
+        "maximum": 960
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.48,
+        "height": 1.08,
+        "centre": [
+          0.0,
+          0.54,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "rib-shadowed green body, straw areoles, and coral crown petals",
+      "color_paint_style": "rib shadows, staggered areoles, fibrous bark, and petal marks",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "cactus_barrel",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/cactus_barrel_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 54188,
+      "paint_size_bytes": 46163,
+      "preview_size_bytes": 180604
+    },
+    "cactus_branching": {
+      "name": "cactus_branching",
+      "category": "desert",
+      "glb": "cactus_branching.glb",
+      "color_paint": "biome_paint/cactus_branching_paint.png",
+      "preview": "biome_previews/cactus_branching.png",
+      "authored_height": 3.0,
+      "triangle_count": 692,
+      "glb_vertex_count": 1216,
+      "triangle_budget": {
+        "minimum": 520,
+        "maximum": 1380
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "capsule",
+            "radius": 0.32,
+            "height": 2.75,
+            "centre": [
+              0.0,
+              1.375,
+              0.0
+            ]
+          },
+          {
+            "shape": "sphere",
+            "radius": 1.0,
+            "centre": [
+              0.0,
+              1.85,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "dark rib valleys, sunlit green arms, straw spines, coral flowers",
+      "color_paint_style": "rib shadows, staggered areoles, fibrous bark, and petal marks",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "cactus_branching",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/cactus_branching_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 58968,
+      "paint_size_bytes": 45436,
+      "preview_size_bytes": 178488
+    },
+    "joshua_tree": {
+      "name": "joshua_tree",
+      "category": "desert",
+      "glb": "joshua_tree.glb",
+      "color_paint": "biome_paint/joshua_tree_paint.png",
+      "preview": "biome_previews/joshua_tree.png",
+      "authored_height": 4.8,
+      "triangle_count": 1180,
+      "glb_vertex_count": 1961,
+      "triangle_budget": {
+        "minimum": 850,
+        "maximum": 1780
+      },
+      "collision_hint": {
+        "shape": "compound",
+        "parts": [
+          {
+            "shape": "capsule",
+            "radius": 0.3,
+            "height": 3.45,
+            "centre": [
+              0.0,
+              1.725,
+              0.0
+            ]
+          },
+          {
+            "shape": "sphere",
+            "radius": 1.25,
+            "centre": [
+              0.0,
+              3.7,
+              0.0
+            ]
+          }
+        ]
+      },
+      "suggested_vertex_colour_style": "fibrous umber branches ending in dense dusty-green blade rosettes",
+      "color_paint_style": "rib shadows, staggered areoles, fibrous bark, and petal marks",
+      "suggested_emission_style": "none",
+      "emission_strength": 0.0,
+      "material": {
+        "roughness": 0.72,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "joshua_tree",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/joshua_tree_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 94680,
+      "paint_size_bytes": 41751,
+      "preview_size_bytes": 162343
+    },
+    "firefly_lantern": {
+      "name": "firefly_lantern",
+      "category": "glimmer",
+      "glb": "firefly_lantern.glb",
+      "color_paint": "biome_paint/firefly_lantern_paint.png",
+      "preview": "biome_previews/firefly_lantern.png",
+      "authored_height": 1.55,
+      "triangle_count": 806,
+      "glb_vertex_count": 1366,
+      "triangle_budget": {
+        "minimum": 440,
+        "maximum": 1180
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.43,
+        "height": 1.35,
+        "centre": [
+          0.0,
+          0.675,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "night-green stems with yellow lantern pods and pale firefly wings",
+      "color_paint_style": "stem bands, pod freckles, wing eyespots, and dust marks",
+      "suggested_emission_style": "warm yellow-green emission concentrated on pods and motes",
+      "emission_strength": 2.2,
+      "material": {
+        "roughness": 0.56,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "firefly_lantern",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/firefly_lantern_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 66440,
+      "paint_size_bytes": 49936,
+      "preview_size_bytes": 167030
+    },
+    "moth_glimmer": {
+      "name": "moth_glimmer",
+      "category": "glimmer",
+      "glb": "moth_glimmer.glb",
+      "color_paint": "biome_paint/moth_glimmer_paint.png",
+      "preview": "biome_previews/moth_glimmer.png",
+      "authored_height": 1.75,
+      "triangle_count": 344,
+      "glb_vertex_count": 585,
+      "triangle_budget": {
+        "minimum": 320,
+        "maximum": 980
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.48,
+        "height": 1.5,
+        "centre": [
+          0.0,
+          0.75,
+          0.0
+        ]
+      },
+      "suggested_vertex_colour_style": "charcoal perch and body, layered lavender-grey wings, warm markings",
+      "color_paint_style": "stem bands, pod freckles, wing eyespots, and dust marks",
+      "suggested_emission_style": "subtle lavender wing emission with warm antenna and dust accents",
+      "emission_strength": 1.25,
+      "material": {
+        "roughness": 0.62,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "moth_glimmer",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/moth_glimmer_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y"
+      },
+      "file_size_bytes": 29256,
+      "paint_size_bytes": 48377,
+      "preview_size_bytes": 154052
+    },
+    "firefly_mote": {
+      "name": "firefly_mote",
+      "category": "flyer",
+      "glb": "firefly_mote.glb",
+      "color_paint": "biome_paint/firefly_mote_paint.png",
+      "preview": "biome_previews/firefly_mote.png",
+      "authored_height": 0.04396,
+      "triangle_count": 214,
+      "glb_vertex_count": 424,
+      "triangle_budget": {
+        "minimum": 150,
+        "maximum": 300
+      },
+      "collision_hint": {
+        "shape": "none",
+        "placement": "airborne MultiMesh mote"
+      },
+      "suggested_vertex_colour_style": "black-green beetle shell, smoky pale wings, concentrated gold rear lantern",
+      "color_paint_style": "body bands, scalloped wing marks, eyespots, and vein accents",
+      "suggested_emission_style": "strong warm yellow rear-segment emission; retain dark body contrast",
+      "emission_strength": 3.4,
+      "material": {
+        "roughness": 0.52,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "firefly_mote",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/firefly_mote_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "placement": "airborne_centred",
+        "grounding": "bounds centred near origin and straddling local Y=0"
+      },
+      "file_size_bytes": 21440,
+      "paint_size_bytes": 46861,
+      "preview_size_bytes": 142744,
+      "authored_longest_dimension": 0.16,
+      "forward_axis": "local -Z is body-forward; local +Y is dorsal/up"
+    },
+    "moth_flyer": {
+      "name": "moth_flyer",
+      "category": "flyer",
+      "glb": "moth_flyer.glb",
+      "color_paint": "biome_paint/moth_flyer_paint.png",
+      "preview": "biome_previews/moth_flyer.png",
+      "authored_height": 0.09453,
+      "triangle_count": 372,
+      "glb_vertex_count": 762,
+      "triangle_budget": {
+        "minimum": 250,
+        "maximum": 420
+      },
+      "collision_hint": {
+        "shape": "none",
+        "placement": "airborne MultiMesh moth"
+      },
+      "suggested_vertex_colour_style": "charcoal fur, layered plum wings, pale scallops, and warm eyespots",
+      "color_paint_style": "body bands, scalloped wing marks, eyespots, and vein accents",
+      "suggested_emission_style": "low violet wing-edge emission with muted warm eyespots",
+      "emission_strength": 0.85,
+      "material": {
+        "roughness": 0.68,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "moth_flyer",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/moth_flyer_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "placement": "airborne_centred",
+        "grounding": "bounds centred near origin and straddling local Y=0"
+      },
+      "file_size_bytes": 37164,
+      "paint_size_bytes": 49415,
+      "preview_size_bytes": 148304,
+      "authored_longest_dimension": 0.24,
+      "forward_axis": "local -Z is body-forward; local +Y is dorsal/up"
+    },
+    "dragon_gnat": {
+      "name": "dragon_gnat",
+      "category": "flyer",
+      "glb": "dragon_gnat.glb",
+      "color_paint": "biome_paint/dragon_gnat_paint.png",
+      "preview": "biome_previews/dragon_gnat.png",
+      "authored_height": 0.04265,
+      "triangle_count": 260,
+      "glb_vertex_count": 530,
+      "triangle_budget": {
+        "minimum": 130,
+        "maximum": 300
+      },
+      "collision_hint": {
+        "shape": "none",
+        "placement": "airborne MultiMesh dart"
+      },
+      "suggested_vertex_colour_style": "blue-black segmented body, teal compound eyes, and desaturated glass wings",
+      "color_paint_style": "body bands, scalloped wing marks, eyespots, and vein accents",
+      "suggested_emission_style": "subtle cool bioluminescence along thorax and compound eyes",
+      "emission_strength": 0.7,
+      "material": {
+        "roughness": 0.46,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "dragon_gnat",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/dragon_gnat_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "placement": "airborne_centred",
+        "grounding": "bounds centred near origin and straddling local Y=0"
+      },
+      "file_size_bytes": 26284,
+      "paint_size_bytes": 47987,
+      "preview_size_bytes": 138834,
+      "authored_longest_dimension": 0.28,
+      "forward_axis": "local -Z is body-forward; local +Y is dorsal/up"
+    },
+    "pollen_bug": {
+      "name": "pollen_bug",
+      "category": "flyer",
+      "glb": "pollen_bug.glb",
+      "color_paint": "biome_paint/pollen_bug_paint.png",
+      "preview": "biome_previews/pollen_bug.png",
+      "authored_height": 0.045829,
+      "triangle_count": 250,
+      "glb_vertex_count": 512,
+      "triangle_budget": {
+        "minimum": 120,
+        "maximum": 300
+      },
+      "collision_hint": {
+        "shape": "none",
+        "placement": "airborne MultiMesh pollinator"
+      },
+      "suggested_vertex_colour_style": "dark-and-ochre abdomen bands, russet thorax, and short cream wings",
+      "color_paint_style": "body bands, scalloped wing marks, eyespots, and vein accents",
+      "suggested_emission_style": "effectively unlit; optional near-zero amber response only",
+      "emission_strength": 0.04,
+      "material": {
+        "roughness": 0.76,
+        "vertex_colour_attribute": "COLOR_0",
+        "color_paint_uv": "TEXCOORD_0",
+        "color_paint_size": [
+          256,
+          256
+        ]
+      },
+      "runtime_contract": {
+        "mesh_node": "pollen_bug",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "paint_texture": "biome_paint/pollen_bug_paint.png",
+        "skins": 0,
+        "animations": 0,
+        "ground_axis": "Godot/glTF +Y",
+        "placement": "airborne_centred",
+        "grounding": "bounds centred near origin and straddling local Y=0"
+      },
+      "file_size_bytes": 25436,
+      "paint_size_bytes": 46807,
+      "preview_size_bytes": 143990,
+      "authored_longest_dimension": 0.14,
+      "forward_axis": "local -Z is body-forward; local +Y is dorsal/up"
+    }
+  },
+  "asset_count": 40
+}

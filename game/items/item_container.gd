@@ -33,7 +33,8 @@ func get_item(index: int) -> String:
 
 
 func set_item(index: int, id: String) -> void:
-	if index < 0 or index >= _items.size() or _items[index] == id:
+	if index < 0 or index >= _items.size() or _items[index] == id \
+			or not accepts(index, id):
 		return
 	_items[index] = id
 	changed.emit()
@@ -60,7 +61,7 @@ func accepts(index: int, id: String) -> bool:
 	if id.is_empty():
 		return true
 	var filter := filter_of(index)
-	return filter.is_empty() or ItemDB.slot_of(id) == filter
+	return filter.is_empty() or ItemDB.accepts(filter, id)
 
 
 ## The slot `id` should go to when nothing more specific was asked for: a free
@@ -84,9 +85,12 @@ func is_full() -> bool:
 
 
 func clear() -> void:
+	var had_items := false
 	for index in _items.size():
+		had_items = had_items or not _items[index].is_empty()
 		_items[index] = ""
-	changed.emit()
+	if had_items:
+		changed.emit()
 
 
 ## Moves an item onto a specific slot, swapping with whatever is already there.

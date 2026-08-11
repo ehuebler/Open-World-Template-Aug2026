@@ -36,6 +36,14 @@ extends Control
 ## A garment or the skin was recoloured. Raised rather than acted on: in game the
 ## player owns the body being painted, and on the home screen the look being saved.
 signal tint_picked(target: String, colour: Color)
+## The authored texture/colour should show without a multiplying tint. Separate
+## from picking white: sparse tint data is the promise that "no tint" really
+## means no override, and lets a later authored colour change come through.
+signal tint_cleared(target: String)
+## One of the texture schemes offered by this body was chosen. Only the
+## home-screen editor exposes the picker; the in-game page still needs the id so
+## its preview draws the same character.
+signal skin_picked(skin_id: String)
 ## The name field was committed to. Same reasoning — the name belongs to whoever
 ## opened the page.
 signal name_entered(value: String)
@@ -120,6 +128,7 @@ var _weapons: ItemContainer
 var _pockets: ItemContainer
 var _stats: PlayerStats
 var _body_id := CharacterDB.DEFAULT_BODY
+var _skin_id := ""
 var _player_name := "Player"
 var _editing := false
 
@@ -148,6 +157,8 @@ var _tint_target := TINT_BODY
 var _tints: Dictionary = {}
 var _tint_caption: Label
 var _wheel: ColourWheel
+var _clear_tint: Button
+var _skin_row: HBoxContainer
 
 ## Empty means everything. Two filters rather than one because they narrow along
 ## different axes and are worth combining: a category is what kind of thing it
@@ -171,6 +182,7 @@ func configure(equipment: ItemContainer, weapons: ItemContainer, pockets: ItemCo
 	_pockets = pockets
 	_stats = stats
 	_body_id = CharacterDB.sanitize_body(body_id)
+	_skin_id = CharacterDB.default_skin(_body_id)
 	_editing = editing
 
 
@@ -185,6 +197,15 @@ func set_tints(tints: Dictionary) -> void:
 	_update_tint_caption()
 
 
+func set_skin(skin_id: String) -> void:
+	var clean := CharacterDB.sanitize_skin(_body_id, skin_id)
+	if clean == _skin_id:
+		return
+	_skin_id = clean
+	_fill_skin_row()
+	_paint_model()
+
+
 ## Swaps the model for another body. The caller has already decided what happens to
 ## the garments that were on the old one.
 func set_body(body_id: String) -> void:
@@ -192,6 +213,7 @@ func set_body(body_id: String) -> void:
 	if body_id == _body_id:
 		return
 	_body_id = body_id
+	_skin_id = CharacterDB.sanitize_skin(_body_id, _skin_id)
 	_preview_worn.clear()
 	if is_instance_valid(_preview_pivot):
 		if is_instance_valid(_preview_character):
@@ -199,6 +221,7 @@ func set_body(body_id: String) -> void:
 		_preview_character = _new_model()
 		_preview_pivot.add_child(_preview_character)
 		_frame_model()
+	_fill_skin_row()
 	refresh()
 	_paint_model()
 
@@ -293,7 +316,10 @@ func _build_hero(column: VBoxContainer) -> void:
 	var top := HBoxContainer.new()
 	top.add_theme_constant_override(&"separation", 12)
 	top.add_child(_name_plate())
-	top.add_child(_spacer())
+	if _editing and CharacterDB.skin_ids(_body_id).size() > 1:
+		top.add_child(_skin_picker())
+	else:
+		top.add_child(_spacer())
 	column.add_child(top)
 
 	var middle := HBoxContainer.new()
@@ -323,7 +349,10 @@ func _build_hero(column: VBoxContainer) -> void:
 ## making a character; a plate in game, where it is who you already are.
 func _name_plate() -> Control:
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(260.0, 0.0)
+	# The home editor shares this row with its texture buttons. Keeping the name
+	# plate narrower than the read-only version leaves room for those controls at
+	# the 1280 px reference width while retaining the full 24-character value.
+	panel.custom_minimum_size = Vector2(216.0 if _editing else 260.0, 0.0)
 	AuroraSurface.add_to(panel, AuroraSurface.Style.INPUT if _editing \
 		else AuroraSurface.Style.ROW)
 	var padding := _padded(8 if _editing else 10)
@@ -349,6 +378,55 @@ func _name_plate() -> Control:
 	field.focus_exited.connect(func() -> void: name_entered.emit(field.text))
 	padding.add_child(field)
 	return panel
+
+
+## Texture schemes are a property of this one body, not another body picker:
+## both choices keep the settler's skeleton, measurements and wardrobe. Kept in
+## the name row so adding the choice costs width the editor has rather than
+## height it does not.
+func _skin_picker() -> Control:
+	var panel := PanelContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	AuroraSurface.add_to(panel, AuroraSurface.Style.ROW)
+	var padding := _padded(6)
+	panel.add_child(padding)
+	var line := HBoxContainer.new()
+	line.add_theme_constant_override(&"separation", 6)
+	padding.add_child(line)
+	var caption := _caption("Texture")
+	caption.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	line.add_child(caption)
+	_skin_row = HBoxContainer.new()
+	_skin_row.add_theme_constant_override(&"separation", 5)
+	_skin_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	line.add_child(_skin_row)
+	_fill_skin_row()
+	return panel
+
+
+func _fill_skin_row() -> void:
+	if _skin_row == null:
+		return
+	for child in _skin_row.get_children():
+		child.queue_free()
+	for skin_id: String in CharacterDB.skin_ids(_body_id):
+		var button := MenuWidgets.button(CharacterDB.skin_title(skin_id),
+			AuroraSurface.Style.PRIMARY if skin_id == _skin_id else AuroraSurface.Style.BUTTON)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.add_theme_font_size_override(&"font_size", 12)
+		var chosen := skin_id
+		button.pressed.connect(func() -> void: _pick_skin(chosen))
+		_skin_row.add_child(button)
+
+
+func _pick_skin(skin_id: String) -> void:
+	var clean := CharacterDB.sanitize_skin(_body_id, skin_id)
+	if clean == _skin_id:
+		return
+	_skin_id = clean
+	_fill_skin_row()
+	_paint_model()
+	skin_picked.emit(_skin_id)
 
 
 ## What is on the body, one tile per slot, head to feet.
@@ -387,7 +465,7 @@ func _weapon_block() -> Control:
 	# the right-hand column, so it sets the card's width, and the editor's card is
 	# a share of the window with a figure standing in the rest of it.
 	block.add_child(_hint("What you start with" if _editing \
-		else "1 - 5 or the mouse wheel to draw"))
+		else "1 - %d or the mouse wheel to draw" % _weapons.size()))
 	return block
 
 
@@ -639,18 +717,40 @@ func _colour_block() -> Control:
 	# of, while width it has going spare.
 	column.custom_minimum_size = Vector2(TINT_BLOCK_WIDTH, 0.0)
 	padding.add_child(column)
-	column.add_child(_caption("Colour"))
+	var title_row := HBoxContainer.new()
+	title_row.add_child(_caption("Colour"))
+	title_row.add_child(_spacer())
+	_clear_tint = MenuWidgets.button("No tint", AuroraSurface.Style.BUTTON)
+	_clear_tint.add_theme_font_size_override(&"font_size", 12)
+	_clear_tint.pressed.connect(_clear_selected_tint)
+	title_row.add_child(_clear_tint)
+	column.add_child(title_row)
 	_tint_caption = _hint("")
 	_tint_caption.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_tint_caption.custom_minimum_size = Vector2(TINT_BLOCK_WIDTH, 0.0)
 	column.add_child(_tint_caption)
 
 	_wheel = ColourWheel.new()
-	_wheel.picked.connect(func(colour: Color) -> void:
-		tint_picked.emit(_tint_target, colour))
+	_wheel.picked.connect(_pick_tint)
 	column.add_child(_wheel)
 	_update_tint_caption()
 	return panel
+
+
+func _pick_tint(colour: Color) -> void:
+	_tints[_tint_target] = colour.to_html(false)
+	_paint_model()
+	_update_tint_caption()
+	tint_picked.emit(_tint_target, colour)
+
+
+func _clear_selected_tint() -> void:
+	if not _tints.has(_tint_target):
+		return
+	_tints.erase(_tint_target)
+	_paint_model()
+	_update_tint_caption()
+	tint_cleared.emit(_tint_target)
 
 
 ## A tile was clicked. On the body it aims the wheel; in a catalogue it dresses.
@@ -731,8 +831,12 @@ func _set_tint_target(target: String) -> void:
 func _update_tint_caption() -> void:
 	if _tint_caption == null:
 		return
-	_tint_caption.text = "the skin — click a worn tile" \
+	var target_name := "the skin — click a worn tile" \
 		if _tint_target == TINT_BODY else ItemDB.title(_equipped_in(_tint_target))
+	_tint_caption.text = target_name + (" — tint active" if _tints.has(_tint_target) \
+		else " — authored colour")
+	if _clear_tint != null:
+		_clear_tint.disabled = not _tints.has(_tint_target)
 	if _wheel != null:
 		_wheel.set_colour(Color.html(str(_tints.get(_tint_target, "ffffff"))))
 
@@ -803,6 +907,7 @@ func _new_model() -> Node3D:
 	var packed := CharacterDB.scene(_body_id)
 	var model: Node3D = packed.instantiate() if packed != null else Node3D.new()
 	SurfaceSkin.apply(model)
+	SurfaceSkin.set_body_texture(model, CharacterDB.skin_texture(_body_id, _skin_id))
 	_play_idle(model)
 	return model
 
@@ -968,6 +1073,10 @@ func _paint_model() -> void:
 		var derived: Dictionary = {}
 		for mesh_instance: MeshInstance3D in groups[target]:
 			SurfaceSkin.paint(mesh_instance, derived)
+		if target == TINT_BODY:
+			var texture := CharacterDB.skin_texture(_body_id, _skin_id)
+			for mesh_instance: MeshInstance3D in groups[target]:
+				SurfaceSkin.set_texture(mesh_instance, texture)
 		if not _tints.has(target):
 			continue
 		var colour := Color.html(str(_tints[target]))

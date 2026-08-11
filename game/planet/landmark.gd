@@ -20,6 +20,18 @@ const GROUP := &"landmarks"
 ## What the waypoint calls this place.
 @export var title := "Landmark"
 
+## Whether [WaypointLayer] draws a marker for it.
+##
+## Off makes this a place the game knows about but does not point at: it keeps
+## its name, and the journal still completes goals against it and the coordinate
+## plate still reports it as the nearest place, because both of those read the
+## group rather than the screen. Only the label in the sky goes.
+##
+## That separation is the reason this is a flag and not a matter of leaving the
+## group. A landmark is a named position first and a sign second, and every
+## place on the planet needs the first whether or not it is worth the second.
+@export var waypoint := true
+
 ## The colour its name is written in. A palette token or a mix of two of them,
 ## so the set of waypoints stays in the UI's family rather than becoming a
 ## rainbow of arbitrary hues; the ink outline behind the type is what makes it

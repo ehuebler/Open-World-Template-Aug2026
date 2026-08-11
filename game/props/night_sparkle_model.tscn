@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="QuadMesh" id="QuadMesh_sparkle"]
+size = Vector2(1, 1)
+
+[node name="NightSparkleModel" type="Node3D"]
+
+[node name="SparkleQuad" type="MeshInstance3D" parent="."]
+mesh = SubResource("QuadMesh_sparkle")

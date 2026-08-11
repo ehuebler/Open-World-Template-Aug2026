@@ -1,0 +1,24 @@
+[gd_resource type="Resource" script_class="VatClip" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://game/props/vat_clip.gd" id="1_clip"]
+[ext_resource type="Texture2D" path="res://blender_assets/grass_far_vat.exr" id="2_positions"]
+
+; The same sway as grass_vat, baked against the eight-blade clump. A VAT is
+; indexed by vertex, so a second topology needs a second texture however
+; identical the motion is.
+;
+; Which is also why the speed has to be kept equal to grass_vat's by hand: the
+; two clips are the near and far halves of one field and the swap between them
+; happens at 22 m, so a blade that changed pace as it crossed that line would
+; announce exactly where the line is. See grass_vat.tres for why it is 0.35.
+
+[resource]
+script = ExtResource("1_clip")
+resource_name = "GrassFarSwayVAT"
+positions = ExtResource("2_positions")
+metadata_path = "res://blender_assets/grass_far_vat.json"
+; Halved alongside the near clip; see `grass_vat.tres` for the measurements.
+; This carpet shares `grass.tres` with the near field, so it is already calmed
+; at the same distance, but it reaches out to 321 m and every blade of it is
+; sub-pixel, so it has even less to gain from moving quickly.
+playback_speed = 0.18

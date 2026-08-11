@@ -1,0 +1,26 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_plant.gdshader" id="1_shader"]
+
+[resource]
+resource_name = "Biome Seaweed"
+shader = ExtResource("1_shader")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/saturation = 1.42
+shader_parameter/brightness = 1.12
+shader_parameter/tone_variation = 0.2
+shader_parameter/roughness = 0.58
+shader_parameter/specular = 0.24
+shader_parameter/translucency = 0.42
+shader_parameter/region_albedo = 0.12
+shader_parameter/region_sheen = 0.22
+shader_parameter/region_rim = 0.32
+shader_parameter/rigidity = 1.35
+shader_parameter/calm_from = 28.0
+shader_parameter/calm_to = 75.0
+shader_parameter/wind_sway = 18.0
+shader_parameter/wind_speed = 0.24
+shader_parameter/gust_length = 64.0
+shader_parameter/push_sway = 34.0
+shader_parameter/max_bend = 48.0
+shader_parameter/underwater = true

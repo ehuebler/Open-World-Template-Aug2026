@@ -1,0 +1,25 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_plant.gdshader" id="1_shader"]
+
+[resource]
+resource_name = "Biome Tree"
+shader = ExtResource("1_shader")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/saturation = 1.28
+shader_parameter/brightness = 1.08
+shader_parameter/tone_variation = 0.2
+shader_parameter/roughness = 0.76
+shader_parameter/specular = 0.24
+shader_parameter/translucency = 0.2
+shader_parameter/region_albedo = 0.3
+shader_parameter/region_sheen = 0.22
+shader_parameter/region_rim = 0.32
+shader_parameter/rigidity = 3.65
+shader_parameter/calm_from = 40.0
+shader_parameter/calm_to = 110.0
+shader_parameter/wind_sway = 1.8
+shader_parameter/wind_speed = 0.48
+shader_parameter/gust_length = 58.0
+shader_parameter/push_sway = 0.0
+shader_parameter/max_bend = 4.0

@@ -4,6 +4,15 @@ extends Node
 signal settings_changed(section: StringName, key: StringName, value: Variant)
 
 const SETTINGS_PATH := "user://settings.cfg"
+## Increment when the shipped character skin changes. This lets an existing
+## settings file receive a new project default once without resetting the
+## player's skin choice on every later launch.
+const DEFAULT_SKIN_REVISION := 1
+## Version one replaces the five-entry weapon rack with three numbered hotbar
+## entries, two mouse ability entries and persistent backpack contents.
+const LOADOUT_SCHEMA_REVISION := 1
+const HOTBAR_SLOTS := 3
+const ABILITY_SLOTS := 2
 const DEFAULTS := {
 	"graphics": {
 		"window_mode": 0,
@@ -16,6 +25,11 @@ const DEFAULTS := {
 		## rather than by `_apply_setting`, because there is nothing to apply it
 		## to until a world is loaded.
 		"render_distance": 1,
+		## Multiplier on how far ground cover is drawn, applied by [GroundCover]
+		## for the same reason: the fields arrive with the map. Ships above one
+		## so that flying at a few hundred metres still passes over a populated
+		## planet rather than bare terrain.
+		"flora_range": 2.0,
 	},
 	"audio": {
 		"master_volume": 0.8,
@@ -28,9 +42,9 @@ const DEFAULTS := {
 		"invert_y": false,
 		"fov": 75.0,
 	},
-	## Who you are: the name and the look. Body id, sparse slot→item map, and
-	## sparse slot/"body"→HTML tint map. The home screen and the character editor
-	## are the writers; spawning, the preview and the lobby all read.
+	## Who you are: the name and the look. Body and skin ids, sparse slot→item
+	## map, and sparse slot/"body"→HTML tint map. The home screen and the
+	## character editor are the writers; spawning, the preview and the lobby read.
 	##
 	## The name lives here rather than in [NetworkManager] because it outlives a
 	## session — it is typed once under the figure on the home screen and is then
@@ -39,11 +53,20 @@ const DEFAULTS := {
 	"appearance": {
 		"name": "Player",
 		"body": "settler",
+		"skin": "luke",
 		"worn": {},
-		## The weapon bar, one entry per slot. A list rather than a map because a
-		## rack slot means nothing except which number key draws it.
-		"rack": [],
+		## Positional because the index is the number or mouse button that uses it.
+		"hotbar": ["", "", ""],
+		"abilities": ["", ""],
+		"backpack": [],
+		## CharacterDB raises this after giving a new save its finite starter
+		## wardrobe. Resetting defaults returns it to zero so the wardrobe is
+		## deliberately seeded again instead of leaving a fresh backpack empty.
+		"starter_inventory_revision": 0,
+		## Deprecated mirror retained while older menu code still calls it a rack.
+		"rack": ["", "", ""],
 		"tints": {},
+		"loadout_schema_revision": LOADOUT_SCHEMA_REVISION,
 	},
 	## Quests and achievements finished, as a list of [JournalDB] ids. Local to
 	## this machine and never replicated: a co-op session shares a world, not a
@@ -65,9 +88,13 @@ func load_settings() -> void:
 	var error := _config.load(SETTINGS_PATH)
 	if error != OK and error != ERR_FILE_NOT_FOUND:
 		push_warning("Could not load settings.cfg (error %s)." % error)
+	var skin_migrated := _migrate_default_skin()
+	var loadout_migrated := _migrate_loadout()
 	_apply_defaults()
 	_load_input_bindings()
 	apply_all()
+	if skin_migrated or loadout_migrated:
+		save_settings()
 
 
 func save_settings() -> Error:
@@ -120,6 +147,76 @@ func _apply_defaults() -> void:
 				_config.set_value(section, key, DEFAULTS[section][key])
 
 
+## Makes the newly shipped Luke painting visible on the next launch even when
+## settings.cfg still contains the former default. The revision marker means
+## choosing another skin afterwards remains persistent as normal.
+func _migrate_default_skin() -> bool:
+	var revision := int(_config.get_value(
+		"appearance", "default_skin_revision", 0))
+	if revision >= DEFAULT_SKIN_REVISION:
+		return false
+	_config.set_value("appearance", "skin", "luke")
+	_config.set_value("appearance", "default_skin_revision",
+		DEFAULT_SKIN_REVISION)
+	return true
+
+
+## Migrates the old five-slot rack without dropping slots four and five: the
+## first three keep their number keys and any overflow moves into the backpack.
+## The old key remains as a compatibility copy and is ignored once the revision
+## marker says this migration has run.
+func _migrate_loadout() -> bool:
+	var revision := int(_config.get_value(
+		"appearance", "loadout_schema_revision", 0))
+	if revision >= LOADOUT_SCHEMA_REVISION:
+		return false
+
+	var old_rack := _variant_array(_config.get_value("appearance", "rack", []))
+	var has_hotbar_key := _config.has_section_key("appearance", "hotbar")
+	var hotbar_raw: Variant = _config.get_value("appearance", "hotbar", [])
+	var had_hotbar := has_hotbar_key and (
+		hotbar_raw is Array or hotbar_raw is PackedStringArray)
+	var hotbar_source := _variant_array(hotbar_raw if had_hotbar else old_rack)
+	var hotbar: Array = []
+	for index in HOTBAR_SLOTS:
+		hotbar.append(hotbar_source[index] if index < hotbar_source.size() else "")
+
+	var abilities_source := _variant_array(_config.get_value(
+		"appearance", "abilities", []))
+	var abilities: Array = []
+	for index in ABILITY_SLOTS:
+		abilities.append(abilities_source[index] if index < abilities_source.size() else "")
+
+	var backpack := _variant_array(_config.get_value(
+		"appearance", "backpack", []))
+	if not had_hotbar:
+		for index in range(HOTBAR_SLOTS, old_rack.size()):
+			var overflow := str(old_rack[index])
+			if overflow.is_empty():
+				continue
+			var free := backpack.find("")
+			if free >= 0:
+				backpack[free] = overflow
+			else:
+				backpack.append(overflow)
+
+	_config.set_value("appearance", "hotbar", hotbar)
+	_config.set_value("appearance", "abilities", abilities)
+	_config.set_value("appearance", "backpack", backpack)
+	_config.set_value("appearance", "rack", hotbar.duplicate())
+	_config.set_value("appearance", "loadout_schema_revision",
+		LOADOUT_SCHEMA_REVISION)
+	return true
+
+
+func _variant_array(value: Variant) -> Array:
+	var out: Array = []
+	if value is Array or value is PackedStringArray:
+		for entry: Variant in value:
+			out.append(entry)
+	return out
+
+
 func _apply_setting(section: StringName, key: StringName, value: Variant) -> void:
 	match "%s/%s" % [section, key]:
 		"graphics/window_mode":
@@ -135,11 +232,17 @@ func _apply_setting(section: StringName, key: StringName, value: Variant) -> voi
 			if parts.size() == 2:
 				DisplayServer.window_set_size(Vector2i(int(parts[0]), int(parts[1])))
 		"graphics/vsync":
+			var enabled := bool(value)
 			DisplayServer.window_set_vsync_mode(
-				DisplayServer.VSYNC_ENABLED if bool(value) else DisplayServer.VSYNC_DISABLED
-			)
+				DisplayServer.VSYNC_ENABLED if enabled else DisplayServer.VSYNC_DISABLED)
+			# VSync already paces frames to the display. A simultaneous 120 FPS
+			# software cap produces an uneven cadence on 60/144/165 Hz panels,
+			# most visible as a slight judder during slow camera translation.
+			Engine.max_fps = 0 if enabled else int(get_setting(
+				&"graphics", &"max_fps", DEFAULTS["graphics"]["max_fps"]))
 		"graphics/max_fps":
-			Engine.max_fps = int(value)
+			Engine.max_fps = 0 if bool(get_setting(
+				&"graphics", &"vsync", DEFAULTS["graphics"]["vsync"])) else int(value)
 		"graphics/render_scale":
 			get_tree().root.scaling_3d_scale = float(value)
 		"graphics/quality":

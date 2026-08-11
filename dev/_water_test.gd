@@ -3,14 +3,16 @@ extends Node
 ## The sea: how deep the sea bed is, and what the water does to a body in it.
 ##
 ##     & $godot --path . dev/_water_test.tscn
+##     & $godot --path . dev/_water_test.tscn -- --entry
 ##
-## Four things are measured. The **survey** walks the height field over the whole
+## The **survey** walks the height field over the whole
 ## planet and reports how much of it is under water and how far under, which is
 ## the answer to "is the blue sitting at sea level pretending to be the sea".
 ## The **plunge** drops a player into deep ocean from a height and reports the
 ## splash, how far the water let them sink and where they came to rest. The
-## **stroke**, the **sprint** and the **dive** are what a swimmer can do. Shots
-## land in dev/captures/.
+## **entry** checks that a flight becomes a fast swim without breaking the
+## deliberate two-press underwater launch. The **stroke**, the **sprint** and the
+## **dive** are what a swimmer can do. Shots land in dev/captures/.
 
 const WORLD := preload("res://game/world.tscn")
 const SHOT_DIR := "res://dev/captures/"
@@ -104,7 +106,13 @@ func _ready() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(SHOT_DIR))
 
 	_survey()
+	if "--entry" in OS.get_cmdline_user_args():
+		await _flight_entry()
+		await _launch()
+		get_tree().quit()
+		return
 	await _plunge()
+	await _flight_entry()
 	await _stroke()
 	await _sprint()
 	await _dive()
@@ -201,6 +209,48 @@ func _plunge() -> void:
 	if _fill() > 0.98:
 		push_error("water_test: floating with the head under, %.0f%% submerged" % (_fill() * 100.0))
 	await _shoot("water_float")
+
+
+## A shallow, fast dive through the surface. It must become Swim immediately,
+## retain most of the flight's velocity, and start in the laid-out stroke rather
+## than easing through the upright treading pose. The placement at the end leaves
+## the existing launch check floating at rest.
+func _flight_entry() -> void:
+	_put(_deep, 0.05)
+	var up := _deep.normalized()
+	var forward := -_player.global_basis.z
+	_player.velocity = forward * 72.0 - up * 24.0
+	_player._cruise = _player.velocity.length()
+	var incoming := _player.velocity.length()
+	var frames := 0
+	while _player._stance == FLY and frames < 12:
+		await get_tree().physics_frame
+		frames += 1
+	var carried := _player.velocity.length()
+	# `process_frame` is emitted before nodes receive `_process`, so the first
+	# await reaches that visual update and the second observes what it chose.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	print("water_test: flight entry   %.0f m/s in, %.0f m/s swim after %d frames, playing %s" % [
+		incoming, carried, frames, _player._clip])
+	if _player._stance != SWIM:
+		push_error("water_test: a flight into the sea stayed %s" % _name_of(_player._stance))
+	var expected := incoming * _player.swim_entry_keep
+	if carried < expected * 0.8 or carried > expected * 1.02:
+		push_error("water_test: flight entry kept %.0f of %.0f m/s" % [carried, incoming])
+	if _player._swim_blend <= 0.45 or _player._clip != "Swim":
+		push_error("water_test: fast entry began at swim blend %.2f playing %s"
+			% [_player._swim_blend, _player._clip])
+
+	# Exactly the buoyancy equilibrium, over ground deep enough not to interfere.
+	# Keeping the Swim stance avoids using the dev-only flight placement to reset
+	# a check whose whole subject is how a flight enters that stance.
+	var swim_height := _player._stance_height(SWIM)
+	_player.global_position = _planet.global_position \
+		+ up * (_planet.shape.radius - swim_height / _player.buoyancy)
+	_player.velocity = Vector3.ZERO
+	_player._stroke = _player.swim_speed
+	await _wait(120)
 
 
 ## Swimming forward. Slow is the point; what is being checked is that it goes

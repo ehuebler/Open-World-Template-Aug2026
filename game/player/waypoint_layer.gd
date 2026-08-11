@@ -11,32 +11,16 @@ extends Control
 ## A marker is a diamond and two lines of type in the landmark's own colour, with
 ## an ink outline behind the letters and nothing else — no plate. The plate was
 ## the honest thing to draw while there was one waypoint, because [AuroraSurface]
-## is how everything else in this game keeps text legible over the world. With
-## five of them it stopped being legibility and started being five opaque cards
+## is how everything else in this game keeps text legible over the world. Once
+## several are visible it stops being legibility and becomes opaque cards
 ## hanging in the sky, so the outline does that job instead: it costs no area,
 ## and unlike a drop shadow it works over both the pale sky and the dark sea.
 ##
-## Three rules decide whether a marker is drawn at all, and all of them are about
-## getting out of the way rather than about being seen:
-##
-## - **Near.** A name over somewhere you have arrived at is in front of the thing
-##   it names. Each landmark carries its own range, and a second, longer one for
-##   when it is under the crosshair — looking straight at a place is the clearest
-##   statement that it has been found.
-## - **Far.** From the spawn the whole planet is in frame, and naming all of it
-##   at once is a contents page rather than a view: every place there is, none of
-##   them anywhere you could go from here, over ground too small to put a name
-##   on. So a marker has an outer range too, and the planet is approached
-##   unlabelled — the names arrive on the way down, as the ground under them
-##   turns into somewhere rather than a patch of colour.
-## - **Through the planet.** A globe of this size hides most of itself, and a
-##   name floating over the far side reads as a place that is somehow in front of
-##   the ground. The cheap half of the test is one dot product: the eye is above
-##   a landmark's horizon exactly when it is on the outward side of the tangent
-##   plane there, which is exact for the sphere and costs nothing. The rest is
-##   [method Planet.sight_blocked], which walks the height field along the line
-##   and catches the ranges that stand above it — that one is throttled, because
-##   it is a dozen noise lookups and the answer does not change between frames.
+## This is now an explicit navigation overlay rather than ambient HUD furniture.
+## It begins off, tilde toggles the whole set, and while open every selected
+## landmark remains visible regardless of distance or whether the planet is
+## between it and the camera. Far-side marks therefore act as compass bearings
+## instead of disappearing exactly when they are most useful.
 
 ## How close to the screen's edge a pinned marker is allowed to sit.
 const MARGIN := 46.0
@@ -66,17 +50,10 @@ const POINT_STRETCH := 2.6
 const DIAMOND_OUTLINE := 1.6
 ## Gap between the diamond and the first line of type.
 const GAP := 7.0
-## Share of a landmark's range spent fading, so a marker arrives and leaves
-## rather than blinking on at a threshold the player crosses back and forth.
-const FADE := 0.3
-## Cosines of the angle off the crosshair that counts as looking at a place, and
-## of the wider angle the longer range fades in from.
-const AIM_TIGHT := 0.996
-const AIM_WIDE := 0.94
-## Seconds between terrain sight checks for one landmark. At a flat sprint the
-## eye moves 8 m in this, against a test that answers to the nearest hilltop.
-const SIGHT_INTERVAL := 0.25
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
+
+## Whether any marker is drawn. Navigation is opt-in and starts closed.
+var enabled := false
 
 var _camera: Camera3D
 ## Landmark to the marker drawn for it, so markers are built once rather than per
@@ -115,37 +92,36 @@ func drawn(least := 0.5) -> PackedStringArray:
 
 
 func _process(_delta: float) -> void:
+	if not enabled:
+		# Markers already built are hidden rather than freed, so switching back on
+		# is the same one line and does not have to rebuild anything.
+		for landmark: Landmark in _markers:
+			(_markers[landmark] as Control).visible = false
+		return
 	if _camera == null or not _camera.is_inside_tree():
 		return
-	var now := float(Time.get_ticks_msec()) * 0.001
 	var eye := _camera.global_position
-	var forward := -_camera.global_basis.z
 	var half := size * 0.5
 	for node in get_tree().get_nodes_in_group(Landmark.GROUP):
 		var landmark := node as Landmark
-		if landmark != null:
-			_place(landmark, _marker_for(landmark), eye, forward, half, now)
+		if landmark == null:
+			continue
+		if not landmark.waypoint:
+			# Only hidden if it has ever been drawn, so a landmark that is
+			# silent from the start never has a marker built for it at all.
+			if _markers.has(landmark):
+				(_markers[landmark] as Control).visible = false
+			continue
+		_place(landmark, _marker_for(landmark), eye, half)
 
 
-func _place(landmark: Landmark, marker: Control, eye: Vector3, forward: Vector3,
-		half: Vector2, now: float) -> void:
+func _place(landmark: Landmark, marker: Control, eye: Vector3,
+		half: Vector2) -> void:
 	var at := landmark.global_position
 	var away := eye.distance_to(at)
-	var toward_here := (at - eye) / maxf(away, 0.001)
-	var aim := smoothstep(AIM_WIDE, AIM_TIGHT, forward.dot(toward_here))
-	var near := lerpf(landmark.show_beyond, landmark.aimed_beyond, aim)
-	var shown := clampf((away - near) / maxf(near * FADE, 1.0), 0.0, 1.0)
-	if landmark.hide_beyond > 0.0:
-		var far := landmark.hide_beyond
-		shown = minf(shown, clampf((far - away) / maxf(far * FADE, 1.0), 0.0, 1.0))
-	if shown <= 0.0 \
-			or (eye - at).dot(landmark.global_basis.y) <= 0.0 \
-			or _out_of_sight(landmark, marker, eye, at, now):
-		marker.visible = false
-		return
 
 	marker.visible = true
-	marker.modulate.a = shown
+	marker.modulate.a = 1.0
 	(marker.get_meta(&"distance") as Label).text = Landmark.distance_text(away)
 
 	var pinned := false
@@ -188,19 +164,6 @@ func _lay_out(marker: Control, screen: Vector2) -> void:
 		reach if below else -(reach + column.size.y))
 
 
-## Whether the ground is in the way, answered at most every [constant
-## SIGHT_INTERVAL] and remembered in between.
-func _out_of_sight(landmark: Landmark, marker: Control, eye: Vector3, at: Vector3,
-		now: float) -> bool:
-	if now < float(marker.get_meta(&"checked")) + SIGHT_INTERVAL:
-		return bool(marker.get_meta(&"blocked"))
-	var planet := landmark.planet_host()
-	var blocked := planet != null and planet.sight_blocked(eye, at)
-	marker.set_meta(&"checked", now)
-	marker.set_meta(&"blocked", blocked)
-	return blocked
-
-
 ## Scales a direction until it lands on the edge of a box that size, which is
 ## what pins an off-screen marker to the side it is actually off.
 func _to_edge(toward: Vector2, half: Vector2) -> Vector2:
@@ -229,10 +192,6 @@ func _marker_for(landmark: Landmark) -> Control:
 	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	marker.set_meta(&"toward", Vector2.ZERO)
 	marker.set_meta(&"tint", landmark.tint)
-	marker.set_meta(&"blocked", false)
-	# Spread the first sight check over the interval rather than having every
-	# marker on the HUD do its dozen height lookups in the same frame.
-	marker.set_meta(&"checked", -randf() * SIGHT_INTERVAL)
 	marker.draw.connect(_draw_marker.bind(marker))
 	add_child(marker)
 

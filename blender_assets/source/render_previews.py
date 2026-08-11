@@ -7,9 +7,9 @@ Run headless from the project root, using the Blender version that saved the
 
 Images land in blender_assets/source/previews/. `body_*` shows the bare body,
 `item_*` shows one garment at a time, `dressed_*` shows everything worn, and
-`dressed_walk`/`dressed_crouch` drive the rig from the baked locomotion clips so
-the shared skin weights can be judged under real deformation. `topology` shows
-the wireframe of the body surface.
+`dressed_walk`/`dressed_crouch`/`dressed_hero_land` drive the rig from the baked
+locomotion clips so the shared skin weights can be judged under real
+deformation. `topology` shows the wireframe of the body surface.
 """
 
 import os
@@ -234,6 +234,9 @@ def main():
     if pose_from_clip(rig, "CrouchIdle", 1):
         hero_view()
         render("dressed_crouch")
+    if pose_from_clip(rig, "HeroLand", 12):
+        hero_view()
+        render("dressed_hero_land")
 
 
 if __name__ == "__main__":

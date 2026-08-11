@@ -1,0 +1,43 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/rune_monolith.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/rune_monolith_glow.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/rune_monolith_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "RuneMonolithSite"
+height = 105.0
+height_variation = 0.66
+width_scale = 1.0
+tilt = 6.0
+above_water = 9.0
+below = 560.0
+max_slope = 18.0
+steady_over = 24.0
+steady_within = 17.0
+maximum_frost = 0.0
+local_light_color = Color(0.06, 1, 0.72, 1)
+local_light_energy = 2.6
+glow_patch_size = 90.0
+per_square_metre = 6e-06
+fractional_density = true
+clump_count = 5
+clump_radius = 120.0
+clump_resurvey = true
+bare_share = 0.93
+patch_size = 960.0
+random_seed = 20261514
+draw_within = 2300.0
+thin_from = 680.0
+thin_to = 1850.0
+far_density = 0.58
+shadow_within = 560.0
+collision_enabled = true
+collision_within = 380.0
+collision_primitive = 3
+impact_mode = 3

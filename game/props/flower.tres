@@ -1,0 +1,57 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_plant.gdshader" id="1_plant"]
+
+; The purple flower, and the one material every bloom in every tile shares — it
+; has to stay that way, because a material is a uniform set and the whole point
+; of drawing the field as MultiMesh tiles is that ten thousand plants are a
+; handful of submissions. Anything that varies per plant belongs in the
+; transform or in the instance custom data, which is where the size, the
+; heading, the gust phase and the tone already are.
+;
+; The look is all vertex colour. Like the hull it arrives painted from
+; MeshMaker, and unlike the hull it is small: vivid_plant has none of
+; vivid_surface's noise relief because the fields are authored in cycles per
+; metre and a bloom is knee high, so every one of them would land as a single
+; wash across the whole plant.
+;
+; The five numbers under Thinning are not authored here. PlantSpecies writes
+; them from its own exports, because GroundCover has to evaluate the same curve
+; on the CPU and two copies of a number that must be equal is one copy too many.
+
+[resource]
+resource_name = "PurpleFlower"
+shader = ExtResource("1_plant")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/saturation = 1.35
+shader_parameter/brightness = 1.0
+shader_parameter/tone_variation = 0.22
+shader_parameter/roughness = 0.55
+shader_parameter/specular = 0.4
+; Still lit through the back, but denser than the grass and less glassy once
+; its night emission comes up.
+shader_parameter/translucency = 0.38
+shader_parameter/region_albedo = 0.3
+shader_parameter/region_sheen = 0.35
+shader_parameter/region_rim = 0.4
+shader_parameter/stem_height = 1.3
+shader_parameter/rigidity = 1.9
+shader_parameter/wind_sway = 9.0
+shader_parameter/wind_speed = 1.15
+shader_parameter/gust_length = 17.0
+shader_parameter/push_sway = 54.0
+shader_parameter/max_bend = 62.0
+; The bloom remains fully opaque; this is light added from within it, not alpha.
+; A low albedo share keeps the result a deep blacklight purple rather than
+; turning every painted petal into the same pale neon.
+;
+; Petals only. The leaves and stem stay unlit greenery that the pooled lights
+; fall on, which is what makes the plant read as a glowing flower on a dark
+; stalk rather than as a purple blob the shape of the whole plant.
+shader_parameter/custom_z_is_glow = true
+shader_parameter/night_emission_petals_only = true
+shader_parameter/night_emission_color = Color(0.18, 0.01, 0.48, 1)
+shader_parameter/night_emission_energy = 4.0
+shader_parameter/night_pulse_amount = 0.14
+shader_parameter/night_pulse_speed = 0.27
+shader_parameter/night_emission_albedo = 0.12

@@ -104,6 +104,15 @@ def arm_hang(pose, side, sign, out, swing=0.0, flex=0.0):
     pose[side + "LowerArm"] = rot(("Y", sign * elbow_tuck), ("X", flex))
 
 
+def clench_hand(pose, side, sign):
+    """Close the optional settler finger chain; the astronaut ignores the keys."""
+    for finger in ("Index", "Middle", "Ring", "Little"):
+        for joint in range(1, 4):
+            pose["{0}{1}{2}".format(side, finger, joint)] = rot(("Y", sign * 52.0))
+    pose[side + "Thumb1"] = rot(("Z", -sign * 24.0), ("Y", sign * 34.0))
+    pose[side + "Thumb2"] = rot(("Y", sign * 48.0))
+
+
 def leg_fold(drop, ankle_forward=0.0):
     """Thigh, knee and foot angles that keep one sole on the floor.
 
@@ -169,17 +178,47 @@ def idle_pose(t):
 
 
 def walk_pose(t):
+    """A brisk walk with a bounce in it.
+
+    This clip covers everything from a stroll through the ordinary sprint - the
+    game only changes gait above `arms_back_speed`, currently 18 m/s, and
+    resamples this cycle for everything below - so it is written as the fast
+    arms-swinging stride rather than as the slow walk, and the bobble is most of
+    what says so.
+
+    Most of the bobble is spent on the spine rather than on the hips, and that
+    split is the whole trick. Dropping the hips drops the legs with them, and
+    the legs are not re-solved for it, so every millimetre past what the stride
+    has already lifted the ankles by goes straight through the floor - measured,
+    a deeper hip dip costs the planted sole about one for one. The spine carries
+    no weight of its own, so a bounce put there moves the chest and the head,
+    which is all anyone reads a bobble off, and leaves the feet where they were.
+
+    `dev/_player_test.gd --sheet` prints each clip's lowest sole, and that is
+    the number to watch when retuning any of this: it has to stay near `Idle`'s
+    and must not go below what `Run` already ships with.
+    """
     phase = t * TAU
     pose = {}
-    _stride(pose, phase, thigh=25.0, knee_mid=-30.0, knee_swing=26.0, foot=11.0,
-            arm=22.0, elbow=18.0, hang=12.0)
+    _stride(pose, phase, thigh=29.0, knee_mid=-33.0, knee_swing=28.0, foot=12.0,
+            arm=24.0, elbow=18.0, hang=12.0)
     # Two dips per cycle, one per footfall, and never above the standing height.
-    dip = -0.020 * (1.0 - math.cos(2.0 * phase)) * 0.5
+    # A shade deeper than it was, which the longer stride pays for and no more.
+    dip = -0.026 * (1.0 - math.cos(2.0 * phase)) * 0.5
+    # The bounce proper, on the same beat, so the body compresses into a
+    # footfall and comes back up between them.
+    bounce = -0.022 * (1.0 - math.cos(2.0 * phase)) * 0.5
+    # Weight going onto one leg and then the other, at half the dip's rate, so
+    # the body rolls once per stride rather than twice. Small on purpose: the
+    # legs hang off the hips and are not re-solved for this either, so swaying
+    # any further walks the feet out sideways from under the body.
+    sway = 0.011 * math.sin(phase)
     # Leaning is spent on the spine rather than the hips: the legs hang off the
     # hips, so pitching those would swing the whole stride backwards.
-    pose["Hips"] = {"rot": [("Z", 6.0 * math.sin(phase))], "loc": (0.0, 0.0, dip)}
-    pose["Spine"] = rot(("Z", -4.0 * math.sin(phase)), ("X", 4.0))
-    pose["Chest"] = rot(("Z", -5.0 * math.sin(phase)), ("X", 2.0))
+    pose["Hips"] = {"rot": [("Z", 7.0 * math.sin(phase))], "loc": (sway, 0.0, dip)}
+    pose["Spine"] = {"rot": [("Z", -4.5 * math.sin(phase)), ("X", 4.0)],
+                     "loc": (0.0, 0.0, bounce)}
+    pose["Chest"] = rot(("Z", -5.5 * math.sin(phase)), ("X", 2.0))
     pose["Head"] = rot(("Z", 3.0 * math.sin(phase)), ("X", -4.0))
     return pose
 
@@ -320,19 +359,48 @@ def fall_pose(t):
         pose[side + "UpperLeg"] = rot(("X", 16.0 * trail + 4.0 * float_wave), ("Y", -sign * 8.0))
         pose[side + "LowerLeg"] = rot(("X", -30.0 * trail - 8.0))
         pose[side + "Foot"] = rot(("X", 14.0))
-        # Close to the leap's angles, with the wave kept small on the swing: a hand
-        # is nearly half a metre from its shoulder, so ten degrees there is eight
-        # centimetres of travel and the drift is the one thing here that can reopen
-        # the seam. `out` is held wider than the leap's because swinging an arm this
-        # far back carries the elbow in against the ribs whatever `out` says, and
-        # this clip is a hold rather than a third of a second - a garment shell sits
-        # 22 mm off the body, so a gap measured in single millimetres is a sleeve
-        # through a chest. `_arm_check.py` is the number.
-        arm_hang(pose, side, sign, out=28.0 + 2.0 * float_wave,
-                 swing=-66.0 + 5.0 * float_wave, flex=16.0 + 4.0 * float_wave)
+        # This is the first second aloft, not the destination of a long fall. Hold
+        # the launch's arm line exactly: even five degrees of looping drift moves a
+        # hand several centimetres and reads as the leap running out of resolve.
+        # `AirRun` is the deliberate change of silhouette if the body stays aloft.
+        arm_hang(pose, side, sign, out=28.0, swing=-72.0, flex=18.0)
     pose["Hips"] = rot(("X", -6.0))
     pose["Spine"] = rot(("X", -4.0))
     pose["Head"] = rot(("X", -6.0))
+    return pose
+
+
+def air_run_pose(_t):
+    """The held landing stride reached only after a full second in the air.
+
+    The right foot is offered to the ground while the left leg trails folded
+    behind it. The arms deliberately stop matching: the left fist is driven up
+    and the right elbow folds back, making the silhouette read as the last frame
+    before a running footfall rather than as a relaxed fall. Runtime spends more
+    than half a second blending here, then enters `Run` at its matching
+    right-leg-forward quarter-cycle when the foot finds ground.
+    """
+    pose = {
+        "RightUpperLeg": rot(("X", 58.0), ("Y", -5.0)),
+        "RightLowerLeg": rot(("X", -28.0)),
+        "RightFoot": rot(("X", 18.0)),
+        "LeftUpperLeg": rot(("X", -38.0), ("Y", 7.0)),
+        "LeftLowerLeg": rot(("X", -72.0)),
+        "LeftFoot": rot(("X", -24.0)),
+        "Hips": {"rot": [("Z", -5.0), ("X", -6.0)], "loc": (0.0, 0.0, 0.025)},
+        "Spine": rot(("Z", 5.0), ("X", -18.0)),
+        "Chest": rot(("Z", 7.0), ("X", -10.0)),
+        "UpperChest": rot(("X", -6.0)),
+        "Neck": rot(("X", 15.0)),
+        "Head": rot(("Z", -4.0), ("X", 17.0)),
+    }
+    # The right upper arm trails while its elbow brings the hand forward; the
+    # left upper arm supplies the high fist from the reference. Both stay clear
+    # of the settler's larger head and of either body's shoulder garments.
+    arm_hang(pose, "Right", 1.0, out=27.0, swing=-24.0, flex=155.0)
+    arm_hang(pose, "Left", -1.0, out=25.0, swing=178.0, flex=36.0)
+    clench_hand(pose, "Right", 1.0)
+    clench_hand(pose, "Left", -1.0)
     return pose
 
 
@@ -351,6 +419,58 @@ def land_pose(t):
     pose["Spine"] = rot(("X", 20.0 * dip))
     pose["Chest"] = rot(("X", 8.0 * dip))
     pose["Head"] = rot(("X", -18.0 * dip))
+    return pose
+
+
+def hero_land_pose(t):
+    """A planted three-point landing: forward foot, rear knee, and one hand.
+
+    The pose arrives quickly, holds long enough to read at speed, then releases
+    over its last quarter so the game's crossfade can finish standing it up.
+    It is deliberately asymmetric like the reference silhouette; mirroring both
+    sides into the same crouch would just duplicate `Land`.
+    """
+    arrive = min(t * 4.5, 1.0)
+    arrive = arrive * arrive * (3.0 - 2.0 * arrive)
+    release = max((t - 0.72) / 0.28, 0.0)
+    release = min(release, 1.0)
+    release = release * release * (3.0 - 2.0 * release)
+    planted = arrive * (1.0 - release)
+    thigh, knee, foot = leg_fold(-0.31 * planted, ankle_forward=0.18 * planted)
+    pose = {
+        # Right foot forward under a high knee.
+        "RightUpperLeg": rot(("X", thigh), ("Y", -18.0 * planted)),
+        "RightLowerLeg": rot(("X", knee)),
+        "RightFoot": rot(("X", foot)),
+        # Left knee folded under and behind the hips.
+        "LeftUpperLeg": rot(("X", -12.0 * planted), ("Y", 30.0 * planted)),
+        "LeftLowerLeg": rot(("X", -112.0 * planted)),
+        "LeftFoot": rot(("X", 48.0 * planted)),
+        "Hips": {
+            "rot": [("Z", 8.0 * planted)],
+            "loc": (0.0, -0.025 * planted, -0.31 * planted),
+        },
+        # Chest pitched over the planted knee and rolled hard toward the bracing
+        # hand. The opposite shoulder stays high, giving the pose its diagonal
+        # line instead of reading as a symmetric crouch.
+        "Spine": rot(("X", -30.0 * planted), ("Y", -30.0 * planted),
+                     ("Z", -7.0 * planted)),
+        "Chest": rot(("X", -15.0 * planted), ("Y", -20.0 * planted),
+                     ("Z", -5.0 * planted)),
+        # Counter-rotate the head so the body can fold without burying the face
+        # in the raised knee.
+        "Neck": rot(("X", 20.0 * planted), ("Y", 25.0 * planted)),
+        "Head": rot(("X", 15.0 * planted), ("Y", 20.0 * planted),
+                    ("Z", -4.0 * planted)),
+        # Lay the bracing hand across the ground instead of continuing the
+        # forearm's downward line below it.
+        "LeftHand": rot(("X", -80.0 * planted)),
+    }
+    # Left hand braces on the ground; right arm reaches wide for balance.
+    arm_hang(pose, "Left", -1.0, out=40.0,
+             swing=35.0 * planted, flex=-50.0 * planted)
+    arm_hang(pose, "Right", 1.0, out=10.0 + 30.0 * planted,
+             swing=-10.0 * planted, flex=8.0)
     return pose
 
 
@@ -470,6 +590,54 @@ def fly_pose(t):
     return pose
 
 
+def meteor_fly_pose(t):
+    """The punch: right fist thrown out along the flight path, left leg folded.
+
+    Authored upright like the other two flight clips, so "along the flight path"
+    is straight overhead here and the game's forward pitch is what turns it into
+    a punch. That is why the leading arm goes to nearly 180 degrees of swing:
+    from a hanging arm, half a turn about X is an arm pointing at the sky, which
+    once the body is over is an arm pointing where it is going. `out` stays tiny
+    so the arm runs up the body's centre line rather than out to the side, which
+    pitched over would be a wing rather than a punch.
+
+    The asymmetry is the whole silhouette and it is deliberate: trailing arm
+    tucked in, right leg straight behind, left knee folded so the heel comes up.
+    A matched pair of arms and legs is `Fly`, which is what this must not be
+    mistaken for at fifty metres.
+    """
+    wave = math.sin(t * TAU)
+    roll = math.sin(t * TAU * 0.5)
+    pose = {
+        # Trailing leg straight and pointed, carrying the long line.
+        "RightUpperLeg": rot(("X", -6.0 + 1.2 * wave), ("Y", 4.0)),
+        "RightLowerLeg": rot(("X", -4.0 - 1.5 * wave)),
+        "RightFoot": rot(("X", -36.0)),
+        # Left knee folded, heel drawn up behind. Held in the shin rather than
+        # the thigh so the fold reads without the knee swinging out of line.
+        "LeftUpperLeg": rot(("X", -10.0 - 1.2 * wave), ("Y", -9.0)),
+        "LeftLowerLeg": rot(("X", -96.0 - 4.0 * wave)),
+        "LeftFoot": rot(("X", -18.0)),
+        "Hips": {"rot": [("Y", -4.0), ("Z", 4.0 * roll)], "loc": (0.0, 0.0, 0.0)},
+        # Arched harder than Fly and rolled toward the leading shoulder, which
+        # is what stops the punching arm looking bolted on.
+        "Spine": rot(("X", 7.0), ("Y", 6.0)),
+        "Chest": rot(("X", 8.0 + 1.0 * wave), ("Y", 9.0), ("Z", -4.0)),
+        "Neck": rot(("X", 13.0)),
+        "Head": rot(("X", 16.0), ("Y", 4.0), ("Z", 3.0 * roll)),
+    }
+    # Right arm punched out ahead, all but straight.
+    arm_hang(pose, "Right", 1.0, out=5.0,
+             swing=172.0 + 2.0 * wave, flex=-6.0)
+    # Left arm swept back along the body, tighter than Fly's so the two arms do
+    # not read as a matched pair.
+    arm_hang(pose, "Left", -1.0, out=9.0,
+             swing=-62.0 - 3.0 * wave, flex=14.0)
+    clench_hand(pose, "Right", 1.0)
+    clench_hand(pose, "Left", -1.0)
+    return pose
+
+
 # --------------------------------------------------------------------------
 # Water
 # --------------------------------------------------------------------------
@@ -552,10 +720,13 @@ ANIMATIONS = [
     ("CrouchWalk", 36, True, crouch_walk_pose),
     ("JumpRise", 11, False, jump_rise_pose),
     ("Fall", 36, True, fall_pose),
+    ("AirRun", 24, False, air_run_pose),
     ("Land", 13, False, land_pose),
+    ("HeroLand", 24, False, hero_land_pose),
     ("Slide", 12, False, slide_pose),
     ("Float", 60, True, float_pose),
     ("Fly", 48, True, fly_pose),
+    ("MeteorFly", 30, True, meteor_fly_pose),
     ("Tread", 72, True, tread_pose),
     ("Swim", 36, True, swim_pose),
 ]

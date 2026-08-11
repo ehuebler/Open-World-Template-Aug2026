@@ -27,6 +27,17 @@ render_mode blend_mix, unshaded, cull_disabled, depth_draw_always, shadows_disab
 
 uniform vec3 deep_color : source_color = vec3(0.03, 0.16, 0.38);
 uniform vec3 shallow_color : source_color = vec3(0.10, 0.48, 0.60);
+// What water thin enough to see through is worth, and how many metres of it
+// each channel survives. Together they are the sea's absorption: see where they
+// are used for what the exponential is doing and why there are three of them.
+//
+// `shoal_color` is not `shallow_color` and the two are not interchangeable —
+// that one is the pale sky-lit tint a grazing view picks up at any depth, and
+// this one is the colour of a metre of water over sand seen from straight
+// above.
+uniform vec3 shoal_color : source_color = vec3(0.13, 0.40, 0.42);
+uniform vec3 absorb_depth = vec3(2.6, 8.5, 16.0);
+uniform float absorb_amount : hint_range(0.0, 1.0) = 1.0;
 // How much of the sea bed shows through when looking straight down into it.
 uniform float water_alpha : hint_range(0.0, 1.0) = 0.72;
 // A grazing view of water is nearly a mirror, so both the colour and the opacity
@@ -40,6 +51,11 @@ uniform float glint_strength : hint_range(0.0, 8.0) = 2.4;
 uniform float ripple_scale : hint_range(0.0, 4.0) = 0.35;
 uniform float ripple_speed : hint_range(0.0, 8.0) = 0.7;
 uniform float ripple_strength : hint_range(0.0, 2.0) = 0.4;
+// How much of the chop reaches the troughs. Zero puts every bit of it on the
+// crests and leaves the water between them a mirror, which is a dead calm with
+// wind on it; one weighs all three octaves the same and is an ordinary fBm
+// again, rough everywhere. See `vivid_hetero3`.
+uniform float ripple_relief : hint_range(0.0, 1.0) = 0.72;
 // Where the ripples fade out, in metres. Past a few hundred they are finer than
 // a pixel and turn into a field of noise that crawls as the camera moves; this
 // is also most of what the sea costs to draw, and the fade takes the noise field
@@ -275,8 +291,17 @@ void fragment() {
 		}
 	}
 	float close = 1.0 - smoothstep(ripple_near, ripple_far, range);
-	surface = vivid_bump_normal(v_world_position + vec3(TIME * ripple_speed),
-		surface, ripple_scale, ripple_strength * close);
+	// Chop rather than an even roughness. The field behind this weighs each of
+	// its octaves by what is under it, so the fine texture collects on the
+	// faces that are already raised and the troughs between the swells stay
+	// glassy — which is the difference between water and a rough surface
+	// painted blue. See `vivid_hetero3`.
+	//
+	// The drift is handed to the field rather than added to the position, so
+	// its octaves travel at their own rates instead of one pattern sliding
+	// across the sea in a straight line.
+	surface = vivid_chop_normal(v_world_position, surface, ripple_scale,
+		ripple_strength * close, ripple_relief, vec3(TIME * ripple_speed));
 	vec3 view = normalize(to_eye);
 	// Against the shaped normal and not against the radial up, which is what
 	// makes the swell visible at all. A wave lit only through its specular shows
@@ -308,18 +333,8 @@ void fragment() {
 	// sparkle belongs exactly where the net is and goes on and off with it.
 	glint *= 1.0 + web * twinkle;
 
-	vec3 color = mix(deep_color, mix(shallow_color, vec3(1.0), 0.35 * grazing), grazing);
-	color = mix(color, color * vivid_region_light(up), region_tint);
-	// Under the surface, looking up. Snell's window is the brightest thing a
-	// swimmer can see and the net is written across it; above the water this is
-	// nothing, because from up there the net is on the bed and the bed draws it.
-	bool submerged = vivid_altitude(CAMERA_POSITION_WORLD) < 0.0;
-	if (underlight > 0.0 && submerged) {
-		color += vec3(0.55, 0.85, 1.0) * web * underlight * day;
-	}
-
-	// How deep the water is under this fragment, read once and spent twice: on
-	// the shore fade above, and on the surf below.
+	// How deep the water is under this fragment, read once and spent three
+	// times: on the body colour just below, on the shore fade, and on the surf.
 	//
 	// Taken as a difference of radii, not as a length along the view ray. A
 	// slant path through shallow water is long, so the ray version reads every
@@ -341,9 +356,63 @@ void fragment() {
 		under = planet_radius - length(bed - planet_center);
 		has_bed = true;
 	}
-	float shore = has_bed
-		? smoothstep(0.0, shore_fade + range * shore_fade_range, under)
-		: 1.0;
+	// Two-sided, and that is the whole of it.
+	//
+	// This fade exists to thin the water out as its bed rises to meet it, so
+	// the waterline is a wash rather than a cut edge. It reads that thinning off
+	// the depth buffer, which works only while the thing behind a water pixel is
+	// the bed beneath it — true looking down, false looking along. At a grazing
+	// angle across a bay the geometry behind the sea is the far shore, standing
+	// tens or hundreds of metres above it, and a one-sided fade reads that as
+	// "less than no water here" and hands the fragment zero opacity. The sea in
+	// front of every headland then vanishes and the headland is drawn through
+	// the gap, which is not the water being clear — it is the water not being
+	// drawn.
+	//
+	// So the fade comes back. It is still nothing exactly at the waterline,
+	// where the water really has run out, and it climbs again as the ground
+	// behind stands further above sea level, because ground that high is no
+	// longer the bed of anything and says nothing about how deep the water in
+	// front of it is.
+	float shore = 1.0;
+	if (has_bed) {
+		float feather = shore_fade + range * shore_fade_range;
+		shore = smoothstep(0.0, feather, abs(under));
+	}
+
+	// What the water column has taken out of the light on its way down and back
+	// up, per channel, over the depth read above. Water absorbs red in a couple
+	// of metres and blue in tens, which is the whole reason a shallow lagoon is
+	// turquoise and the same water twenty metres deeper is navy — it is not two
+	// paints, it is one paint and a distance.
+	//
+	// Beer's law, so a metre of water takes the same fraction whatever is under
+	// it, and the falloff is exponential rather than a ramp between two hand
+	// picked depths.
+	//
+	// Where there is no bed the exponent runs to infinity, nothing is left of
+	// the shallow tint, and this returns `deep_color` exactly — which is what
+	// open ocean and everything past the limb were already being drawn as, so
+	// the horizon is untouched by all of it.
+	// Only where there is a water column to do the absorbing. A negative `under`
+	// is the far shore standing above the sea, not water of no depth at all, and
+	// clamping it to zero would hand every headland the full shallow tint and
+	// stencil its outline onto the sea in front of it.
+	vec3 body = deep_color;
+	if (absorb_amount > 0.0 && has_bed && under > 0.0) {
+		vec3 through = exp(-under / max(absorb_depth, vec3(0.01)));
+		body = mix(deep_color, shoal_color, through * absorb_amount);
+	}
+
+	vec3 color = mix(body, mix(shallow_color, vec3(1.0), 0.35 * grazing), grazing);
+	color = mix(color, color * vivid_region_light(up), region_tint);
+	// Under the surface, looking up. Snell's window is the brightest thing a
+	// swimmer can see and the net is written across it; above the water this is
+	// nothing, because from up there the net is on the bed and the bed draws it.
+	bool submerged = vivid_altitude(CAMERA_POSITION_WORLD) < 0.0;
+	if (underlight > 0.0 && submerged) {
+		color += vec3(0.55, 0.85, 1.0) * web * underlight * day;
+	}
 
 	float foam = 0.0;
 	float reach = 1.0 - smoothstep(surf_near, surf_far, range);

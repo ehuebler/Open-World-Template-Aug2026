@@ -22,6 +22,11 @@ render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_sc
 
 #include "res://shaders/vivid/vivid_lib.gdshaderinc"
 
+// The gameplay viewer rather than CAMERA_POSITION_WORLD, which becomes the
+// directional light during shadow rendering. GroundCover publishes this once
+// for all distance-grown surfaces.
+global uniform vec3 viewer_point;
+
 group_uniforms Fill;
 uniform vec3 base_color : source_color = vec3(0.82, 0.80, 0.78);
 uniform sampler2D base_texture : source_color, hint_default_white, filter_linear_mipmap, repeat_enable;
@@ -76,14 +81,46 @@ group_uniforms;
 group_uniforms Emission;
 uniform vec3 emission_color : source_color = vec3(0.0, 0.0, 0.0);
 uniform float emission_energy : hint_range(0.0, 8.0) = 0.0;
+// Optional emission that follows the local night side. Zero keeps every
+// existing surface unchanged; flower-tree heads turn this on so only the bloom,
+// and not its trunk, glows after sunset.
+uniform vec3 night_emission_color : source_color = vec3(0.0);
+uniform float night_emission_energy : hint_range(0.0, 8.0) = 0.0;
+// External color-paint PNGs can carry a semantic glow mask in alpha. The
+// surface remains opaque; alpha only selects painted veins, centres and glyphs.
+uniform bool night_emission_from_texture_alpha = false;
+// MultiMesh custom X/Y carry a stable phase and rate seed. Materials that leave
+// amount at zero retain the previous constant night emission exactly.
+uniform float night_pulse_amount : hint_range(0.0, 0.5) = 0.0;
+uniform float night_pulse_speed : hint_range(0.0, 2.0) = 0.3;
+uniform float night_emission_albedo : hint_range(0.0, 1.0) = 0.38;
+group_uniforms;
+
+group_uniforms Distance_Growth;
+// Disabled for ordinary props. Large instanced flora can opt in so each
+// instance rises from its rooted origin as the viewer approaches, matching the
+// plant/coral rendering model without making a rigid trunk sway like grass.
+uniform bool distance_growth = false;
+uniform float growth_full_within = 280.0;
+uniform float growth_hidden_beyond = 360.0;
 group_uniforms;
 
 varying vec3 v_world_position;
 varying vec3 v_world_normal;
+varying float v_night_phase;
+varying float v_night_rate;
 
 void vertex() {
+	if (distance_growth) {
+		vec3 base = MODEL_MATRIX[3].xyz;
+		float growth = 1.0 - smoothstep(growth_full_within,
+			growth_hidden_beyond, distance(base, viewer_point));
+		VERTEX *= growth;
+	}
 	v_world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	v_world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	v_night_phase = INSTANCE_CUSTOM.x;
+	v_night_rate = mix(0.82, 1.18, INSTANCE_CUSTOM.y);
 }
 
 void fragment() {
@@ -124,8 +161,10 @@ void fragment() {
 	// Bend the normal in world space, where the noise lives and no tangents are
 	// needed, then hand it to view space for the texture's own relief to be
 	// added along the UV axes.
+	// Whole field. These are props read from a few metres away, where a pixel is
+	// a small fraction of a noise cell and there is nothing to filter out.
 	vec3 shaped = vivid_bump_normal(position, world_normal, bump_scale,
-		bump_strength * detail_fade);
+		bump_strength * detail_fade, 0.0);
 	vec3 view_normal = vivid_to_view(VIEW_MATRIX, shaped);
 
 	if (texture_relief > 0.0) {
@@ -149,6 +188,22 @@ void fragment() {
 	SPECULAR = specular;
 	RIM = region_rim * mix(0.4, 1.0, region.y);
 	RIM_TINT = 0.4;
+	vec3 night_emission = vec3(0.0);
+	if (night_emission_energy > 0.0) {
+		float night = 1.0 - smoothstep(-0.16, 0.12,
+			dot(vivid_up(position), normalize(-sun_direction)));
+		float night_pulse = 1.0;
+		if (night_pulse_amount > 0.0) {
+			night_pulse += night_pulse_amount * sin(
+				TIME * TAU * night_pulse_speed * v_night_rate
+					+ v_night_phase * TAU);
+		}
+		night_emission = night_emission_color * night_emission_energy
+			* night * night_pulse
+			* (night_emission_from_texture_alpha ? sampled.a : 1.0)
+			* mix(vec3(1.0), albedo, night_emission_albedo);
+	}
 	EMISSION = emission_color * emission_energy
-		+ region_color * fresnel * region_sheen * region.y * 0.5;
+		+ region_color * fresnel * region_sheen * region.y * 0.5
+		+ night_emission;
 }

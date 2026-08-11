@@ -1,0 +1,35 @@
+[gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://blender_assets/kelp_ribbon.glb" id="2_model"]
+[ext_resource type="Material" path="res://game/props/biomes/seaweed.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/kelp_ribbon_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+resource_name = "RibbonKelp"
+height = 4.4
+height_variation = 0.55
+width_scale = 1.15
+tilt = 16.0
+above_water = -38.0
+below = -5.0
+max_slope = 18.0
+steady_over = 2.4
+steady_within = 1.05
+ground_layer = 2
+minimum_claim = 0.04
+per_square_metre = 0.026
+clump_count = 2
+clump_radius = 1.2
+bare_share = 0.7
+patch_size = 48.0
+random_seed = 20261001
+draw_within = 230.0
+thin_from = 28.0
+thin_to = 105.0
+far_density = 0.055
+shadow_within = 0.0

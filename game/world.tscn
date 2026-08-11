@@ -10,6 +10,39 @@
 [ext_resource type="Script" uid="uid://bfw3ak0dy0xh1" path="res://game/planet/surface_anchor.gd" id="7_anchor"]
 [ext_resource type="Script" uid="uid://cxyl1llbkxjek" path="res://game/city/city_builder.gd" id="9_city"]
 [ext_resource type="Script" uid="uid://pi0ekedlrp0k" path="res://game/planet/landmark.gd" id="10_landmark"]
+[ext_resource type="Script" uid="uid://dlrsxm5tm8mfo" path="res://game/props/colony_ship.gd" id="11_ship"]
+[ext_resource type="Script" path="res://game/props/ground_cover.gd" id="12_flowers"]
+[ext_resource type="Script" path="res://game/props/plant_species.gd" id="13_species"]
+[ext_resource type="Resource" path="res://game/props/purple_flower.tres" id="14_flower"]
+[ext_resource type="Resource" path="res://game/props/grass_species.tres" id="15_grass"]
+[ext_resource type="Script" path="res://game/props/fish_school.gd" id="16_school"]
+[ext_resource type="PackedScene" path="res://blender_assets/fish_vat.glb" id="17_fish_model"]
+[ext_resource type="Material" path="res://game/props/fish.tres" id="18_fish_material"]
+[ext_resource type="Resource" path="res://game/props/fish_vat.tres" id="19_fish_vat"]
+[ext_resource type="Resource" path="res://game/props/coral_pink.tres" id="20_coral_pink"]
+[ext_resource type="Resource" path="res://game/props/coral_blue.tres" id="21_coral_blue"]
+[ext_resource type="Resource" path="res://game/props/coral_purple.tres" id="22_coral_purple"]
+[ext_resource type="Resource" path="res://game/props/coral_green.tres" id="23_coral_green"]
+[ext_resource type="PackedScene" path="res://blender_assets/small_fish_vat.glb" id="24_small_fish_model"]
+[ext_resource type="Material" path="res://game/props/small_fish.tres" id="25_small_fish_material"]
+[ext_resource type="Resource" path="res://game/props/small_fish_vat.tres" id="26_small_fish_vat"]
+[ext_resource type="Resource" path="res://game/props/grass_distant_species.tres" id="27_grass_distant"]
+[ext_resource type="Script" path="res://game/props/flower_tree_field.gd" id="28_tree_field"]
+[ext_resource type="PackedScene" path="res://blender_assets/flower_tree.glb" id="29_tree_model"]
+[ext_resource type="Material" path="res://game/props/flower_tree.tres" id="30_tree_material"]
+[ext_resource type="Script" path="res://game/planet/celestial_cycle.gd" id="31_cycle"]
+[ext_resource type="Material" path="res://game/props/flower_tree_head.tres" id="32_tree_head_material"]
+[ext_resource type="Script" path="res://game/props/tech_formation_sites.gd" id="33_tech_sites"]
+[ext_resource type="PackedScene" path="res://game/props/biomes/biome_populations.tscn" id="34_biome_populations"]
+[ext_resource type="Material" path="res://game/props/bioluminescent_fish.tres" id="35_glow_fish"]
+[ext_resource type="Script" path="res://game/props/ring_sites.gd" id="36_ring_sites"]
+[ext_resource type="Script" path="res://game/props/impact_break_effects.gd" id="37_break_effects"]
+[ext_resource type="Script" path="res://game/props/aerial_swarm.gd" id="38_aerial_swarm"]
+[ext_resource type="PackedScene" path="res://game/props/night_sparkle_model.tscn" id="39_sparkle_model"]
+[ext_resource type="Material" path="res://game/props/night_sparkle.tres" id="40_sparkle_material"]
+[ext_resource type="PackedScene" path="res://game/props/night_wisp_model.tscn" id="41_wisp_model"]
+[ext_resource type="Material" path="res://game/props/night_wisp.tres" id="42_wisp_material"]
+[ext_resource type="Script" path="res://game/planet/volcano_biome.gd" id="43_volcano"]
 
 [sub_resource type="ShaderMaterial" id="SkyMaterial"]
 shader = ExtResource("4_space")
@@ -45,14 +78,22 @@ shader_parameter/nebula_hue_spread = 0.45
 
 [sub_resource type="Sky" id="Sky"]
 sky_material = SubResource("SkyMaterial")
-process_mode = 2
+; The celestial angle changes continuously. Incremental mode restarts its
+; multi-frame radiance bake whenever that angle changes, which produced the
+; regular whole-frame holds visible while walking. Realtime mode is the path
+; intended for a dynamic sky and spreads that cost evenly.
+process_mode = 3
 
 [sub_resource type="Environment" id="Environment_world"]
 background_mode = 2
 sky = SubResource("Sky")
-ambient_light_source = 3
+; The visible sky is dynamic, but rebuilding its radiance cubemap as an ambient
+; and reflection source while walking causes frame-time spikes. A softly blue
+; ambient is modulated by CelestialCycle instead; the sky itself still moves.
+ambient_light_source = 2
+ambient_light_color = Color(0.72, 0.8, 1, 1)
 ambient_light_energy = 0.38
-reflected_light_source = 2
+reflected_light_source = 1
 tonemap_mode = 3
 tonemap_white = 2.0
 glow_enabled = true
@@ -61,6 +102,10 @@ glow_hdr_threshold = 0.95
 
 [sub_resource type="Resource" id="PlanetShape_world"]
 script = ExtResource("6_shape")
+; No town pads in the height field for now, so the ground under both settlements is
+; the natural terrain again. The builders below are switched off to match: a road
+; laid on ground that was never flattened is the one combination to avoid.
+settled = false
 
 [node name="World" type="Node3D" unique_id=111020355]
 script = ExtResource("1_world")
@@ -69,6 +114,11 @@ script = ExtResource("1_world")
 environment = SubResource("Environment_world")
 
 [node name="Sun" type="DirectionalLight3D" parent="." unique_id=1310562230]
+; CelestialCycle rewrites this transform on every rendered frame. Interpolation
+; exists to smooth transforms that only advance on physics ticks, so applying it
+; to one that is already authored per frame can only hold the light a tick
+; behind where the cycle has put it.
+physics_interpolation_mode = 2
 ; The same sun, in the other hemisphere's summer. It was 17.3 degrees south of
 ; the equator, and the pole's horizon *is* the equatorial plane, so the arctic sat
 ; in permanent polar night: a black disc from orbit and a blue dusk on the ground,
@@ -116,9 +166,41 @@ directional_shadow_split_3 = 0.4
 directional_shadow_blend_splits = true
 directional_shadow_max_distance = 150.0
 
-[node name="Planet" type="Node3D" parent="." unique_id=1088204411]
+; The planet does not rotate. The light and procedural star field make one turn
+; around its north-pole/cloud-circle axis every sixteen minutes instead, with
+; Vacationer's Landing under the phase-zero noon. Because the orbit has zero
+; declination, the terminator always bisects the ice cap.
+;
+; `node_paths` is not decoration. Exports typed as a node rather than as a
+; NodePath are stored here as a path and resolved after the whole scene exists,
+; and this array is what marks them for that resolution. Without it the loader
+; tries to assign a NodePath straight into a typed property, the assignment is
+; dropped, and every one of the four arrives null — which is exactly how this
+; cycle spent its life pushing "needs its planet and directional sun" and
+; switching its own processing off.
+[node name="CelestialCycle" type="Node" parent="." node_paths=PackedStringArray("planet", "sun", "world_environment", "noon_anchor")]
+script = ExtResource("31_cycle")
+planet = NodePath("../Planet")
+sun = NodePath("../Sun")
+world_environment = NodePath("../WorldEnvironment")
+noon_anchor = NodePath("../Planet/ColonyShip")
+period_seconds = 960.0
+
+[node name="Planet" type="Node3D" parent="." node_paths=PackedStringArray("sun") unique_id=1088204411]
 script = ExtResource("5_planet")
 shape = SubResource("PlanetShape_world")
+; Start orbital views at depth-4 grain. Depths 0 through 3 still exist as broad
+; fallback chunks, but carry enough vertices to depict the same 49 m surface
+; grain, so the globe already has hills and a stable silhouette at the outer-
+; space spawn instead of waiting until the player has crossed the atmosphere.
+; This raises only the shallow fallback meshes; max_depth and the 1.5 m
+; walkable grain are unchanged.
+far_detail_depth = 4
+; Keep the next refinement level visible from about ten percent farther away.
+; Cost grows with area, so 2.2 is deliberately modest: enough to stop low,
+; horizontal flight riding the boundary between two levels without turning the
+; normal setting into the existing 1.6x Far setting.
+split_ratio = 2.2
 ; Left unset, the planet publishes no sun_direction at all and every shader that
 ; wants a day/night term falls back to the value declared in project.godot —
 ; which is a static guess and had the declination above already reversed under
@@ -127,6 +209,12 @@ shape = SubResource("PlanetShape_world")
 ; own shading of the ground got it right, so the two disagreed by a hemisphere.
 ; The harnesses never saw it because each of them assigns this itself.
 sun = NodePath("../Sun")
+
+[node name="ImpactBreakEffects" type="Node3D" parent="Planet"]
+script = ExtResource("37_break_effects")
+
+[node name="SouthPoleVolcano" type="Node3D" parent="Planet"]
+script = ExtResource("43_volcano")
 
 [node name="SurfaceAnchor" type="Node3D" parent="Planet" unique_id=1597429631]
 transform = Transform3D(-0.9997214, 0.023402292, 0.0030863807, 0.022417346, 0.9822242, -0.18636784, -0.007392953, -0.18624672, -0.9824752, 187.93507, 7887.876, -1495.6777)
@@ -146,6 +234,7 @@ transform = Transform3D(1, 2.910383e-09, 0, 3.3760443e-09, 1, 1.4901161e-08, 4.6
 [node name="City" type="Node3D" parent="Planet" unique_id=1704339827]
 script = ExtResource("9_city")
 site = &"landing"
+enabled = false
 metadata/_custom_type_script = "uid://cxyl1llbkxjek"
 
 ; Meridian Flats, on the sunlit plateau 38 degrees round from the Landing. It puts
@@ -154,14 +243,461 @@ metadata/_custom_type_script = "uid://cxyl1llbkxjek"
 [node name="MeridianCity" type="Node3D" parent="Planet" unique_id=1704339833]
 script = ExtResource("9_city")
 site = &"meridian"
+enabled = false
 metadata/_custom_type_script = "uid://cxyl1llbkxjek"
 
-[node name="VacationersLanding" type="Node3D" parent="Planet" unique_id=1704339828]
+; The lander, on the shore of what Vacationer's Landing was named for. It is the
+; town's sign as well as a prop: a ColonyShip is a Landmark, so the waypoint over
+; it is the same node, and the town's own marker went with the streets.
+;
+; The site is dev/_lander_site.gd's answer, taken against the unsettled terrain
+; the pads being off leaves behind: 790 m from the town centre, 70 m from the
+; sea, level to 0.5 m across the ship's own 12 m footprint, on ground sloping a
+; degree and a half. The facing turns its -Z at the water.
+[node name="ColonyShip" type="Node3D" parent="Planet" unique_id=1704339828]
+script = ExtResource("11_ship")
+direction = Vector3(-0.2881049, -0.1121179, 0.9510127)
+facing = 91.9
+title = "Colony Ship"
+tint = Color(0.964706, 0.701961, 0.168627, 1)
+; Nearer than the default before it is named, and gone sooner: the ship is 26 m
+; tall and reads as itself from a long way off, so a label over it is only
+; wanted while it is still a speck on a shore.
+show_beyond = 400.0
+aimed_beyond = 900.0
+metadata/_custom_type_script = "uid://dlrsxm5tm8mfo"
+
+; Five ruins of the same panelled alien technology, broken into differently
+; stretched and buried fragments. Four centres are dry sites spread around the
+; globe; the fifth follows PlanetShape's north and accepts only its pack ice.
+; Each field is one MultiMesh and therefore one draw call. Nearby collision is a
+; simplified copy of the visible core/panels, clipped at the burial plane and
+; streamed out again away from players; empty outer-envelope air stays empty.
+[node name="TechFormationSites" type="Node3D" parent="Planet"]
+script = ExtResource("33_tech_sites")
+
+; Four marked fields of partially buried green crystal rings: circles, tall
+; ovals and low elongated arches. The arctic field's 720 m hero ring sits on a
+; surveyed pack-ice footprint 2.5 km from the pole, leaving 1.39 km of open ice
+; beyond the north tech field's outer bound. All four fields were also excluded
+; from the giant summits. Each site is one MultiMesh; accurate convex segment
+; collision streams only around players, while local green lights illuminate
+; nearby ground in daylight and darkness.
+[node name="RingSites" type="Node3D" parent="Planet"]
+script = ExtResource("36_ring_sites")
+
+; The four tallest distinct summits in the current height field, refined to the
+; crest at walkable spacing and kept at least 1.5 km apart. Their waypoints have
+; no outer cutoff because the orbital view is the world's map; the planet's
+; horizon still hides any mountain on its far side.
+[node name="GiantMountain1" type="Node3D" parent="Planet"]
 script = ExtResource("10_landmark")
-direction = Vector3(-0.2958888, -0.013925, 0.9551209)
-facing = -95.0
-title = "Vacationer's Landing"
-metadata/_custom_type_script = "uid://pi0ekedlrp0k"
+direction = Vector3(-0.270521, -0.3052884, -0.9130266)
+title = "Giant Mountain I"
+tint = Color(0.988235, 0.701961, 0.168627, 1)
+waypoint = false
+show_beyond = 500.0
+aimed_beyond = 900.0
+hide_beyond = 0.0
+
+[node name="GiantMountain2" type="Node3D" parent="Planet"]
+script = ExtResource("10_landmark")
+direction = Vector3(0.6848267, 0.0168872, 0.7285103)
+title = "Giant Mountain II"
+tint = Color(0.988235, 0.701961, 0.168627, 1)
+waypoint = false
+show_beyond = 500.0
+aimed_beyond = 900.0
+hide_beyond = 0.0
+
+[node name="GiantMountain3" type="Node3D" parent="Planet"]
+script = ExtResource("10_landmark")
+direction = Vector3(0.2574172, -0.2996968, -0.9186503)
+title = "Giant Mountain III"
+tint = Color(0.988235, 0.701961, 0.168627, 1)
+waypoint = false
+show_beyond = 500.0
+aimed_beyond = 900.0
+hide_beyond = 0.0
+
+[node name="GiantMountain4" type="Node3D" parent="Planet"]
+script = ExtResource("10_landmark")
+direction = Vector3(0.4474815, -0.0008659, -0.8942928)
+title = "Giant Mountain IV"
+tint = Color(0.988235, 0.701961, 0.168627, 1)
+waypoint = false
+show_beyond = 500.0
+aimed_beyond = 900.0
+hide_beyond = 0.0
+
+; The flowers, over the shelf the ship came down on and out across the headland
+; behind it. The field is grown from the species' `random_seed` and the height
+; field alone, so it is the same on every peer, nothing about it is replicated
+; or saved, and only the tiles near whoever is looking exist at any moment.
+;
+; `spread` is the planted ground and is much wider than anything is ever drawn
+; at: what bounds the cost is the species' own draw distance, and this only says
+; where the meadow stops. Walking out of it is walking off the edge of the
+; flowers rather than watching them stop appearing.
+[node name="LandingFlowers" type="Node3D" parent="Planet" unique_id=1704339834]
+script = ExtResource("12_flowers")
+direction = Vector3(-0.2881049, -0.1121179, 0.9510127)
+species = Array[ExtResource("13_species")]([ExtResource("14_flower")])
+spread = 430.0
+tile_size = 34.0
+clear_of = NodePath("../ColonyShip")
+keep_back = 26.0
+wind_heading = 35.0
+; Temporarily disabled with the master aerial terrain wash. Ground-level bloom
+; emission and the nearby real-light pool below remain active.
+aerial_glow = false
+; Six real, shadowless lights follow the nearest luminous flower patches. The
+; blooms themselves all emit in the shader; this bounded pool is only what
+; throws their dark-purple light onto the player, grass, and nearby props.
+;
+; The range is what makes the pool visible rather than the energy. Omni falloff
+; reaches zero at the range, so an 8.5 m one placed on the nearest patch — which
+; can be five metres off — was delivering almost nothing to the ground the
+; player stands on. Thirty-four carries the bloom colour across a broad patch
+; of terrain and onto the character and nearby props without adding more lights.
+glow_light_limit = 6
+glow_light_range = 34.0
+glow_light_energy = 8.0
+glow_light_height = 0.78
+glow_light_use_region_color = false
+glow_light_color = Color(0.3, 0.025, 0.68, 1)
+glow_light_night_only = true
+glow_light_pulse_amount = 0.16
+glow_light_pulse_speed = 0.25
+pending_limit = 1
+applies_per_frame = 1
+
+; Giant flower trees over the grassy country around the colony ship.
+; Trunks and independently angled flowers are two MultiMeshes — two draw calls
+; for the field — while one static body owns primitive trunk/crown collision for
+; every tree. Placement asks GlobalGrass which terrain layer the ground shader
+; paints, so a tree cannot grow in a green-looking patch of sand or stone.
+[node name="LandingFlowerTrees" type="Node3D" parent="Planet"]
+script = ExtResource("28_tree_field")
+direction = Vector3(-0.2881049, -0.1121179, 0.9510127)
+model = ExtResource("29_tree_model")
+material = ExtResource("30_tree_material")
+head_material = ExtResource("32_tree_head_material")
+grass_cover = NodePath("../GlobalGrass")
+clear_of = NodePath("../ColonyShip")
+spread = 900.0
+tree_count = 280
+keep_back = 62.0
+minimum_spacing = 22.0
+minimum_height = 4.0
+maximum_height = 11.5
+; Temporarily disable only the high-altitude terrain stand-in. The crowns still
+; glow and cast their pooled pink lights while the player is nearby.
+orbital_glow = false
+; Every crown emits after local sunset. These eight real lights are reassigned
+; only among nearby trees and pulse on each tree's own phase, providing pink
+; spill on the character and landscape without 280 simultaneous OmniLights.
+; Six rather than eight. Both pools shine on the same grass, and a renderer only
+; carries so many omni lights on one object before it starts dropping them,
+; which shows up as patches of ground changing brightness as the player walks.
+night_light_limit = 6
+; A crown sits seven to eleven metres up, so part of this range is spent getting
+; back down to the grass. Fifty carries a strong pool of pink beyond the crown
+; and onto nearby terrain, characters, equipment, and props.
+night_light_range = 50.0
+night_light_energy = 9.0
+night_light_color = Color(1, 0.055, 0.32, 1)
+night_light_pulse_amount = 0.13
+night_light_pulse_speed = 0.22
+
+; Grass uses the same tiled MultiMesh machinery as the flowers, but its tile
+; keys cover all six cube faces and are enumerated around the current viewer.
+; Nothing is allocated for the rest of the planet.
+[node name="GlobalGrass" type="Node3D" parent="Planet"]
+script = ExtResource("12_flowers")
+direction = Vector3(-0.2881049, -0.1121179, 0.9510127)
+species = Array[ExtResource("13_species")]([ExtResource("15_grass")])
+global_cover = true
+tile_size = 18.0
+wind_heading = 35.0
+pending_limit = 1
+applies_per_frame = 1
+survey_interval = 0.3
+glow_light_limit = 10
+glow_light_range = 18.0
+glow_light_energy = 2.8
+
+; A separate low-cost grass horizon. The dense twenty-blade field above still
+; owns the nearest 48 m; this eight-blade field streams five times farther at a
+; fraction of its density. Keeping the streams separate means the dense field
+; does not allocate full-density buffers for hundreds of distant tiles merely
+; to hide almost every instance through thinning.
+[node name="GlobalDistantGrass" type="Node3D" parent="Planet"]
+script = ExtResource("12_flowers")
+direction = Vector3(-0.2881049, -0.1121179, 0.9510127)
+species = Array[ExtResource("13_species")]([ExtResource("27_grass_distant")])
+global_cover = true
+tile_size = 30.0
+wind_heading = 35.0
+pending_limit = 1
+applies_per_frame = 1
+survey_interval = 0.4
+glow_light_limit = 0
+
+; The reef, on the same machinery as the grass and streamed the same way: four
+; corals whose depth rule puts them on the sunlit sand between eight and thirty
+; metres down and nowhere else. Nothing here knows about the ocean — the band is
+; two numbers on each species and the sea bed is sand because the terrain
+; shader's own rules say a shore is, so this is a GroundCover with a different
+; sign on its heights.
+;
+; The wind heading matches the grass on purpose. Wind is published as a shader
+; global by whichever field writes it last, so two fields with different
+; headings is one planet whose breeze depends on the node order.
+[node name="Reef" type="Node3D" parent="Planet"]
+script = ExtResource("12_flowers")
+direction = Vector3(-0.2881049, -0.1121179, 0.9510127)
+species = Array[ExtResource("13_species")]([ExtResource("20_coral_pink"), ExtResource("21_coral_blue"), ExtResource("22_coral_purple"), ExtResource("23_coral_green")])
+global_cover = true
+tile_size = 30.0
+wind_heading = 35.0
+push_reach = 2.2
+pending_limit = 1
+applies_per_frame = 1
+survey_interval = 0.5
+; Coral's shader emission makes the heads visible; these ten pooled lights are
+; what make that emission fall onto the sand, nearby coral, the swimmer and
+; equipment. The pool is bounded no matter how much reef is streamed.
+glow_light_limit = 10
+glow_light_range = 26.0
+glow_light_energy = 6.0
+glow_light_height = 0.9
+glow_light_use_region_color = false
+glow_light_color = Color(0.4, 0.2, 0.8, 1)
+glow_light_night_only = true
+glow_light_pulse_amount = 0.12
+glow_light_pulse_speed = 0.16
+
+; The planet-wide multi-biome library. Its five internal GroundCover fields
+; stream only the tiles around the viewer and classify every accepted instance
+; against the same grass/sand/stone/ice, aridity, frost, height and slope rules
+; that paint the terrain.
+[node name="BiomePopulations" parent="Planet" instance=ExtResource("34_biome_populations")]
+
+; Ethereal night life streams in stable cells around the viewer. Conservative
+; hover bands plus a four-metre bob keep the motes inside the requested
+; 40..100 m layer even as the sampled ground changes under a drifting cluster.
+; Appearance cycles and glow are entirely
+; shader-driven; the CPU only refreshes broad, low-rate MultiMesh movement.
+[node name="NightSparkles" type="Node3D" parent="Planet"]
+script = ExtResource("38_aerial_swarm")
+model = ExtResource("39_sparkle_model")
+material = ExtResource("40_sparkle_material")
+insect_size = 0.32
+size_variation = 0.52
+placement_mode = 1
+instance_count = 180
+cluster_count = 36
+random_seed = 20261081
+global_cluster_spacing = 46.0
+global_search_radius = 285.0
+global_survey_interval = 0.65
+global_recenter_distance = 18.0
+minimum_elevation = -30.0
+maximum_elevation = 600.0
+maximum_slope = 20.0
+avoid_inland_water = false
+hover_minimum = 44.0
+hover_maximum = 92.0
+cluster_radius = 6.0
+cluster_orbit = 8.0
+cruise_speed = 0.55
+weave_amount = 0.9
+weave_rate = 0.42
+hover_bob = 4.0
+hover_rate = 0.18
+roll_degrees = 0.0
+avoid_reach = 0.0
+avoid_push = 0.0
+simulate_within = 220.0
+draw_within = 285.0
+distance_fade_from = 215.0
+distance_fade_stagger = 14.0
+pose_near_within = 70.0
+pose_rate_near = 18.0
+pose_rate_far = 6.0
+max_buffer_uploads_per_frame = 2
+night_only = true
+glow_night_only = true
+light_limit = 0
+
+[node name="NightWisps" type="Node3D" parent="Planet"]
+script = ExtResource("38_aerial_swarm")
+model = ExtResource("41_wisp_model")
+material = ExtResource("42_wisp_material")
+insect_size = 4.2
+size_variation = 0.42
+placement_mode = 1
+instance_count = 42
+cluster_count = 21
+random_seed = 20261082
+global_cluster_spacing = 58.0
+global_search_radius = 300.0
+global_survey_interval = 0.8
+global_recenter_distance = 22.0
+minimum_elevation = -30.0
+maximum_elevation = 600.0
+maximum_slope = 20.0
+avoid_inland_water = false
+hover_minimum = 44.0
+hover_maximum = 92.0
+cluster_radius = 9.0
+cluster_orbit = 12.0
+cruise_speed = 1.15
+weave_amount = 1.5
+weave_rate = 0.34
+hover_bob = 4.0
+hover_rate = 0.12
+roll_degrees = 3.0
+avoid_reach = 0.0
+avoid_push = 0.0
+simulate_within = 235.0
+draw_within = 300.0
+distance_fade_from = 225.0
+distance_fade_stagger = 16.0
+pose_near_within = 80.0
+pose_rate_near = 14.0
+pose_rate_far = 5.0
+max_buffer_uploads_per_frame = 2
+night_only = true
+glow_night_only = true
+light_limit = 0
+
+; Shoals over every shelf and every stretch of open water on the planet, not one
+; bay's worth: the schools are sited on the sea floor around wherever the viewer
+; is and re-sited as they travel, so the ocean is populated wherever you swim out
+; into it. Each is its own MultiMesh, so the ones you are not near cost nothing:
+; the bodies are read entirely from the VAT shader, and the script only re-poses
+; the shoals close enough to be watched.
+;
+; Sixty-four schools over a six-hundred-metre ring is about the density the bay
+; used to hold on its own. What it costs to draw is set by draw_within and not by
+; the ring, so widening the ring is only worth doing alongside more schools.
+[node name="FishSchools" type="Node3D" parent="Planet"]
+script = ExtResource("16_school")
+model = ExtResource("17_fish_model")
+material = ExtResource("18_fish_material")
+vat = ExtResource("19_fish_vat")
+instance_count = 3200
+cluster_count = 64
+scatter_radius = 620.0
+cluster_radius = 2.6
+cruise_speed = 3.6
+school_orbit = 15.0
+simulate_within = 220.0
+draw_within = 340.0
+pose_near_within = 65.0
+pose_rate_near = 45.0
+pose_rate_far = 15.0
+max_pose_updates_per_frame = 4
+avoid_reach = 4.5
+avoid_push = 3.4
+
+; The reef swarms: sixty-four bait balls of seven hundred and fifty, each one its
+; own MultiMesh and its own draw call, holding station two and a half metres
+; over the same sand the coral is rooted in. Neither node knows about the other
+; — they meet because a school told to hug a bed between eight and thirty
+; metres down is over the band the corals grow in, and both read that band off
+; the same height field.
+;
+; Which is now true of every reef on the planet rather than the one off the
+; beach. The coral is global cover and always was; these swarms used to be a fan
+; pinned to the colony ship, so the two agreed only where they happened to
+; overlap. Siting the swarms around the viewer instead makes the depth band they
+; share do the work everywhere: swim out over any sand eight to thirty metres
+; down and there is coral, and there are fish over it.
+;
+; Five hundred fish in a ball is affordable for the reason the whole VAT pipe
+; exists: the body is a texture read in the vertex shader, so a fish costs a
+; hundred and fifty triangles and sixteen floats in a buffer, and the swarm
+; costs one call. Schools remain visible farther out because their VAT keeps
+; swimming with no CPU work; only the nearby ones are re-posed around their
+; orbit, which is what simulate_within is for.
+[node name="ReefSwarms" type="Node3D" parent="Planet"]
+script = ExtResource("16_school")
+model = ExtResource("24_small_fish_model")
+material = ExtResource("25_small_fish_material")
+vat = ExtResource("26_small_fish_vat")
+instance_count = 48000
+cluster_count = 64
+scatter_radius = 700.0
+max_sites_per_frame = 1
+random_seed = 20260905
+fish_length = 0.22
+model_forward_sign = -1.0
+minimum_depth = 3.0
+maximum_depth = 30.0
+seabed_clearance = 1.2
+hug_seabed = true
+hover_above_bed = 2.6
+bed_between = Vector2(8, 30)
+cluster_radius = 2.8
+cruise_speed = 2.8
+school_orbit = 9.0
+weave = 0.32
+weave_rate = 2.8
+simulate_within = 180.0
+draw_within = 420.0
+pose_near_within = 55.0
+pose_rate_near = 30.0
+pose_rate_far = 10.0
+max_pose_updates_per_frame = 2
+random_colours = true
+colour_saturation = 0.88
+colour_brightness = 1.35
+avoid_reach = 3.0
+avoid_push = 2.4
+avoid_turn = 0.85
+
+; A third moving variant: sparse low-poly shoals whose own colours wake into
+; asynchronous blue bioluminescence at night. It reuses the reef VAT topology,
+; but whole schools hold deeper water and move on wider, faster circuits. One
+; pose upload per frame is the hard CPU cap.
+;
+; Deliberately left thin. Twenty-four schools over this ring is the density the
+; open water had before, and a night ocean reads better for having to be looked
+; for than the reef does.
+[node name="NightShoals" type="Node3D" parent="Planet"]
+script = ExtResource("16_school")
+model = ExtResource("24_small_fish_model")
+material = ExtResource("35_glow_fish")
+vat = ExtResource("26_small_fish_vat")
+instance_count = 4800
+cluster_count = 24
+scatter_radius = 620.0
+random_seed = 20261027
+fish_length = 0.3
+model_forward_sign = -1.0
+minimum_depth = 7.0
+maximum_depth = 24.0
+seabed_clearance = 2.0
+cluster_radius = 4.2
+cruise_speed = 4.4
+school_orbit = 18.0
+weave = 0.58
+weave_rate = 2.1
+simulate_within = 145.0
+draw_within = 330.0
+pose_near_within = 48.0
+pose_rate_near = 28.0
+pose_rate_far = 8.0
+max_pose_updates_per_frame = 1
+random_colours = true
+colour_saturation = 0.72
+colour_brightness = 1.15
+avoid_reach = 3.8
+avoid_push = 3.0
+avoid_turn = 0.82
 
 ; The four below are places rather than built things: nothing stands at any of
 ; them yet, and the marker is the whole of what is there. Their directions come
@@ -169,31 +705,43 @@ metadata/_custom_type_script = "uid://pi0ekedlrp0k"
 ; is dry, out of the ice cap and low enough to be the coast it is called — the
 ; exact pole and the exact antipode both land in water.
 
+; Navigation marks are never ambient HUD. Tilde opens the selected planet-wide
+; set: colony, both poles, all four ring sites and the colony's exact antipode.
+; The other named places remain landmarks for the journal and coordinate plate
+; without joining that overlay.
+
 ; The far side, at the antipode of the spawn markers, so it is the one place the
-; planet always hides: the marker for it is only ever drawn from orbit.
+; planet always hides: the marker for it would only ever be drawn from orbit.
 [node name="Farlands" type="Node3D" parent="Planet" unique_id=1704339829]
 script = ExtResource("10_landmark")
 direction = Vector3(0.059413, -0.0345, -0.9976372)
 title = "Farlands"
 tint = Color(0.784314, 0.752941, 0.564706, 1)
+waypoint = false
+metadata/_custom_type_script = "uid://pi0ekedlrp0k"
+
+[node name="OtherSide" type="Node3D" parent="Planet"]
+script = ExtResource("10_landmark")
+direction = Vector3(0.2881049, 0.1121179, -0.9510127)
+title = "Other Side"
+tint = Color(0.427451, 0.85098, 1, 1)
 metadata/_custom_type_script = "uid://pi0ekedlrp0k"
 
 [node name="Iceland" type="Node3D" parent="Planet" unique_id=1704339830]
 script = ExtResource("10_landmark")
 direction = Vector3(0, 1, 0)
-title = "Iceland"
+title = "North Pole"
 tint = Color(0.988235, 0.964706, 0.694118, 1)
 metadata/_custom_type_script = "uid://pi0ekedlrp0k"
 
-; The south pole is 13 m of open sea, and the pin is wanted on the pole rather
-; than on the nearest dry ground, so it is lifted clear of the water instead of
-; moved off it.
+; The exact south pole is the active caldera. The landmark stays hidden from the
+; HUD like every non-colony site, but the coordinate plate can name the biome.
 [node name="Goblinworld" type="Node3D" parent="Planet" unique_id=1704339831]
 script = ExtResource("10_landmark")
 direction = Vector3(0, -1, 0)
-clearance = 24.0
-title = "Goblinworld"
-tint = Color(0.435294, 0.682353, 0.517647, 1)
+clearance = 28.0
+title = "South Pole Caldera"
+tint = Color(1, 0.286275, 0.062745, 1)
 metadata/_custom_type_script = "uid://pi0ekedlrp0k"
 
 ; Coast, on the hemisphere the one directional light never reaches. The planet
@@ -203,6 +751,7 @@ script = ExtResource("10_landmark")
 direction = Vector3(-0.3330431, -0.5285, -0.7808778)
 title = "Nightcity"
 tint = Color(0.662745, 0.898039, 0.733333, 1)
+waypoint = false
 metadata/_custom_type_script = "uid://pi0ekedlrp0k"
 
 [node name="LandingSite" type="Node3D" parent="Planet" unique_id=1704339826]

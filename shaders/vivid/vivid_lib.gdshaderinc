@@ -20,6 +20,10 @@ global uniform float planet_radius;
 // pointing at the light so that `dot(EYEDIR, LIGHT0_DIRECTION)` peaks on the sun.
 // Negating that one to "match" this one flips day and night across the planet.
 global uniform vec3 sun_direction;
+// Turn of the celestial sphere around frost_axis, in radians. CelestialCycle
+// writes it with the same phase used to orbit the DirectionalLight3D; the
+// planet itself remains fixed.
+global uniform float celestial_angle;
 
 // Pole of the colour wheel: hue runs around this axis the way longitude does.
 global uniform vec3 region_axis;
@@ -138,6 +142,50 @@ float vivid_fbm3(vec3 p, int octaves) {
 		amplitude *= 0.5;
 	}
 	return sum / max(total, 0.0001);
+}
+
+// Detail that lands on whatever is already high, and nowhere else.
+//
+// Every octave of an fBm is added everywhere, which is why a field of one reads
+// as evenly rough: the same texture in the troughs as on the crests. Hetero
+// terrain weighs each octave by the value accumulated under it, so a place that
+// is already high keeps gaining detail and a place that is low stays smooth.
+//
+// That asymmetry is most of what open water looks like. The trough between two
+// swells is glassy and the crest is where the chop is, and no sum of
+// equally-weighted octaves will produce that — turn an fBm up far enough to
+// roughen the crests and it roughens the troughs with them.
+//
+// [param offset] lifts the field before it is used as its own weight. At zero
+// the low ground multiplies every later octave by nothing and the field goes
+// dead flat between crests; around three quarters the troughs keep a little
+// texture and the crests still carry most of it.
+//
+// [param drift] is added to each octave in turn rather than to the field as a
+// whole, so the fine detail travels further per unit of it than the coarse
+// does. Sliding every octave together moves one rigid pattern across the
+// surface, and the eye reads that as a texture being dragged rather than as
+// water moving.
+float vivid_hetero3(vec3 p, int octaves, float offset, vec3 drift) {
+	float value = vivid_noise3(p + drift) + offset;
+	float amplitude = 0.5;
+	float total = 1.0;
+	for (int i = 1; i < octaves; i++) {
+		// Same swizzle-and-scale between octaves as `vivid_fbm3`, for the same
+		// reason written there.
+		p = p.yzx * 2.02 + vec3(17.3, 5.7, 31.1);
+		float layer = (vivid_noise3(p + drift * float(i + 1)) + offset) * amplitude;
+		// The weight, and the whole of the difference from an fBm: an octave is
+		// worth what the field under it is worth. Clamped because the running
+		// value can pass one, and an unclamped weight compounds into spikes
+		// that the gradient below turns into creases.
+		value += clamp(value, 0.0, 1.0) * layer;
+		total += amplitude;
+		amplitude *= 0.5;
+	}
+	// Back to roughly nought-to-one, so this can be swapped for `vivid_fbm3`
+	// without every strength that reads it having to be retuned.
+	return value / max(total * (1.0 + offset), 0.0001);
 }
 
 // Sharp crests instead of soft lumps. Cliffs and cloud edges want this; ground
@@ -439,17 +487,436 @@ float vivid_sea_shafts(vec3 from, vec3 to, float scale, float speed,
 
 // --- Surface detail ---------------------------------------------------------
 
-// Blend weights for triplanar sampling. Sharpness above about 4 keeps the three
-// projections from smearing across each other on a slope.
-vec3 vivid_triplanar_weights(vec3 normal, float sharpness) {
-	vec3 weights = pow(abs(normal), vec3(sharpness));
+// A tangent-space normal out of the two channels it is stored in, leant over by
+// [param strength]. Z is rebuilt rather than stored, because it is never
+// negative and the other two already determine it.
+vec3 vivid_unpack_normal(vec2 stored, float strength) {
+	vec2 lean = (stored * 2.0 - 1.0) * strength;
+	return vec3(lean, sqrt(max(1.0 - dot(lean, lean), 0.0)));
+}
+
+// One ground material, read at one point, projected from the two world axes the
+// surface faces most.
+//
+// A sphere has no usable texture coordinates. A seamless tangent frame cannot be
+// laid over one at all, which is why everything on this planet is projected from
+// world space instead. Triplanar is the usual way to do that — read the texture
+// once down each axis and blend by how squarely the surface faces each — and the
+// third read is nearly always waste: ground faces one axis strongly, a second
+// weakly and the third hardly at all, and that last one is paid for in full and
+// then multiplied by a weight near nothing.
+//
+// Dropping it is safe because of the rescale below. The weakest component of a
+// unit direction is at most 1/sqrt(3), which happens on the diagonal where all
+// three are equal, so a weight that maps 1/sqrt(3) to zero has *already* fallen
+// to zero by the time an axis becomes the weakest one. The projection being
+// dropped is always worth nothing at the moment it is dropped, and nothing swaps
+// visibly as the surface turns.
+//
+// Both packed maps are read together because the caller always wants both and
+// they share the choice of axes: four taps and one set of comparisons, rather
+// than two functions that each work out the same thing.
+//
+// The gradients are the caller's to supply and must be taken outside any branch.
+// Which axes get picked varies from pixel to pixel, so a `dFdx` in here would be
+// differencing neighbours that went the other way through it and mip selection
+// would come back as noise down every diagonal. Pass `dFdx` and `dFdy` of the
+// same scaled position handed in as [param position].
+//
+// [param leaning] is where the bumps point, in world space, unnormalised and
+// with the geometry's own normal already folded in — so two materials' worth can
+// be added together before anything is normalised.
+//
+// The weakest weight either projection can be worth, which is the diagonal.
+const float VIVID_BIPLANAR_FLOOR = 0.5773502692;
+
+// --- Breaking the repeat out of a tiled texture ------------------------------
+//
+// A photograph tiled every metre and a half draws a grid across a hillside
+// however seamless its edges are. Healing the joins does not help: what the eye
+// finds is the *features* coming back on a lattice — the same pebble every
+// 1.7 m in both directions — and no amount of work on the border changes where
+// the middle of the tile turns up.
+//
+// So the lattice is stopped from existing. The ground is cut into cells, each
+// cell reads the texture from its own hashed offset, and the three cells that
+// cover a point are weighed together. Two patches of ground are then never the
+// same patch and there is no direction in which anything repeats.
+//
+// Three reads instead of one is the whole price. The gradients are untouched —
+// sliding a texture coordinate does not change how fast it moves — so mip
+// selection is exactly what it was, and nothing else in the function changes.
+//
+// The idea is Inigo Quilez's note on texture repetition, which is Heitz and
+// Neyret's stochastic tiling with the histogram-preserving half left out. That
+// half is not missed here: these maps are light and shade multiplied into a
+// biome colour rather than colour in their own right, so slightly flatter
+// contrast in the narrow bands where two cells meet is invisible.
+
+// Shears the square lattice so one family of its edges runs off-axis. Kept to
+// halves rather than the equilateral 1/sqrt(3), because the caller wraps its
+// coordinate on a whole number of repeats and an irrational shear would put a
+// step in the cell indices where that wrap happens.
+const mat2 VIVID_SCATTER_SKEW = mat2(vec2(1.0, 0.0), vec2(-0.5, 1.0));
+
+vec2 vivid_scatter_offset(vec2 cell) {
+	return fract(sin(vec2(dot(cell, vec2(127.1, 311.7)),
+		dot(cell, vec2(269.5, 183.3)))) * 43758.5453);
+}
+
+// A turn for one cell, as the matrix that takes a surface coordinate into that
+// cell's copy of the texture.
+//
+// Sliding the texture, which is all the offset above does, hides where a repeat
+// begins but not which way it faces. Everything directional in a photographed
+// ground — the lie of grass, the grain of rock, the drift lines in sand — comes
+// out of every cell pointing the same way, and a whole hillside combed in one
+// direction is a pattern the eye finds as readily as a grid. Turning each cell
+// is what removes it.
+//
+// [param amount] scales the angle rather than fading the matrix towards the
+// identity, so a partial setting is a gentler turn and not a blend of two.
+mat2 vivid_scatter_turn(vec2 cell, float amount) {
+	float angle = fract(sin(dot(cell, vec2(419.2, 371.9))) * 29943.437)
+		* 6.28318530718 * amount;
+	float across = cos(angle);
+	float along = sin(angle);
+	return mat2(vec2(across, along), vec2(-along, across));
+}
+
+// Blends several readings of the same ground by which of them stands highest,
+// rather than by how much of each the lattice says is there.
+//
+// This is the height blending of terrain splatting, and it is the answer to a
+// problem the weights alone cannot solve. Averaging two photographs of ground
+// is not a picture of ground: it is a picture of neither, flatter and greyer
+// than both, so wherever a blend is wide it reads as a smear and wherever it is
+// narrow it reads as an edge. There is no width that reads as ground.
+//
+// Height blending steps outside that. Each reading brings its own relief — the
+// ambient occlusion channel, which is dark in the crevices and bright on the
+// tops, and so is a height map already — and the blend is decided per pixel by
+// which reading is standing proudest there. Where two readings meet, one's
+// pebbles push up through the other's sand instead of both going half
+// transparent. The handover is then shaped like the ground rather than like the
+// lattice, and the lattice stops being visible however wide the band is made.
+//
+// [param authority] is how far a reading's own relief may move it up or down the
+// order, in the same units the weights are in. It has to stay well under one:
+// the weights must remain able to say that a surface is simply not present here,
+// or a texture with no weight at all will still show wherever it happens to
+// stand tall. Everything within half of it of the top is blended, which is what
+// keeps the handover from being a hard cut.
+//
+// The two obvious ways of combining a weight with a height are both wrong, and
+// each fails at a different end. Multiplying lets the weights dominate so
+// completely that the heights never decide anything and the blend stays a
+// smear. Adding them as equals — which is how the technique is usually written
+// up — lets a surface with a weight of nothing win a pixel outright on the
+// strength of its relief, so material appears where it was never painted.
+// Adding a deliberately small share of the height is the version that does what
+// it is supposed to.
+vec3 vivid_height_weights(vec3 heights, vec3 weights, float authority) {
+	vec3 raised = weights + heights * authority;
+	float top = max(max(raised.x, raised.y), raised.z) - authority * 0.5;
+	vec3 keep = max(raised - top, vec3(0.0));
+	return keep / max(keep.x + keep.y + keep.z, 0.0001);
+}
+
+
+// The same, for two surfaces, returning how far to go towards the second.
+float vivid_height_toward(float height_a, float height_b, float toward_b,
+		float authority) {
+	float a = (1.0 - toward_b) + height_a * authority;
+	float b = toward_b + height_b * authority;
+	float top = max(a, b) - authority * 0.5;
+	float keep_a = max(a - top, 0.0);
+	float keep_b = max(b - top, 0.0);
+	return keep_b / max(keep_a + keep_b, 0.0001);
+}
+
+
+// The three cells covering a point, and how much of each it stands on. A
+// sheared square split along its diagonal is a triangle, and a triangle needs
+// three corners where a square would need four reads.
+//
+// [param cell] is the size of one cell in texture repeats. It wants to divide
+// the caller's wrap evenly — see the wrap in vivid_ground_material — so powers
+// of two are the safe settings.
+//
+// [param softness] raises the barycentric weights to a power: one leaves the
+// blend spread right across the cell, and larger numbers pull it into a narrow
+// band at the edges. This used to be a fixed cube, because a spread blend was a
+// wash of two readings and only a narrow one looked like ground. With the
+// heights deciding the handover that is no longer true, and the wide setting is
+// now the good one: it is what stops the triangles being findable.
+vec3 vivid_scatter_cells(vec2 uv, float cell, float softness, out vec2 first,
+		out vec2 second, out vec2 third) {
+	vec2 skewed = VIVID_SCATTER_SKEW * (uv / cell);
+	vec2 base = floor(skewed);
+	vec2 into = fract(skewed);
+	vec3 weights;
+	if (into.x + into.y < 1.0) {
+		first = base;
+		second = base + vec2(1.0, 0.0);
+		third = base + vec2(0.0, 1.0);
+		weights = vec3(1.0 - into.x - into.y, into.x, into.y);
+	} else {
+		first = base + vec2(1.0, 1.0);
+		second = base + vec2(1.0, 0.0);
+		third = base + vec2(0.0, 1.0);
+		weights = vec3(into.x + into.y - 1.0, 1.0 - into.y, 1.0 - into.x);
+	}
+	weights = pow(max(weights, vec3(0.0)), vec3(softness));
 	return weights / max(weights.x + weights.y + weights.z, 0.0001);
 }
 
-vec3 vivid_triplanar(sampler2D source, vec3 position, vec3 weights, float scale) {
-	return texture(source, position.zy * scale).rgb * weights.x
-		+ texture(source, position.xz * scale).rgb * weights.y
-		+ texture(source, position.xy * scale).rgb * weights.z;
+// One cell's read. The gradients are turned with the coordinate: they describe
+// how fast the sample moves across the texture, so leaving them behind would
+// choose the mip for a footprint the read no longer has, and an anisotropic
+// footprint would be stretched along the wrong axis.
+vec4 vivid_scatter_tap(sampler2DArray maps, vec2 uv, float layer,
+		vec2 gradient_x, vec2 gradient_y, float strength, mat2 turn, vec2 cell) {
+	return textureGrad(maps,
+		vec3(turn * uv + vivid_scatter_offset(cell) * strength, layer),
+		turn * gradient_x, turn * gradient_y);
+}
+
+// One projection's worth of scattered ground: colour and surface, read through
+// the same three cells and blended by the same three weights.
+//
+// The two maps are taken together rather than in separate passes because the
+// weights are no longer known before the reads. Height blending decides them
+// from the occlusion the colour map comes back with, and the surface has to be
+// combined the same way or the relief would belong to a different arrangement
+// of cells than the colour laid over it.
+//
+// The surface map's red and green are a direction rather than a measurement, so
+// they need turning back before they can be averaged. A normal map states which
+// way the relief leans in the texture's own frame; read through a turned
+// coordinate that frame is turned too, so the lean has to come back the other
+// way before it means anything about this ground. Left alone, every cell lights
+// as though the sun had moved for it, and the cells reappear as patches of
+// shading exactly where the turning was meant to hide them. The transpose is
+// the inverse for a rotation, and it is applied in the packed zero-to-one space
+// the map stores so the unpack downstream is left alone.
+void vivid_scatter_pair(sampler2DArray albedo_maps, sampler2DArray surface_maps,
+		vec2 uv, float layer, vec2 dx, vec2 dy, vec2 bx, vec2 by,
+		float strength, float spin, float cell, float softness, float depth,
+		out vec4 albedo, out vec4 surface) {
+	vec2 one, two, three;
+	vec3 weights = vivid_scatter_cells(uv, cell, softness, one, two, three);
+	mat2 turn_one = vivid_scatter_turn(one, spin);
+	mat2 turn_two = vivid_scatter_turn(two, spin);
+	mat2 turn_three = vivid_scatter_turn(three, spin);
+
+	vec4 colour_one = vivid_scatter_tap(albedo_maps, uv, layer, dx, dy,
+		strength, turn_one, one);
+	vec4 colour_two = vivid_scatter_tap(albedo_maps, uv, layer, dx, dy,
+		strength, turn_two, two);
+	vec4 colour_three = vivid_scatter_tap(albedo_maps, uv, layer, dx, dy,
+		strength, turn_three, three);
+	if (depth > 0.0) {
+		weights = vivid_height_weights(
+			vec3(colour_one.a, colour_two.a, colour_three.a), weights, depth);
+	}
+	albedo = colour_one * weights.x + colour_two * weights.y
+		+ colour_three * weights.z;
+
+	vec4 relief_one = vivid_scatter_tap(surface_maps, uv, layer, bx, by,
+		strength, turn_one, one);
+	vec4 relief_two = vivid_scatter_tap(surface_maps, uv, layer, bx, by,
+		strength, turn_two, two);
+	vec4 relief_three = vivid_scatter_tap(surface_maps, uv, layer, bx, by,
+		strength, turn_three, three);
+	relief_one.rg = (transpose(turn_one) * (relief_one.rg * 2.0 - 1.0))
+		* 0.5 + 0.5;
+	relief_two.rg = (transpose(turn_two) * (relief_two.rg * 2.0 - 1.0))
+		* 0.5 + 0.5;
+	relief_three.rg = (transpose(turn_three) * (relief_three.rg * 2.0 - 1.0))
+		* 0.5 + 0.5;
+	surface = relief_one * weights.x + relief_two * weights.y
+		+ relief_three * weights.z;
+}
+
+// Pixel footprint, as a share of the span each fade is measured against, at
+// which that fade begins. Both of the fades below run from here to one.
+//
+// A fifth is not a guess. A detail is resolved while a pixel is smaller than
+// it, half-resolved as they match, and a lottery once the pixel is bigger; the
+// interesting part of that is all inside the last octave, so the fade starts
+// while the pixel is still comfortably the smaller of the two and is finished
+// by the time they meet.
+const float VIVID_DETAIL_ONSET = 0.2;
+
+// Pixel footprint, in cells of whatever field is being faded, past which that
+// field is not resolved at all. Used by callers with their own procedural
+// detail; the ground's two texture fades are passed in, because they are
+// measured in texture repeats and only the caller knows how big one is.
+// Tightening this to half a cell, and then to an eighth, was measured on the
+// procedural relief it governs and moved nothing at any setting. What that
+// relief contributes turns out to be near the eye, where a pixel is a small
+// fraction of a bump and this fade is correctly leaving it alone.
+const float VIVID_DETAIL_KEEP = 0.25;
+const float VIVID_DETAIL_GONE = 1.0;
+
+// [param detail_gone] is a pixel footprint in texture repeats: where the map's
+// own relief stops being read at all. See the normal fade below.
+//
+// [param spin] is how far each scatter cell is allowed to turn its copy of the
+// texture, as a share of a full circle. One is the useful setting and zero
+// leaves the scatter sliding the texture without ever facing it differently.
+//
+// [param cell], [param softness] and [param depth] size the scatter lattice,
+// spread its blend across the cell, and set how much of that blend the heights
+// are allowed to decide. See vivid_scatter_cells and vivid_height_weights.
+//
+// [param bump_footprint] widens the filter used for the surface map alone,
+// leaving the colour sharp. Colour and relief are not equally fragile and there
+// is no reason to filter them together. A photographed albedo at one texel to
+// the pixel is a picture of grass; the same texel count of normal map is a
+// field of directions multiplied by a light, and every one of them that lands
+// differently from one frame to the next is a pixel that jumps. Measured on the
+// open lawn the normal map was seventy per cent of everything that moved when
+// the eye shifted two millimetres, and the colour under it was almost none of
+// it. So the colour is read at the pixel and the relief is read over several,
+// which is the whole trade: all of the detail, none of the sparkle.
+void vivid_ground_material(sampler2DArray albedo_maps, sampler2DArray surface_maps,
+		float layer, vec3 position, vec3 gradient_x, vec3 gradient_y,
+		vec3 normal, float sharpness, float bump, float scatter, float spin,
+		float cell, float softness, float depth,
+		float detail_gone, float bump_footprint,
+		out vec4 albedo, out float roughness, out vec3 leaning) {
+	// The coordinate is brought near the origin before it becomes a texture
+	// coordinate. World positions here run out to the planet's radius, and a
+	// float that large has steps of about a millimetre left in it — enough to
+	// quantise a texture repeating every couple of metres into visible stairs.
+	// Whole repeats are taken off, so the texel sampled is exactly the one that
+	// would have been sampled anyway.
+	vec3 at = position - floor(position * 0.015625 + 0.5) * 64.0;
+	vec3 facing = abs(normal);
+
+	// Where each of the two kept projections reads from, and how the two channels
+	// of the normal it finds there land in world space.
+	vec2 uv_a, uv_b, dx_a, dx_b, dy_a, dy_b;
+	// The whiteout blend, as three directions per projection: the tangent's X
+	// runs along `along`, its Y along `across`, and what is left of it stands up
+	// the projection's own axis — which is `up`, and is the geometric normal's
+	// component along that axis rather than a unit vector.
+	vec3 along_a, across_a, up_a, along_b, across_b, up_b;
+	vec2 share;
+	// Spelt out as three cases rather than indexed by axis. A dynamic index into
+	// a vector is not something every driver compiles well, and each case has to
+	// name its own swizzles anyway.
+	if (facing.x <= facing.y && facing.x <= facing.z) {
+		// Facing X least, so project down Y and Z.
+		uv_a = at.xz; dx_a = gradient_x.xz; dy_a = gradient_y.xz;
+		along_a = vec3(1.0, 0.0, 0.0); across_a = vec3(0.0, 0.0, 1.0);
+		up_a = vec3(0.0, normal.y, 0.0);
+		uv_b = at.xy; dx_b = gradient_x.xy; dy_b = gradient_y.xy;
+		along_b = vec3(1.0, 0.0, 0.0); across_b = vec3(0.0, 1.0, 0.0);
+		up_b = vec3(0.0, 0.0, normal.z);
+		share = vec2(facing.y, facing.z);
+	} else if (facing.y <= facing.z) {
+		uv_a = at.zy; dx_a = gradient_x.zy; dy_a = gradient_y.zy;
+		along_a = vec3(0.0, 0.0, 1.0); across_a = vec3(0.0, 1.0, 0.0);
+		up_a = vec3(normal.x, 0.0, 0.0);
+		uv_b = at.xy; dx_b = gradient_x.xy; dy_b = gradient_y.xy;
+		along_b = vec3(1.0, 0.0, 0.0); across_b = vec3(0.0, 1.0, 0.0);
+		up_b = vec3(0.0, 0.0, normal.z);
+		share = vec2(facing.x, facing.z);
+	} else {
+		uv_a = at.zy; dx_a = gradient_x.zy; dy_a = gradient_y.zy;
+		along_a = vec3(0.0, 0.0, 1.0); across_a = vec3(0.0, 1.0, 0.0);
+		up_a = vec3(normal.x, 0.0, 0.0);
+		uv_b = at.xz; dx_b = gradient_x.xz; dy_b = gradient_y.xz;
+		along_b = vec3(1.0, 0.0, 0.0); across_b = vec3(0.0, 0.0, 1.0);
+		up_b = vec3(0.0, normal.y, 0.0);
+		share = vec2(facing.x, facing.y);
+	}
+
+	// The floor added after the power is what keeps the diagonal from being
+	// nought over nought: there both projections rescale to zero, and there they
+	// are also worth exactly the same, so an even split is the right answer
+	// rather than a patch over a hole.
+	share = clamp((share - VIVID_BIPLANAR_FLOOR) / (1.0 - VIVID_BIPLANAR_FLOOR), 0.0, 1.0);
+	share = pow(share, vec2(sharpness)) + 0.00001;
+	float blend = share.y / (share.x + share.y);
+
+	// `textureGrad` is what makes reading here legal after a branch that not
+	// every pixel took the same way: with the gradients given explicitly, mip
+	// selection no longer depends on what the neighbours did.
+	//
+	// The branch below is on a uniform, so every pixel in the draw takes the
+	// same side of it and it costs nothing: turning the scatter off is a real
+	// way back to one read per projection if the extra ones ever hurt.
+	// One footprint per projection, in texture repeats, and the two fades that
+	// are driven off it. Taken before the reads because the scatter needs its
+	// one to choose how hard to weight them.
+	float span_a = max(length(dx_a), length(dy_a));
+	float span_b = max(length(dx_b), length(dy_b));
+	// The wider read, for the surface map only.
+	vec2 bx_a = dx_a * bump_footprint;
+	vec2 by_a = dy_a * bump_footprint;
+	vec2 bx_b = dx_b * bump_footprint;
+	vec2 by_b = dy_b * bump_footprint;
+
+	vec4 albedo_a, albedo_b, surface_a, surface_b;
+	if (scatter > 0.0) {
+		vivid_scatter_pair(albedo_maps, surface_maps, uv_a, layer, dx_a, dy_a,
+			bx_a, by_a, scatter, spin, cell, softness, depth,
+			albedo_a, surface_a);
+		vivid_scatter_pair(albedo_maps, surface_maps, uv_b, layer, dx_b, dy_b,
+			bx_b, by_b, scatter, spin, cell, softness, depth,
+			albedo_b, surface_b);
+	} else {
+		albedo_a = textureGrad(albedo_maps, vec3(uv_a, layer), dx_a, dy_a);
+		albedo_b = textureGrad(albedo_maps, vec3(uv_b, layer), dx_b, dy_b);
+		surface_a = textureGrad(surface_maps, vec3(uv_a, layer), bx_a, by_a);
+		surface_b = textureGrad(surface_maps, vec3(uv_b, layer), bx_b, by_b);
+	}
+
+	vec3 tangent_a = vivid_unpack_normal(surface_a.rg, bump);
+	vec3 tangent_b = vivid_unpack_normal(surface_b.rg, bump);
+	// How much of one texture repeat a single pixel covers, per projection.
+	//
+	// A normal map only says anything while a pixel is smaller than the grain
+	// in it. Past that the mip chain hands back the average of many texels, and
+	// the average of a normal map is not a flat surface: it is a short vector
+	// that the unpack and the normalise below stretch straight back out to full
+	// tilt, pointing wherever the averaging happened to leave it. So distant
+	// ground keeps full-strength relief made of essentially random directions,
+	// and a millimetre of camera movement re-rolls it — which is the sparkle.
+	//
+	// Colour needs none of this, which is why it is easy to miss: mipmapping an
+	// albedo really does converge on its mean. Only the normals have to be
+	// given up by hand, and this is where.
+	//
+	// The span this is measured against is the grain in the map, not the repeat
+	// the grain sits in — a texel or two of a photographed surface, which is
+	// millimetres. Written against the repeat instead, as it was, the fade only
+	// finished a metre and a half out into a pixel's footprint and every one of
+	// the tens of metres before that kept full-strength relief it could no
+	// longer resolve.
+	// Against the widened span, because that is the one the relief was actually
+	// read at.
+	float keep_a = 1.0 - smoothstep(detail_gone * VIVID_DETAIL_ONSET,
+		detail_gone, span_a * bump_footprint);
+	float keep_b = 1.0 - smoothstep(detail_gone * VIVID_DETAIL_ONSET,
+		detail_gone, span_b * bump_footprint);
+	tangent_a = mix(vec3(0.0, 0.0, 1.0), tangent_a, keep_a);
+	tangent_b = mix(vec3(0.0, 0.0, 1.0), tangent_b, keep_b);
+	// Written as a perturbation of the ground rather than a normal in its own
+	// right, which is what lets two of them be averaged. The `- 1.0` is the part
+	// worth reading twice: a flat patch of normal map stands straight up with a Z
+	// of one, and has to come back out of here having left the geometry exactly
+	// as it found it.
+	vec3 lean_a = along_a * tangent_a.x + across_a * tangent_a.y + up_a * (tangent_a.z - 1.0);
+	vec3 lean_b = along_b * tangent_b.x + across_b * tangent_b.y + up_b * (tangent_b.z - 1.0);
+
+	albedo = mix(albedo_a, albedo_b, blend);
+	roughness = mix(surface_a.b, surface_b.b, blend);
+	leaning = normal + mix(lean_a, lean_b, blend);
 }
 
 // Bends the normal along the slope of a noise field, which is what turns a flat
@@ -459,11 +926,58 @@ vec3 vivid_triplanar(sampler2D source, vec3 position, vec3 weights, float scale)
 // [param scale] is cycles per metre; [param strength] is roughly the height of
 // the bumps as a share of their spacing.
 //
-// Steepest tilt any bump is allowed to ask for, as a tangent — about twenty
-// degrees. See where it is applied for what happens without it.
+// Ceiling on the tilt any bump may ask for, as a tangent — about twenty
+// degrees. Approached and never reached; see where it is applied for what
+// happens without it, and for why it is approached rather than clamped to.
 const float VIVID_BUMP_TILT = 0.38;
 
-vec3 vivid_bump_normal(vec3 world_position, vec3 normal, float scale, float strength) {
+// The same field as `vivid_fbm3`, with the octaves a pixel cannot resolve left
+// out of it.
+//
+// An fBm read through a pixel wider than its finest octave is a lottery: the
+// answer is whichever part of that octave the one sample landed on, and next
+// frame, from a hand's breadth further along, it lands somewhere else. Fading
+// each octave out as the pixel grows past it is what a mipmap does for a
+// texture and the argument is the same — detail too fine to be resolved is not
+// detail, it is noise with a plausible spectrum.
+//
+// This is a gentler instrument than fading the whole field at once, and the
+// difference is the reason it exists. One fade over the sum takes the coarse
+// swells away at the same distance as the fine grain, so a ground that shimmers
+// at forty metres has to be made flat at forty metres to stop it. Per octave,
+// the grain goes when it stops being resolvable and the swells stay until they
+// do, which is much further out.
+//
+// Normalised by the octaves it kept rather than by all of them, so what
+// survives keeps its full contrast instead of the field sinking toward flat as
+// the eye backs away.
+//
+// [param footprint] is the width of one pixel in cells of the first octave.
+float vivid_fbm3_seen(vec3 p, int octaves, float footprint) {
+	float sum = 0.0;
+	float amplitude = 0.5;
+	float total = 0.0;
+	float span = footprint;
+	for (int i = 0; i < octaves; i++) {
+		float keep = 1.0 - smoothstep(VIVID_DETAIL_KEEP, VIVID_DETAIL_GONE, span);
+		if (keep > 0.0) {
+			sum += vivid_noise3(p) * amplitude * keep;
+			total += amplitude * keep;
+		}
+		// Same swizzle-and-scale between octaves as `vivid_fbm3`, and the span
+		// doubles with the frequency because that is what it is measuring.
+		p = p.yzx * 2.02 + vec3(17.3, 5.7, 31.1);
+		amplitude *= 0.5;
+		span *= 2.0;
+	}
+	return sum / max(total, 0.0001);
+}
+
+// [param footprint] is the width of one pixel in cells of the noise, which is
+// the pixel's width in metres times [param scale]. Zero asks for the whole
+// field and is what a surface close enough for that to be honest should pass.
+vec3 vivid_bump_normal(vec3 world_position, vec3 normal, float scale,
+		float strength, float footprint) {
 	if (strength <= 0.0) {
 		return normal;
 	}
@@ -483,13 +997,24 @@ vec3 vivid_bump_normal(vec3 world_position, vec3 normal, float scale, float stre
 	// chosen to avoid, reintroduced one function later by the way the field was
 	// sampled. Centred and shorter, the estimate is a real gradient of a C2 field
 	// and is continuous everywhere.
-	float step_size = 0.25 / max(scale, 0.0001);
+	//
+	// Sized against the finest octave still standing rather than the finest the
+	// field has. What is taken here is a difference and not a derivative —
+	// nothing divides it by the step — so once the fine octaves are filtered out
+	// a step cut to their size returns a smaller and smaller number, and the
+	// ground goes flat as the eye backs away for the same reason it used to
+	// sparkle. Growing the step with the pixel measures the lean of what is left
+	// over a baseline that suits it, and the swells keep the strength they had.
+	float resolved = max(1.0, footprint / VIVID_DETAIL_KEEP);
+	float step_size = 0.25 * resolved / max(scale, 0.0001);
 	vec3 along = tangent * step_size;
 	vec3 across = bitangent * step_size;
-	vec3 slope = tangent * (vivid_fbm3((world_position + along) * scale, 3)
-			- vivid_fbm3((world_position - along) * scale, 3))
-		+ bitangent * (vivid_fbm3((world_position + across) * scale, 3)
-			- vivid_fbm3((world_position - across) * scale, 3));
+	vec3 slope = tangent * (
+			vivid_fbm3_seen((world_position + along) * scale, 3, footprint)
+			- vivid_fbm3_seen((world_position - along) * scale, 3, footprint))
+		+ bitangent * (
+			vivid_fbm3_seen((world_position + across) * scale, 3, footprint)
+			- vivid_fbm3_seen((world_position - across) * scale, 3, footprint));
 	// The offset is the tangent of the tilt it asks for, and an unbounded one is
 	// what turned a sea bed into a plaid. A field this sharp has patches where the
 	// difference is several times its own average, and past a tilt of about one the
@@ -499,11 +1024,57 @@ vec3 vivid_bump_normal(vec3 world_position, vec3 normal, float scale, float stre
 	// between them. Clamping the length rather than lowering the gain keeps the
 	// texture everywhere the field is ordinary and only gives up the spikes, which
 	// were never bumps so much as folds.
-	float tilt = length(slope) * strength * 8.0;
-	if (tilt <= 0.0) {
+	//
+	// Approached rather than clamped to, and that is the last of the plaid. A
+	// hard ceiling hands every pixel past it the same lean, so wherever the
+	// field is steep — on open ground, most of it — the tilt stops carrying how
+	// steep and the ground goes flat in patches a noise cell wide; and the line
+	// where the ceiling begins is a break in the gradient, which lights as a
+	// crease drawn round each patch. Photographed ground hides it and bare
+	// ground does not, which is why it read as the texture being at fault.
+	//
+	// This curve sits on `tilt` where the field is ordinary, bends over to the
+	// same ceiling where it is not, and rises everywhere in between, so no two
+	// slopes are ever given the same lean and there is no line for a crease to
+	// fall on. Written against the gradient direct rather than as a length and a
+	// unit vector, which is the same arithmetic without the divide.
+	float reach = length(slope) * strength * 8.0 / VIVID_BUMP_TILT;
+	return normalize(normal
+		- slope * (strength * 8.0 * inversesqrt(1.0 + reach * reach)));
+}
+
+// The same gradient-of-a-noise-field trick as `vivid_bump_normal`, over
+// `vivid_hetero3` instead of an fBm, and with the field drifting.
+//
+// It is a separate function rather than a flag on that one because the two are
+// used for different things and should be able to be tuned apart: the ground's
+// bumps are a static field being read at a distance, and these are a moving
+// surface being read close up. The tangent frame, the step size and the tilt
+// clamp are all shared reasoning, and the comments on those live over there.
+//
+// [param drift] is metres of travel, handed to the field so its octaves can
+// move at their own rates; see `vivid_hetero3`.
+vec3 vivid_chop_normal(vec3 world_position, vec3 normal, float scale,
+		float strength, float relief, vec3 drift) {
+	if (strength <= 0.0) {
 		return normal;
 	}
-	return normalize(normal - slope * (min(tilt, VIVID_BUMP_TILT) / length(slope)));
+	vec3 tangent = normalize(cross(normal,
+		abs(normal.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+	vec3 bitangent = cross(normal, tangent);
+	float step_size = 0.25 / max(scale, 0.0001);
+	vec3 along = tangent * step_size;
+	vec3 across = bitangent * step_size;
+	vec3 scaled_drift = drift * scale;
+	vec3 slope = tangent * (
+			vivid_hetero3((world_position + along) * scale, 3, relief, scaled_drift)
+			- vivid_hetero3((world_position - along) * scale, 3, relief, scaled_drift))
+		+ bitangent * (
+			vivid_hetero3((world_position + across) * scale, 3, relief, scaled_drift)
+			- vivid_hetero3((world_position - across) * scale, 3, relief, scaled_drift));
+	float reach = length(slope) * strength * 8.0 / VIVID_BUMP_TILT;
+	return normalize(normal
+		- slope * (strength * 8.0 * inversesqrt(1.0 + reach * reach)));
 }
 
 // Godot's fragment normals are view space, and everything here works in world
