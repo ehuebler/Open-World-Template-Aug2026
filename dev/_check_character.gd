@@ -8,8 +8,8 @@ extends SceneTree
 ## look, so importing it here fails to compile before the first line runs.
 
 const BODIES := {
-	"astronaut": "res://blender_assets/player_character.glb",
-	"settler": "res://blender_assets/player_character_3.glb",
+	"astronaut": "res://assets/runtime/characters/player_character.glb",
+	"settler": "res://assets/runtime/characters/player_character_3.glb",
 }
 
 ## Clips whose pose is measured as well as listed, because they are the ones a

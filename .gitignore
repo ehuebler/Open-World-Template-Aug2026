@@ -14,12 +14,19 @@
 # Python bytecode from the Blender authoring scripts
 __pycache__/
 
+# Regenerable asset intermediates and preview renders
+/assets/work/*
+!/assets/work/.gdignore
+/assets/previews/*
+!/assets/previews/.gdignore
+
 # The GDExtension's dependency and its build leavings. The bindings are a clone
 # of godot-cpp and the API dump is written by `godot --dump-extension-api`, so
 # both are fetched rather than authored; see native/SConstruct. The built
 # `bin/*.dll` is *not* ignored, because a clone with no compiler still has to run.
 /native/godot-cpp/
 /native/extension_api.json
+/extension_api.json
 /native/.sconsign.dblite
 /native/src/*.obj
 /native/src/*.obj.import

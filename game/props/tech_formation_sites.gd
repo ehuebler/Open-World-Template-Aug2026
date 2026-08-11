@@ -8,9 +8,9 @@ extends Node3D
 ## every peer rather than replicated; the fixed seed and fixed planet make the
 ## answer identical. Site zero is constrained to pack ice at the north pole.
 
-const MODEL: PackedScene = preload("res://blender_assets/tech_fragment.glb")
+const MODEL: PackedScene = preload("res://assets/runtime/environment/tech_fragment.glb")
 const COLLISION_MODEL: PackedScene = preload(
-	"res://blender_assets/tech_fragment_collision.glb")
+	"res://assets/runtime/environment/tech_fragment_collision.glb")
 const SURFACE: ShaderMaterial = preload("res://game/props/tech_formation.tres")
 const MESH_HALF := 0.66
 

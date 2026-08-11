@@ -194,6 +194,12 @@ func _run() -> void:
 	if "--arrival" in only:
 		await _arrival_report()
 		return
+	if "--boot" in only:
+		await _boot_report()
+		return
+	if "--boot-shadow" in only:
+		await _boot_shadow_report()
+		return
 	if "--speed" in only:
 		await _speed_report()
 		return
@@ -2056,11 +2062,30 @@ func _volcano_checks() -> void:
 			"lava_sample", volcano.to_global(point))
 		if query.is_empty() or absf(float(query["depth"]) - 0.25) > 0.02:
 			push_error("player_test: lava pool %d has no matching query" % index)
-		if index > 0:
-			var direction: Vector3 = volcano.call("_direction_at", pool["offset"])
-			var floor_height := shape.elevation(direction, 0.0)
-			if floor_height > float(pool["height"]) - shape.volcano_pool_depth + 0.2:
-				push_error("player_test: lower lava pool %d was not carved" % index)
+		var direction: Vector3 = volcano.call("_direction_at", pool["offset"])
+		var floor_height := shape.elevation(direction, 0.0)
+		var expected_floor := float(pool["height"]) - shape.volcano_pool_depth
+		if absf(floor_height - expected_floor) > 0.2:
+			push_error("player_test: lava pool %d floor is %.2f, expected %.2f"
+				% [index, floor_height, expected_floor])
+		# A thin disc over a flat-bottomed basin can pass every centre-height
+		# check and still be visibly hollow from walking height. The terrain has
+		# to rise to the *irregular* mesh edge in every direction.
+		for spoke in 16:
+			var angle := TAU * float(spoke) / 16.0
+			var edge: float = volcano.call("_pool_radius",
+				float(pool["radius"]), angle, int(pool["seed"]))
+			var shore_offset: Vector2 = (pool["offset"] as Vector2) \
+				+ Vector2(cos(angle), sin(angle)) * edge
+			var shore_direction: Vector3 = volcano.call(
+				"_direction_at", shore_offset)
+			var shore_height := shape.elevation(shore_direction, 0.0)
+			var expected_shore := float(pool["height"]) \
+				- shape.volcano_pool_shore_overlap
+			if absf(shore_height - expected_shore) > 0.35:
+				push_error(
+					"player_test: lava pool %d has a %.2f m gap at spoke %d"
+					% [index, expected_shore - shore_height, spoke])
 
 	var crater: Dictionary = pools[0]
 	var surface_local: Vector3 = volcano.call(
@@ -2126,7 +2151,39 @@ func _volcano_checks() -> void:
 	review.current = true
 	await _wait(180)
 	await _shot("volcano_overview")
+	await _volcano_pool_shots(volcano, pools, review)
 	review.queue_free()
+
+
+## Gives every lava shoreline a close oblique view. The overview proves the
+## volcano reads from the air, but it cannot show whether the liquid and bank
+## actually meet. The spoke checks above are the walking-height regression; the
+## raised camera here keeps the bank itself from hiding that seam in the review
+## image.
+func _volcano_pool_shots(volcano: Node3D, pools: Array[Dictionary],
+		review: Camera3D) -> void:
+	for index in pools.size():
+		var pool: Dictionary = pools[index]
+		var centre: Vector2 = pool["offset"]
+		var angle := centre.angle() if centre.length_squared() > 0.01 else 0.0
+		var facing := Vector2(cos(angle), sin(angle))
+		var edge: float = volcano.call(
+			"_pool_radius", float(pool["radius"]), angle, int(pool["seed"]))
+		var camera_offset := centre + facing * (
+			edge + _planet.shape.volcano_pool_shore_width + 6.0)
+		var camera_direction: Vector3 = volcano.call(
+			"_direction_at", camera_offset)
+		var ground := _planet.shape.elevation(camera_direction, 0.0)
+		var surface := float(pool["height"])
+		review.global_position = _planet.to_global(
+			camera_direction * (
+				_planet.shape.radius + maxf(ground, surface) + 14.0))
+		var target: Vector3 = volcano.call(
+			"_point_at", centre, surface)
+		review.look_at(volcano.to_global(target),
+			_planet.up_at(review.global_position))
+		await _wait(20)
+		await _shot("volcano_pool_%d_edge" % index)
 
 
 ## The two viewer-centred aerial fields must populate the 40..100 m layer only
@@ -3962,6 +4019,375 @@ func _arrival_report() -> void:
 		var hold := 12 * (step + 1)
 		await _wait(hold)
 		elapsed += float(hold) / 60.0
+
+
+## What the first minute of a real game does that the rest of it does not.
+##
+## `--arrival` pins the eye on a spot this harness chose and reports a ground
+## that goes still within half a second; `--speed` explains the shimmer that
+## belongs to moving. Neither is the complaint. The screen recording is of a body
+## hovering three metres up and not moving at all — the plate's direction,
+## latitude and altitude are identical from one frame to the next — and a third
+## of its pixels change by more than the eye forgives *every frame*, all of it on
+## the edges of the dark ground blotches. So something in a freshly arrived world
+## moves on its own, and wherever `--arrival` was standing is not somewhere it
+## does.
+##
+## Read off that recording rather than searched for, the same way `--spot` was:
+## the plate prints the planet-local direction under the body, and its clock is
+## `phase * 24 + 12` hours, so 14:05 is phase 0.0868.
+##
+## Two tables. The first is the decay — pinned, sampled out past a minute, with
+## the quadtree's own counters and the number of plants actually being drawn on
+## every row, so whatever is still arriving is named beside the flicker instead
+## of guessed at. The second is the attribution: one suspect removed per row,
+## each measured on a world that has been made cold again, because a world that
+## has finished arriving cannot demonstrate an arrival.
+const BOOT_DIRECTION := Vector3(0.1336, 0.0272, 0.9907)
+const BOOT_PHASE := 0.0868
+## Metres of air under the body in the recording: ALT 67 m over GROUND 64 m.
+const BOOT_HOVER := 3.0
+## Loud pixels a pinned eye at the spawn angle is allowed. The fault this pass
+## was written for produced seventeen thousand of them and the fix produces none,
+## so anywhere in between is a gate; this is set high enough that a stray sparkle
+## or a cloud edge cannot fail the run.
+const BOOT_QUIET := 200
+
+func _boot_report() -> void:
+	var world := _planet.get_parent()
+	var cycle := world.find_child("CelestialCycle", true, false) as CelestialCycle
+	var sun := world.find_child("Sun", true, false) as DirectionalLight3D
+	if _player.hud != null:
+		_player.hud.visible = false
+	# The body is not in the recording's frame and it breathes, so leaving it in
+	# would only raise the noise floor. Nothing else is quietened: the sun turns,
+	# the wind blows and the fields stream, which is the state under test.
+	if _player.character != null:
+		_player.character.visible = false
+	if cycle != null:
+		cycle.set_phase(BOOT_PHASE)
+
+	var here := BOOT_DIRECTION.normalized()
+	var fields := _streamed_fields(world)
+	# Coarse first, so the arrival below has the same depths left to build that a
+	# descent from the title screen does.
+	_look_down_from(here, 9000.0)
+	await _wait(120)
+	print("player_test: boot  from orbit: %s" % _statistics_line(0.0))
+	_hover_over(here)
+	await _wait(2)
+	_pin_eye()
+	_look(-0.42)
+	await _drawn(2)
+
+	var up := (_planet.global_transform.basis * here).normalized()
+	print("player_test: boot  sun %+.1f deg, %d cover fields, %d m from the ship" % [
+		rad_to_deg(asin(clampf(up.dot(sun.global_basis.z), -1.0, 1.0)))
+			if sun != null else 0.0,
+		fields.size(), int(_ranged())])
+	await _shot("boot_view")
+
+	print("player_test: boot  (pinned eye; every row is the world moving on its own)")
+	var elapsed := 0.0
+	for step in 12:
+		var reading := await _boot_sample(12)
+		print("player_test: boot  %s plants=%7d  mean=%5.2f worst=%3d loud=%5d" % [
+			_statistics_line(elapsed), _drawn_instances(world),
+			reading.x, int(reading.y), int(reading.z)])
+		# Geometric, so the first seconds are sampled closely enough to catch a
+		# fast decay and the tail still reaches past a minute.
+		var hold := 10 * (step + 1)
+		await _drawn(hold)
+		elapsed += float(hold + 13) / 60.0
+
+	# The verdict, so this is an assertion and not only a table. A pinned eye at
+	# the angle every game opens on has to draw a still picture; the fault this
+	# was written for put seventeen thousand pixels over the threshold, and the
+	# gate is two hundred, so nothing but a real regression can trip it.
+	var settled := await _boot_sample(20)
+	print("player_test: boot  %s  spawn-angle flicker mean=%.2f loud=%d" % [
+		"PASS" if settled.z <= BOOT_QUIET else "FAIL",
+		settled.x, int(settled.z)])
+
+	await _boot_suspects(world, cycle, sun, fields)
+	await _boot_sun_sweep(cycle, sun, here)
+
+
+## One suspect removed per row, each on a cold world.
+##
+## Every row replants the fields and measures the seconds straight afterwards,
+## which is the only window the fault exists in. A row is only worth reading
+## beside its plant count: a field that came back empty is quiet for a reason
+## that has nothing to do with the suspect.
+func _boot_suspects(world: Node, cycle: CelestialCycle,
+		sun: DirectionalLight3D, fields: Array[Node3D]) -> void:
+	var ground := Planet.SURFACE_MATERIAL
+	var plants := _plant_materials(world)
+	var sway := {}
+	var speed := {}
+	for plant in plants:
+		sway[plant] = plant.get_shader_parameter(&"wind_sway")
+		speed[plant] = plant.get_shader_parameter(&"vat_playback_speed")
+
+	var rows: Array[Dictionary] = [
+		{"name": "as shipped, cold"},
+		{"name": "flora frozen", "freeze": true},
+		{"name": "flora hidden", "cover": false},
+		{"name": "sun still", "turning": false},
+		{"name": "no sun shadow", "shadow": false},
+		{"name": "no ground pattern", "ground": [[&"pattern_amount", 0.0]]},
+		{"name": "no procedural grain", "ground": [[&"detail_amount", 0.0]]},
+		{"name": "no macro noise", "ground": [[&"macro_amount", 0.0]]},
+		{"name": "no relief", "ground": [
+			[&"bump_strength", 0.0], [&"texture_bump", 0.0]]},
+		{"name": "as shipped, cold, last"},
+	]
+
+	print("player_test: boot  (cold world each row; the suspect is what is missing)")
+	for row: Dictionary in rows:
+		if cycle != null:
+			cycle.period_seconds = 960.0 if row.get("turning", true) else 0.0
+			cycle.set_phase(BOOT_PHASE)
+		if sun != null:
+			sun.shadow_enabled = row.get("shadow", true)
+		for field in fields:
+			field.visible = row.get("cover", true)
+		var frozen: bool = row.get("freeze", false)
+		for plant in plants:
+			plant.set_shader_parameter(&"wind_sway",
+				0.0 if frozen else sway[plant])
+			plant.set_shader_parameter(&"vat_playback_speed",
+				0.0 if frozen else speed[plant])
+		var restore := {}
+		for pair: Array in row.get("ground", []):
+			restore[pair[0]] = ground.get_shader_parameter(pair[0])
+			ground.set_shader_parameter(pair[0], pair[1])
+
+		_recold(fields)
+		# Long enough for the first tiles to land and short enough to still be
+		# inside the fault. The decay table above is what says where that is.
+		await _drawn(30)
+		var reading := await _boot_sample(20)
+		print("player_test: boot  %-24s plants=%7d  mean=%5.2f worst=%3d loud=%5d" % [
+			row["name"], _drawn_instances(world),
+			reading.x, int(reading.y), int(reading.z)])
+
+		for key: StringName in restore:
+			ground.set_shader_parameter(key, restore[key])
+	for plant in plants:
+		plant.set_shader_parameter(&"wind_sway", sway[plant])
+		plant.set_shader_parameter(&"vat_playback_speed", speed[plant])
+
+
+## Where in the sun's turn the shadow map is loud, and where it is quiet.
+##
+## The suspect table says the whole of this flicker is the shadow map answering
+## the sun's own motion, which happens all day and would therefore be a game that
+## flickers all day. It is not: it goes away after about a minute of play and does
+## not come back. A minute is 22 degrees of a sixteen-minute day, so the only
+## thing that can have changed in it is the angle — and the game always begins at
+## the same one, because phase zero is noon over the landing site.
+##
+## So this holds the eye where it is, walks the sun through its turn, and reports
+## the same measurement at each angle. A row that is loud only near the top of
+## the sky explains both the complaint and the fact that nobody sees it again
+## until tomorrow.
+func _boot_sun_sweep(cycle: CelestialCycle, sun: DirectionalLight3D,
+		here: Vector3) -> void:
+	if cycle == null or sun == null:
+		return
+	var up := (_planet.global_transform.basis * here).normalized()
+	print("player_test: boot  (sun angle sweep; the eye never moves)")
+	# Half-minute steps out to a quarter of a turn, so the row a minute in — the
+	# one the complaint says is already better — is in the table twice over.
+	for step in 11:
+		var phase := BOOT_PHASE + float(step) * 0.03125
+		cycle.period_seconds = 960.0
+		cycle.set_phase(phase)
+		await _drawn(20)
+		var reading := await _boot_sample(16)
+		print("player_test: boot  %+5.1fs sun %+5.1f deg  mean=%5.2f worst=%3d loud=%5d" % [
+			float(step) * 30.0,
+			rad_to_deg(asin(clampf(up.dot(sun.global_basis.z), -1.0, 1.0))),
+			reading.x, int(reading.y), int(reading.z)])
+	cycle.set_phase(BOOT_PHASE)
+
+	# And what the loud angle actually looks like with and without the map, so a
+	# number that says "the shadow moved" can be read beside a picture that says
+	# whether the dark it moved was a shadow at all.
+	await _drawn(20)
+	await _shot("boot_shadowed")
+	sun.shadow_enabled = false
+	await _drawn(20)
+	await _shot("boot_unshadowed")
+	sun.shadow_enabled = true
+
+
+## Which shadow setting owns the noon speckle.
+##
+## Everything about the map's *contents* was ruled out before this pass was
+## written. Twenty times the depth bias moved it by nothing, and switching every
+## caster on the planet off — all six hundred and seventy terrain surfaces and
+## three hundred and forty-nine other things — left the picture pixel-for-pixel as
+## speckled as it was. Yet clearing [member Light3D.shadow_enabled] leaves it
+## perfectly clean. So the ground is being darkened by the act of looking the
+## shadow up, with an empty map, and what is left to blame is how that lookup is
+## configured.
+##
+## Noon is the worst case for that shape and this is why: the eye is near the
+## ground looking out at the horizon, so the frustum's footprint is a long thin
+## wedge running away to the shadow distance, and a vertical sun flattens that
+## wedge into a slab with almost no depth along the light. Every cascade is fitted
+## to it, so the ortho range collapses and the comparison is left reading its own
+## quantisation. Tilt the sun and the slab gains depth, which is the fade.
+func _boot_shadow_report() -> void:
+	var world := _planet.get_parent()
+	var cycle := world.find_child("CelestialCycle", true, false) as CelestialCycle
+	var sun := world.find_child("Sun", true, false) as DirectionalLight3D
+	if _player.hud != null:
+		_player.hud.visible = false
+	if _player.character != null:
+		_player.character.visible = false
+	if cycle == null or sun == null:
+		return
+
+	var here := BOOT_DIRECTION.normalized()
+	cycle.set_phase(BOOT_PHASE)
+	_look_down_from(here, 9000.0)
+	await _wait(120)
+	_hover_over(here)
+	await _wait(2)
+	_pin_eye()
+	_look(-0.42)
+	await _drawn(60)
+
+	var shipped := {
+		&"directional_shadow_mode": sun.directional_shadow_mode,
+		&"directional_shadow_blend_splits": sun.directional_shadow_blend_splits,
+		&"directional_shadow_max_distance": sun.directional_shadow_max_distance,
+		&"directional_shadow_split_1": sun.directional_shadow_split_1,
+		&"directional_shadow_split_2": sun.directional_shadow_split_2,
+		&"directional_shadow_split_3": sun.directional_shadow_split_3,
+		&"shadow_normal_bias": sun.shadow_normal_bias,
+		&"shadow_blur": sun.shadow_blur,
+		&"shadow_opacity": sun.shadow_opacity,
+	}
+	print("player_test: shadow  shipped mode=%d blend=%s max=%.0f splits %.3f/%.3f/%.3f normal=%.1f blur=%.1f" % [
+		sun.directional_shadow_mode, sun.directional_shadow_blend_splits,
+		sun.directional_shadow_max_distance, sun.directional_shadow_split_1,
+		sun.directional_shadow_split_2, sun.directional_shadow_split_3,
+		sun.shadow_normal_bias, sun.shadow_blur])
+
+	var rows: Array[Dictionary] = [
+		{"name": "as shipped"},
+		{"name": "one cascade", "directional_shadow_mode": 0},
+		{"name": "two cascades", "directional_shadow_mode": 1},
+		{"name": "no split blending",
+			"directional_shadow_blend_splits": false},
+		{"name": "engine default splits", "directional_shadow_split_1": 0.1,
+			"directional_shadow_split_2": 0.2,
+			"directional_shadow_split_3": 0.5},
+		{"name": "shadow distance 60", "directional_shadow_max_distance": 60.0},
+		{"name": "shadow distance 400",
+			"directional_shadow_max_distance": 400.0},
+		{"name": "no normal bias", "shadow_normal_bias": 0.0},
+		{"name": "normal bias 1", "shadow_normal_bias": 1.0},
+		{"name": "normal bias 12", "shadow_normal_bias": 12.0},
+		# The dial, swept rather than demonstrated once, because the answer is
+		# not a radius: any value above zero engages the filter and the first
+		# one that does is already at the noise floor. That is what says this is
+		# a tap count and what makes the shipped 1.0 margin rather than blur.
+		{"name": "no filter", "shadow_blur": 0.0},
+		{"name": "filter 0.1", "shadow_blur": 0.1},
+		{"name": "filter 0.25", "shadow_blur": 0.25},
+		{"name": "filter 0.5", "shadow_blur": 0.5},
+		{"name": "as shipped, last"},
+	]
+
+	for row: Dictionary in rows:
+		for key: StringName in shipped:
+			sun.set(key, row.get(key, shipped[key]))
+		cycle.set_phase(BOOT_PHASE)
+		await _drawn(24)
+		var reading := await _boot_sample(16)
+		print("player_test: shadow  %-24s mean=%5.2f worst=%3d loud=%5d" % [
+			row["name"], reading.x, int(reading.y), int(reading.z)])
+		await _shot("shadow_" + String(row["name"]).replace(" ", "_"))
+	for key: StringName in shipped:
+		sun.set(key, shipped[key])
+
+
+## Throws away every plant on the planet so the fields have to grow them again.
+##
+## `_replant` alone is not enough while the eye is pinned: a field only surveys
+## once the viewer has crossed a good part of a tile, and the viewer is not going
+## to move, so a replanted field would sit empty for ever and the row would read
+## as beautifully quiet. Clearing the survey's memory of where it last ran is
+## what lets it notice that it has nothing.
+func _recold(fields: Array[Node3D]) -> void:
+	for field in fields:
+		if not field.has_method("_replant"):
+			continue
+		field.call("_replant")
+		field.set("_surveyed_at", Vector3.INF)
+		field.set("_since_survey", INF)
+
+
+## Plants actually being drawn, summed over every streamed stand on the planet.
+##
+## `GroundCover.standing()` unpacks each one into a Transform3D, which at these
+## counts is seconds of work per call; the visible instance count is the same
+## question answered off the buffer header.
+func _drawn_instances(from: Node) -> int:
+	var total := 0
+	for node in _multimeshes(from):
+		if node.multimesh == null or not node.is_visible_in_tree():
+			continue
+		var showing := node.multimesh.visible_instance_count
+		total += node.multimesh.instance_count if showing < 0 else showing
+	return total
+
+
+## Every field that grows its own contents in the background, of either kind.
+## [method _cover_fields] is the GroundCover-only subset.
+func _streamed_fields(world: Node) -> Array[Node3D]:
+	var found: Array[Node3D] = []
+	for node in world.find_children("*", "Node3D", true, false):
+		if node is GroundCover or node is FlowerTreeField:
+			found.append(node as Node3D)
+	return found
+
+
+## The recording's stance: hovering, not standing, with the ground a few metres
+## below and the body facing along its own north.
+func _hover_over(direction: Vector3) -> void:
+	var up := _planet.global_transform.basis * direction
+	var north := Vector3.UP - direction * Vector3.UP.dot(direction)
+	if north.length_squared() < 0.001:
+		north = Vector3.RIGHT - direction * Vector3.RIGHT.dot(direction)
+	_player._apply_stance(FLY)
+	_player.global_transform = Transform3D(
+		Basis.looking_at(_planet.global_transform.basis * north.normalized(), up),
+		_planet.standing_position(direction, BOOT_HOVER))
+	_player.velocity = Vector3.ZERO
+	_player.reset_physics_interpolation()
+
+
+## Mean, worst and loud-pixel count over [param frames] consecutive drawn frames,
+## measured on the ground half of the picture.
+func _boot_sample(frames: int) -> Vector3:
+	var previous := await _frame_sample()
+	var mean := 0.0
+	var worst := 0.0
+	var loud := 0.0
+	for _index in frames:
+		var frame := await _frame_sample()
+		var moved := _ground_difference(previous, frame)
+		mean += moved.x
+		worst = maxf(worst, moved.y)
+		loud = maxf(loud, moved.z)
+		previous = frame
+	return Vector3(mean / float(frames), worst, loud)
 
 
 ## How badly the ground aliases as a function of how fast the eye crosses it.

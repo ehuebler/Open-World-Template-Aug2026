@@ -24,7 +24,7 @@ enum Tab {
 }
 
 const THEME: Theme = preload("res://ui/themes/main_theme.tres")
-const MENU_BACKGROUND: Texture2D = preload("res://generated/ui_background2.png")
+const MENU_BACKGROUND: Texture2D = preload("res://assets/runtime/ui/menu_background.png")
 
 const RED := Color("ef151f")
 const RED_BRIGHT := Color("ff3445")

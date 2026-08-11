@@ -1,9 +1,9 @@
 [gd_resource type="Resource" script_class="PlantSpecies" load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
-[ext_resource type="PackedScene" path="res://blender_assets/shrub_silver.glb" id="2_model"]
+[ext_resource type="PackedScene" path="res://assets/runtime/biomes/models/shrub_silver.glb" id="2_model"]
 [ext_resource type="Material" path="res://game/props/biomes/leaf.tres" id="3_material"]
-[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/shrub_silver_paint.png" id="4_paint"]
+[ext_resource type="Texture2D" path="res://assets/runtime/biomes/paint/shrub_silver_paint.png" id="4_paint"]
 
 [resource]
 script = ExtResource("1_species")

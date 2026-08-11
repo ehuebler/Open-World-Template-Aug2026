@@ -359,6 +359,10 @@ void PlanetField::configure(const Dictionary &p_settings) {
 	}
 	volcano_pool_depth = setting(
 			p_settings, "volcano_pool_depth", volcano_pool_depth);
+	volcano_pool_shore_width = setting(
+			p_settings, "volcano_pool_shore_width", volcano_pool_shore_width);
+	volcano_pool_shore_overlap = setting(
+			p_settings, "volcano_pool_shore_overlap", volcano_pool_shore_overlap);
 	volcano_crater_lava_height = setting(
 			p_settings, "volcano_crater_lava_height", volcano_crater_lava_height);
 
@@ -497,26 +501,65 @@ double PlanetField::volcano_channel(double p_distance, double p_angle) const {
 	return volcano_channel_depth * channel * from_crater * toward_foot * cone;
 }
 
+double PlanetField::volcano_pool_radius(
+		double p_base, double p_angle, int p_seed) const {
+	double phase = (double)p_seed * 0.731;
+	return p_base * (0.91 +
+			std::sin(p_angle * 3.0 + phase) * 0.045 +
+			std::sin(p_angle * 7.0 - phase * 1.7) * 0.028 +
+			std::sin(p_angle * 11.0 + phase * 0.43) * 0.018);
+}
+
+double PlanetField::volcano_one_pool_basin(const Vector2 &p_coordinates,
+		const Vector2 &p_centre, double p_radius, double p_surface,
+		int p_seed, double p_height) const {
+	Vector2 relative = p_coordinates - p_centre;
+	double away = relative.length();
+	// Almost every volcano sample is nowhere near any one pool. Reject it
+	// before evaluating the three sines that make that pool's irregular edge.
+	double widest_edge = p_radius * 1.001;
+	double widest_shore = clampd(
+			volcano_pool_shore_width, 0.1, widest_edge * 0.45);
+	if (away >= widest_edge + widest_shore) {
+		return p_height;
+	}
+	double angle = std::atan2(relative.y, relative.x);
+	double edge = volcano_pool_radius(p_radius, angle, p_seed);
+	double shore = clampd(volcano_pool_shore_width, 0.1, edge * 0.45);
+	double floor_edge = edge - shore;
+	double outer_edge = edge + shore;
+	if (away >= outer_edge) {
+		return p_height;
+	}
+	double floor = p_surface - volcano_pool_depth;
+	double lip = p_surface - volcano_pool_shore_overlap;
+	if (away <= floor_edge) {
+		return floor;
+	}
+	if (away < edge) {
+		return lerpd(floor, lip, smoothstep(floor_edge, edge, away));
+	}
+	return lerpd(lip, p_height, smoothstep(edge, outer_edge, away));
+}
+
 double PlanetField::volcano_pool_basin(const Vector3 &p_coordinates,
 		double p_height) const {
+	Vector2 here(p_coordinates.x, p_coordinates.y);
+	// The crater lake is a pool too. Without this shelf its thin visible disc
+	// floats ten metres above the crater floor just like the three lower pools.
+	double height = volcano_one_pool_basin(
+			here, Vector2(), volcano_crater_radius * 0.62,
+			volcano_crater_lava_height, 3, p_height);
 	Vector3 pools[3] = { volcano_pool_one, volcano_pool_two, volcano_pool_three };
 	double angles[3] = {
 		volcano_flow_angles.x, volcano_flow_angles.y, volcano_flow_angles.z,
 	};
-	double height = p_height;
 	for (int index = 0; index < 3; index++) {
 		Vector2 centre(std::cos(angles[index]) * pools[index].x,
 				std::sin(angles[index]) * pools[index].x);
-		Vector2 here(p_coordinates.x, p_coordinates.y);
-		double away = here.distance_to(centre);
-		double radius_now = std::max((double)pools[index].y, 1.0);
-		double basin = 1.0 - smoothstep(
-				radius_now, radius_now * 1.28, away);
-		if (basin <= 0.0) {
-			continue;
-		}
-		double floor = pools[index].z - volcano_pool_depth;
-		height = lerpd(height, std::min(height, floor), basin);
+		height = volcano_one_pool_basin(
+				here, centre, pools[index].y, pools[index].z,
+				11 + index * 7, height);
 	}
 	return height;
 }

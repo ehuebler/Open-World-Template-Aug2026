@@ -118,6 +118,10 @@ private:
 	double volcano_height(const Vector3 &p_direction, double p_height,
 			double p_spacing) const;
 	double volcano_channel(double p_distance, double p_angle) const;
+	double volcano_pool_radius(double p_base, double p_angle, int p_seed) const;
+	double volcano_one_pool_basin(const Vector2 &p_coordinates,
+			const Vector2 &p_centre, double p_radius, double p_surface,
+			int p_seed, double p_height) const;
 	double volcano_pool_basin(const Vector3 &p_coordinates,
 			double p_height) const;
 	Color strata(const Vector3 &p_point, double p_height, double p_slope) const;
@@ -201,6 +205,8 @@ private:
 	Vector3 volcano_pool_two = Vector3(870.0, 105.0, 76.0);
 	Vector3 volcano_pool_three = Vector3(810.0, 120.0, 100.0);
 	double volcano_pool_depth = 10.0;
+	double volcano_pool_shore_width = 18.0;
+	double volcano_pool_shore_overlap = 0.25;
 	double volcano_crater_lava_height = 420.0;
 
 	// Solved or derived at configure time, exactly as `PlanetShape.prepare` does.

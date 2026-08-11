@@ -6,7 +6,7 @@ extends Node3D
 ## transforms around a reusable faceted segment rather than unique giant meshes.
 
 const MODEL: PackedScene = preload(
-	"res://blender_assets/ring_crystal_segment.glb")
+	"res://assets/runtime/environment/ring_crystal_segment.glb")
 const MATERIAL: ShaderMaterial = preload(
 	"res://game/props/ring_crystal.tres")
 

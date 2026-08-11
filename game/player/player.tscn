@@ -1,7 +1,7 @@
 [gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://game/player/player.gd" id="1_player"]
-[ext_resource type="PackedScene" path="res://blender_assets/player_character.glb" id="2_character"]
+[ext_resource type="PackedScene" path="res://assets/runtime/characters/player_character.glb" id="2_character"]
 [ext_resource type="Script" path="res://game/player/reticle.gd" id="3_reticle"]
 [ext_resource type="Theme" path="res://ui/themes/main_theme.tres" id="4_theme"]
 

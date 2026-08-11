@@ -31,15 +31,15 @@ const STARTER_INVENTORY_REVISION := 5
 const SKINS := {
 	"luke": {
 		"title": "Luke",
-		"texture": "res://generated/textures/luke.png",
+		"texture": "res://assets/runtime/characters/luke.png",
 	},
 	"clean_robotic": {
 		"title": "Clean Robotic",
-		"texture": "res://blender_assets/character_3_clean_robotic.png",
+		"texture": "res://assets/runtime/characters/character_3_clean_robotic.png",
 	},
 	"integrated_robotic": {
 		"title": "Integrated Robotic",
-		"texture": "res://blender_assets/character_3_integrated_robotic.png",
+		"texture": "res://assets/runtime/characters/character_3_integrated_robotic.png",
 	},
 }
 
@@ -47,7 +47,7 @@ const BODIES := {
 	"astronaut": {
 		"title": "Astronaut",
 		"playable": false,
-		"scene": "res://blender_assets/player_character.glb",
+		"scene": "res://assets/runtime/characters/player_character.glb",
 		"height": 1.45,
 		"eye_height": 1.29,
 		"eye_offset": Vector3(0.076, 0.102, -0.192),
@@ -59,7 +59,7 @@ const BODIES := {
 	"settler": {
 		"title": "Settler",
 		"playable": true,
-		"scene": "res://blender_assets/player_character_3.glb",
+		"scene": "res://assets/runtime/characters/player_character_3.glb",
 		"height": 1.6,
 		"eye_height": 1.45,
 		"eye_offset": Vector3(0.048, 0.104, -0.084),

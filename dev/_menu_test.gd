@@ -104,7 +104,7 @@ func _check_open_and_close_policy() -> void:
 		_expect(background != null
 			and background.texture == GameMenu.MENU_BACKGROUND
 			and background.stretch_mode == TextureRect.STRETCH_SCALE,
-			"ui_background2 fits the viewport without cover-cropping")
+			"menu background fits the viewport without cover-cropping")
 		_expect(content != null and actions != null
 			and actions.get_global_rect().position.y
 				>= content.get_global_rect().end.y,

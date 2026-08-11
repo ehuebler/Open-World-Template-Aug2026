@@ -23,7 +23,7 @@ extends Landmark
 ## walking height the only geometry there is the four legs, which is what makes
 ## the ship something to stand under rather than a cylinder to bump into.
 
-const MODEL: PackedScene = preload("res://blender_assets/colony_ship.glb")
+const MODEL: PackedScene = preload("res://assets/runtime/environment/colony_ship.glb")
 const SURFACE: ShaderMaterial = preload("res://game/props/colony_ship.tres")
 
 

@@ -1,7 +1,7 @@
 class_name Weapons
 extends RefCounted
 
-## Puts weapons built by blender_assets/source/build_weapons.py into the hands of
+## Puts weapons built by assets/source/blender/build_weapons.py into the hands of
 ## a character instanced from player_character.glb.
 ##
 ## Each weapon .glb has its origin at the centre of its grip and points along its
@@ -19,8 +19,8 @@ extends RefCounted
 ## picking up the colours baked into their .glb.
 
 const WEAPONS := {
-	"sword": "res://blender_assets/sword.glb",
-	"laser_rifle": "res://blender_assets/laser_rifle.glb",
+	"sword": "res://assets/runtime/items/sword.glb",
+	"laser_rifle": "res://assets/runtime/items/laser_rifle.glb",
 }
 
 const HANDS := {
@@ -32,7 +32,7 @@ const NODE_PREFIX := "Weapon_"
 
 ## How far along the hand bone the grip sits, as a fraction of the bone's length.
 ## This is the centroid of the vertices weighted to that bone, measured off
-## player_character.glb by blender_assets/source/character_ref.py. It must match
+## player_character.glb by assets/source/blender/character_ref.py. It must match
 ## GRIP_ALONG_HAND there, or a weapon sits in a different place in Godot than it
 ## does in the Blender previews.
 const GRIP_ALONG_HAND := 0.66

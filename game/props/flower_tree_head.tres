@@ -1,7 +1,7 @@
 [gd_resource type="ShaderMaterial" load_steps=3 format=3]
 
 [ext_resource type="Shader" path="res://shaders/vivid/vivid_surface.gdshader" id="1_surface"]
-[ext_resource type="Texture2D" path="res://blender_assets/biome_paint/flower_tree_paint.png" id="2_paint"]
+[ext_resource type="Texture2D" path="res://assets/runtime/biomes/paint/flower_tree_paint.png" id="2_paint"]
 
 ; The flower uses the same daylight surface as the trunk, plus local-night
 ; emission. vivid_surface derives night from this point's radial and the moving

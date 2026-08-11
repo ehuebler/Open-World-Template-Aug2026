@@ -1,10 +1,10 @@
 [gd_resource type="Resource" script_class="PlantSpecies" load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://game/props/plant_species.gd" id="1_species"]
-[ext_resource type="PackedScene" path="res://blender_assets/grass_vat.glb" id="2_model"]
+[ext_resource type="PackedScene" path="res://assets/runtime/vat/grass_vat.glb" id="2_model"]
 [ext_resource type="Material" path="res://game/props/grass.tres" id="3_surface"]
 [ext_resource type="Resource" path="res://game/props/grass_vat.tres" id="4_vat"]
-[ext_resource type="PackedScene" path="res://blender_assets/grass_far_vat.glb" id="5_far"]
+[ext_resource type="PackedScene" path="res://assets/runtime/vat/grass_far_vat.glb" id="5_far"]
 [ext_resource type="Resource" path="res://game/props/grass_far_vat.tres" id="6_far_vat"]
 
 ; Turf, as the thing GroundCover scatters. Read this before turning the density

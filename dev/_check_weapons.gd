@@ -7,9 +7,9 @@ extends SceneTree
 # rigidly attached to the hand while an animation plays.
 
 const WeaponsScript := preload("res://game/player/weapons.gd")
-const CHARACTER := "res://blender_assets/player_character.glb"
+const CHARACTER := "res://assets/runtime/characters/player_character.glb"
 
-# The fist centroids blender_assets/source/character_ref.py measures, converted
+# The fist centroids assets/source/blender/character_ref.py measures, converted
 # from Blender's Z-up to Godot's Y-up: (x, y, z) -> (x, z, -y).
 const EXPECTED_GRIP := {
 	"right": Vector3(0.509, 0.633, -0.010),

@@ -104,7 +104,7 @@ const EDITOR_TABS: Array[String] = ["Hero Design", "Inventory"]
 ## catalogue rail is rebuilt from finite owned equipment/hotbar/backpack contents.
 const EDITOR_WEAPON_SLOTS := CharacterDB.HOTBAR_SLOTS
 const TITLE_ART := preload("res://ui/menu/my_strange_planet_title.png")
-const SETTINGS_BACKGROUND := preload("res://generated/ui_background2.png")
+const SETTINGS_BACKGROUND := preload("res://assets/runtime/ui/menu_background.png")
 
 ## Height of the band at the foot of the window the menu row runs along, and how
 ## far its baseline sits off the bottom edge.

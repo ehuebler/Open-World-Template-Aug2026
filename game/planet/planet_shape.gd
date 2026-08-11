@@ -391,6 +391,12 @@ const SEA_ICE_WETNESS := 0.3
 @export var volcano_pool_two := Vector3(870.0, 105.0, 76.0)
 @export var volcano_pool_three := Vector3(810.0, 120.0, 100.0)
 @export var volcano_pool_depth := 10.0
+## Width of the shallow shelf that brings each basin floor back up to meet the
+## visible liquid. Half lies beneath the pool and half forms its bank.
+@export var volcano_pool_shore_width := 18.0
+## How far the ground meets the liquid below its top, avoiding a z-fighting seam
+## while still leaving no camera-height gap around the shore.
+@export var volcano_pool_shore_overlap := 0.25
 @export var volcano_crater_lava_height := 420.0
 
 @export_group("Settlements")
@@ -591,6 +597,16 @@ func volcano_lava_pools() -> Array[Dictionary]:
 	return pools
 
 
+## The irregular visible shoreline shared by the liquid mesh, its analytical
+## query, and the terrain basin beneath it.
+func volcano_pool_radius(base: float, angle: float, seed: int) -> float:
+	var phase := float(seed) * 0.731
+	return base * (0.91
+		+ sin(angle * 3.0 + phase) * 0.045
+		+ sin(angle * 7.0 - phase * 1.7) * 0.028
+		+ sin(angle * 11.0 + phase * 0.43) * 0.018)
+
+
 func _volcano_channel(coordinates: Vector2) -> float:
 	var distance := coordinates.length()
 	if volcano_channel_depth <= 0.0 or volcano_channel_width <= 0.0 \
@@ -618,16 +634,46 @@ func _volcano_channel(coordinates: Vector2) -> float:
 	return volcano_channel_depth * channel * from_crater * toward_foot * cone
 
 
+func _volcano_one_pool_basin(coordinates: Vector2, centre: Vector2,
+		base_radius: float, surface: float, seed: int, height: float) -> float:
+	var relative := coordinates - centre
+	var away := relative.length()
+	# Almost every volcano sample is nowhere near any one pool. Reject it before
+	# evaluating the three sines that make that pool's irregular edge.
+	var widest_edge := base_radius * 1.001
+	var widest_shore := clampf(
+		volcano_pool_shore_width, 0.1, widest_edge * 0.45)
+	if away >= widest_edge + widest_shore:
+		return height
+	var edge := volcano_pool_radius(base_radius, relative.angle(), seed)
+	var shore := clampf(volcano_pool_shore_width, 0.1, edge * 0.45)
+	var floor_edge := edge - shore
+	var outer_edge := edge + shore
+	if away >= outer_edge:
+		return height
+	var floor := surface - volcano_pool_depth
+	var lip := surface - volcano_pool_shore_overlap
+	if away <= floor_edge:
+		return floor
+	if away < edge:
+		return lerpf(floor, lip, smoothstep(floor_edge, edge, away))
+	return lerpf(lip, height, smoothstep(edge, outer_edge, away))
+
+
 func _volcano_pool_basin(coordinates: Vector2, height: float) -> float:
+	# The crater lake is a pool too. Its old crater profile left the whole basin
+	# ten metres below a surface-only lava disc, exactly like the three lower
+	# pools, so it needs the same rising shore.
+	height = _volcano_one_pool_basin(
+		coordinates, Vector2.ZERO, volcano_crater_radius * 0.62,
+		volcano_crater_lava_height, 3, height)
 	var pools := [volcano_pool_one, volcano_pool_two, volcano_pool_three]
 	for index in pools.size():
 		var pool: Vector3 = pools[index]
 		var angle := volcano_flow_angles[index]
 		var centre := Vector2(cos(angle), sin(angle)) * pool.x
-		var away := coordinates.distance_to(centre)
-		var basin := 1.0 - smoothstep(pool.y, pool.y * 1.28, away)
-		if basin > 0.0:
-			height = lerpf(height, minf(height, pool.z - volcano_pool_depth), basin)
+		height = _volcano_one_pool_basin(
+			coordinates, centre, pool.y, pool.z, 11 + index * 7, height)
 	return height
 
 

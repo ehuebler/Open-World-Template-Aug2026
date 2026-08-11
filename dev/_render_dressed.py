@@ -1,6 +1,6 @@
 """Render a body wearing every garment built into the .blend it is given.
 
-    blender --background generated/character_3_rigged.blend --python dev/_render_dressed.py -- --out=NAME
+    blender --background assets/work/character_3_rigged.blend --python dev/_render_dressed.py -- --out=NAME
 
 Works on either body: it renders whatever meshes the file holds. `--head`
 frames the skull instead of the figure, which is the only way to judge anything
@@ -19,11 +19,12 @@ import bpy
 
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "blender_assets", "source"))
+    "assets", "source", "blender"))
 import previewkit  # noqa: E402
 
 OUT_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dev", "captures")
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets", "previews", "authoring")
 
 
 def pose_clip(rig, spec):
@@ -68,8 +69,8 @@ def main():
     if skin:
         body = bpy.data.objects.get("Character")
         filename = "character_3_{0}.png".format(skin)
-        path = os.path.join(os.path.dirname(os.path.dirname(OUT_DIR)),
-                            "blender_assets", filename)
+        path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(OUT_DIR))),
+                            "assets", "runtime", "characters", filename)
         if body is None or not os.path.isfile(path):
             raise SystemExit("no body or generated skin at " + path)
         material = body.data.materials[0] if body.data.materials else None

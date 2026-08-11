@@ -14,11 +14,12 @@ from mathutils import Vector
 
 sys.path.insert(0, os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "blender_assets", "source"))
+    "assets", "source", "blender"))
 import previewkit  # noqa: E402
 
 OUT_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dev", "captures")
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "assets", "previews", "authoring")
 
 
 def args():

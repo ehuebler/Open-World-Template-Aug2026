@@ -4,9 +4,9 @@
 [ext_resource type="Theme" uid="uid://doqmws24gmodf" path="res://ui/themes/main_theme.tres" id="2_theme"]
 [ext_resource type="Shader" uid="uid://7m3l1iy781o6" path="res://shaders/vivid/vivid_space.gdshader" id="4_space"]
 [ext_resource type="Script" uid="uid://cu1df0e0ghlru" path="res://game/planet/planet.gd" id="5_planet"]
-[ext_resource type="PackedScene" uid="uid://dtw7sv6v54iii" path="res://generated/rainbowscraper.glb" id="6_ibklf"]
+[ext_resource type="PackedScene" uid="uid://dtw7sv6v54iii" path="res://assets/runtime/environment/rainbowscraper.glb" id="6_ibklf"]
 [ext_resource type="Script" uid="uid://camcec60nn5bi" path="res://game/planet/planet_shape.gd" id="6_shape"]
-[ext_resource type="PackedScene" uid="uid://d0d5q625rjxs4" path="res://generated/floating-island-mossy-with-cobble-stone.glb" id="7_6ib04"]
+[ext_resource type="PackedScene" uid="uid://d0d5q625rjxs4" path="res://assets/runtime/environment/floating-island-mossy-with-cobble-stone.glb" id="7_6ib04"]
 [ext_resource type="Script" uid="uid://bfw3ak0dy0xh1" path="res://game/planet/surface_anchor.gd" id="7_anchor"]
 [ext_resource type="Script" uid="uid://cxyl1llbkxjek" path="res://game/city/city_builder.gd" id="9_city"]
 [ext_resource type="Script" uid="uid://pi0ekedlrp0k" path="res://game/planet/landmark.gd" id="10_landmark"]
@@ -16,19 +16,19 @@
 [ext_resource type="Resource" path="res://game/props/purple_flower.tres" id="14_flower"]
 [ext_resource type="Resource" path="res://game/props/grass_species.tres" id="15_grass"]
 [ext_resource type="Script" path="res://game/props/fish_school.gd" id="16_school"]
-[ext_resource type="PackedScene" path="res://blender_assets/fish_vat.glb" id="17_fish_model"]
+[ext_resource type="PackedScene" path="res://assets/runtime/vat/fish_vat.glb" id="17_fish_model"]
 [ext_resource type="Material" path="res://game/props/fish.tres" id="18_fish_material"]
 [ext_resource type="Resource" path="res://game/props/fish_vat.tres" id="19_fish_vat"]
 [ext_resource type="Resource" path="res://game/props/coral_pink.tres" id="20_coral_pink"]
 [ext_resource type="Resource" path="res://game/props/coral_blue.tres" id="21_coral_blue"]
 [ext_resource type="Resource" path="res://game/props/coral_purple.tres" id="22_coral_purple"]
 [ext_resource type="Resource" path="res://game/props/coral_green.tres" id="23_coral_green"]
-[ext_resource type="PackedScene" path="res://blender_assets/small_fish_vat.glb" id="24_small_fish_model"]
+[ext_resource type="PackedScene" path="res://assets/runtime/vat/small_fish_vat.glb" id="24_small_fish_model"]
 [ext_resource type="Material" path="res://game/props/small_fish.tres" id="25_small_fish_material"]
 [ext_resource type="Resource" path="res://game/props/small_fish_vat.tres" id="26_small_fish_vat"]
 [ext_resource type="Resource" path="res://game/props/grass_distant_species.tres" id="27_grass_distant"]
 [ext_resource type="Script" path="res://game/props/flower_tree_field.gd" id="28_tree_field"]
-[ext_resource type="PackedScene" path="res://blender_assets/flower_tree.glb" id="29_tree_model"]
+[ext_resource type="PackedScene" path="res://assets/runtime/biomes/models/flower_tree.glb" id="29_tree_model"]
 [ext_resource type="Material" path="res://game/props/flower_tree.tres" id="30_tree_material"]
 [ext_resource type="Script" path="res://game/planet/celestial_cycle.gd" id="31_cycle"]
 [ext_resource type="Material" path="res://game/props/flower_tree_head.tres" id="32_tree_head_material"]
@@ -152,7 +152,30 @@ light_energy = 1.05
 ; and buys nothing.
 shadow_normal_bias = 4.0
 shadow_enabled = true
-shadow_blur = 0.0
+; Taps the shadow comparison takes, not a softness dial — and at zero, which is
+; where this shipped, it takes one. A single hard comparison per pixel delivers
+; whatever acne the biases above fail to prevent at full contrast, and re-rolls
+; it every time the map is rasterised again, which is every frame: CelestialCycle
+; rewrites this light's transform per frame, so the ground boiled.
+;
+; It only showed at the start of a game, and that is not a coincidence. The
+; engine scales shadow_normal_bias by `1 - dot(light, -normal)`, so head-on to a
+; surface the four texels bought above are worth exactly nothing; phase zero is
+; noon over the landing site, so every game opens with the sun within eight
+; degrees of the zenith and the terrain unprotected. `--boot` measures it: at the
+; spawn angle 43% of the ground changed by more than the eye forgives every
+; frame, half of that was gone by thirty seconds and all of it by sixty, as the
+; sun tilted and the normal bias came back. That is the "flicker that fades after
+; a minute" exactly.
+;
+; Nothing else touches it. Twenty times the depth bias moves it by nothing, and
+; switching off every caster on the planet — 670 terrain surfaces and 349 other
+; things — leaves the picture pixel-for-pixel as speckled, because an unfiltered
+; comparison against an empty map is still an unfiltered comparison. 0.25 is
+; already at the noise floor and the engine's own 1.0 is indistinguishable from
+; 0.0 on the afternoon shadows and the body's contact shadow, so this takes the
+; default and the margin with it.
+shadow_blur = 1.0
 ; Where the four cascades hand over, as fractions of the 150 m below. Pulling
 ; the first break in from the default 0.1 spends the nearest cascade on the 5 m
 ; around the camera rather than on 15 m, which is a third of the texel size over
@@ -758,11 +781,6 @@ metadata/_custom_type_script = "uid://pi0ekedlrp0k"
 transform = Transform3D(-0.20546882, -0.8841464, -0.4196042, -0.9786637, 0.18562508, 0.088095225, -1.5051018e-08, 0.4287522, -0.9034221, -7104.485, 1491.575, 3445.203)
 script = ExtResource("7_anchor")
 direction = Vector3(-0.8841464, 0.18562508, 0.4287522)
-
-; The wardrobe station stood on the landing site. Apparel is changed from the
-; Inventory tab now and items are conjured from the Admin tab, so walking to a
-; cupboard was the only thing it added. `blender_assets/wardrobe.glb` is still
-; authored if a station is ever wanted again.
 
 [node name="SpawnPoints" type="Node3D" parent="." unique_id=1562299310]
 

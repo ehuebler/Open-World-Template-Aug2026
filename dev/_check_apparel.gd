@@ -19,16 +19,16 @@ const WardrobeScript := preload("res://game/player/wardrobe.gd")
 # autoloads, and CharacterDB reaches SettingsManager for the saved look.
 const BODIES := {
 	"astronaut": {
-		"scene": "res://blender_assets/player_character.glb",
+		"scene": "res://assets/runtime/characters/player_character.glb",
 		"apparel": ["shoes", "pants", "long_sleeve", "hat", "goggles"],
 	},
 	"settler": {
-		"scene": "res://blender_assets/player_character_3.glb",
+		"scene": "res://assets/runtime/characters/player_character_3.glb",
 		"apparel": ["c3_boots", "c3_tunic", "c3_hair", "c3_goggles"],
 	},
 }
 
-const APPAREL_PATH := "res://blender_assets/apparel_%s.glb"
+const APPAREL_PATH := "res://assets/runtime/apparel/apparel_%s.glb"
 
 
 func _init() -> void:

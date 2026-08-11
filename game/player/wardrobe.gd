@@ -1,7 +1,7 @@
 class_name Wardrobe
 extends RefCounted
 
-## Puts apparel built by blender_assets/source/build_apparel.py onto a character
+## Puts apparel built by assets/source/blender/build_apparel.py onto a character
 ## instanced from player_character.glb.
 ##
 ## Each garment is exported with the same 23 joints, in the same order, as the
@@ -14,11 +14,11 @@ extends RefCounted
 ## the rest of the body, picking up the colour baked into their .glb.
 
 const APPAREL := {
-	"shoes": "res://blender_assets/apparel_shoes.glb",
-	"pants": "res://blender_assets/apparel_pants.glb",
-	"long_sleeve": "res://blender_assets/apparel_long_sleeve.glb",
-	"hat": "res://blender_assets/apparel_hat.glb",
-	"goggles": "res://blender_assets/apparel_goggles.glb",
+	"shoes": "res://assets/runtime/apparel/apparel_shoes.glb",
+	"pants": "res://assets/runtime/apparel/apparel_pants.glb",
+	"long_sleeve": "res://assets/runtime/apparel/apparel_long_sleeve.glb",
+	"hat": "res://assets/runtime/apparel/apparel_hat.glb",
+	"goggles": "res://assets/runtime/apparel/apparel_goggles.glb",
 }
 
 const NODE_PREFIX := "Apparel_"

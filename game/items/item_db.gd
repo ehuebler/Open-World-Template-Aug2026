@@ -32,7 +32,7 @@ const ITEMS := {
 		"description": "Woven brim gone soft at the edges. Sits low enough to keep the sun off the page.",
 		"kind": KIND_APPAREL,
 		"slot": "hat",
-		"scene": "res://blender_assets/apparel_hat.glb",
+		"scene": "res://assets/runtime/apparel/apparel_hat.glb",
 		"tint": Color(0.9023, 0.7954, 0.4978),
 	},
 	"flight_goggles": {
@@ -40,7 +40,7 @@ const ITEMS := {
 		"description": "Brass rims on a webbing strap. Worn on the brow, and they tuck under a hat rather than fighting it.",
 		"kind": KIND_APPAREL,
 		"slot": "goggles",
-		"scene": "res://blender_assets/apparel_goggles.glb",
+		"scene": "res://assets/runtime/apparel/apparel_goggles.glb",
 		"tint": Color(0.5271, 0.4014, 0.2216),
 	},
 	"rust_long_sleeve": {
@@ -48,7 +48,7 @@ const ITEMS := {
 		"description": "Heavy cotton, cuffs to the wrist. The dye has faded unevenly, which is most of its charm.",
 		"kind": KIND_APPAREL,
 		"slot": "long_sleeve",
-		"scene": "res://blender_assets/apparel_long_sleeve.glb",
+		"scene": "res://assets/runtime/apparel/apparel_long_sleeve.glb",
 		"tint": Color(0.7906, 0.5459, 0.522),
 	},
 	"denim_trousers": {
@@ -56,7 +56,7 @@ const ITEMS := {
 		"description": "Stiff blue workwear, turned up at the ankle so the hem clears your shoes.",
 		"kind": KIND_APPAREL,
 		"slot": "pants",
-		"scene": "res://blender_assets/apparel_pants.glb",
+		"scene": "res://assets/runtime/apparel/apparel_pants.glb",
 		"tint": Color(0.5021, 0.5639, 0.6682),
 	},
 	"leather_shoes": {
@@ -64,7 +64,7 @@ const ITEMS := {
 		"description": "Scuffed brown leather on a flat sole. Quiet on floorboards, loud on gravel.",
 		"kind": KIND_APPAREL,
 		"slot": "shoes",
-		"scene": "res://blender_assets/apparel_shoes.glb",
+		"scene": "res://assets/runtime/apparel/apparel_shoes.glb",
 		"tint": Color(0.4614, 0.41, 0.3811),
 	},
 	"c3_hair": {
@@ -72,7 +72,7 @@ const ITEMS := {
 		"description": "Spiked and cut from the dressed settler. Sits on the scalp and takes a tint.",
 		"kind": KIND_APPAREL,
 		"slot": "hat",
-		"scene": "res://blender_assets/apparel_c3_hair.glb",
+		"scene": "res://assets/runtime/apparel/apparel_c3_hair.glb",
 		"tint": Color(0.10, 0.11, 0.20),
 	},
 	"c3_goggles": {
@@ -80,7 +80,7 @@ const ITEMS := {
 		"description": "Smoked slate lenses on a wide band. Cut for the settler's skull, which is a different shape entirely.",
 		"kind": KIND_APPAREL,
 		"slot": "goggles",
-		"scene": "res://blender_assets/apparel_c3_goggles.glb",
+		"scene": "res://assets/runtime/apparel/apparel_c3_goggles.glb",
 		"tint": Color(0.2412, 0.3106, 0.4183),
 	},
 	"c3_tunic": {
@@ -88,7 +88,7 @@ const ITEMS := {
 		"description": "Capped at the shoulder and flared at the hem, over bare legs.",
 		"kind": KIND_APPAREL,
 		"slot": "long_sleeve",
-		"scene": "res://blender_assets/apparel_c3_tunic.glb",
+		"scene": "res://assets/runtime/apparel/apparel_c3_tunic.glb",
 		"tint": Color(0.25, 0.26, 0.34),
 	},
 	"c3_boots": {
@@ -96,7 +96,7 @@ const ITEMS := {
 		"description": "Heavy soles and a cuff at mid-shin. A pair, and they clear each other.",
 		"kind": KIND_APPAREL,
 		"slot": "shoes",
-		"scene": "res://blender_assets/apparel_c3_boots.glb",
+		"scene": "res://assets/runtime/apparel/apparel_c3_boots.glb",
 		"tint": Color(0.10, 0.11, 0.17),
 	},
 	"sword": {
@@ -104,7 +104,7 @@ const ITEMS := {
 		"description": "Brass furniture on a leather-wrapped grip. Held two-handed, blade up, and cut across the body from right to left.",
 		"kind": KIND_WEAPON,
 		"slot": "weapon",
-		"scene": "res://blender_assets/sword.glb",
+		"scene": "res://assets/runtime/items/sword.glb",
 		"hold": "blade",
 		"attack": "swing",
 		"tint": Color(0.72, 0.735, 0.76),
@@ -114,7 +114,7 @@ const ITEMS := {
 		"description": "Twelve shots in a cell that trickles back up on its own. Left hand under the barrel, right on the trigger; right click to sight down the optic.",
 		"kind": KIND_WEAPON,
 		"slot": "weapon",
-		"scene": "res://blender_assets/laser_rifle.glb",
+		"scene": "res://assets/runtime/items/laser_rifle.glb",
 		"hold": "rifle",
 		"attack": "shoot",
 		"cell": 12,

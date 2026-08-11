@@ -1,7 +1,7 @@
 [gd_resource type="Resource" script_class="VatClip" load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://game/props/vat_clip.gd" id="1_clip"]
-[ext_resource type="Texture2D" path="res://blender_assets/grass_vat.exr" id="2_positions"]
+[ext_resource type="Texture2D" path="res://assets/runtime/vat/grass_vat.exr" id="2_positions"]
 
 ; Sixteen frames at 24 fps is two thirds of a second of clip, so this number is
 ; very nearly the number of complete sways a blade makes per second. At the 0.88
@@ -21,7 +21,7 @@
 script = ExtResource("1_clip")
 resource_name = "GrassSwayVAT"
 positions = ExtResource("2_positions")
-metadata_path = "res://blender_assets/grass_vat.json"
+metadata_path = "res://assets/runtime/vat/grass_vat.json"
 ; Halved. Set on the clip rather than on `grass.tres` because VatClip writes
 ; `vat_playback_speed` onto the material as it binds, so the material's own copy
 ; of the value never survives to be drawn with.

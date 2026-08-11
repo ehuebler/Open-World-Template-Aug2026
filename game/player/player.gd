@@ -43,7 +43,7 @@ const AIM_FOV_SCALE := 0.55
 const CELL_RECHARGE := 0.85
 const CELL_PAUSE := 0.55
 
-## Clips baked by blender_assets/source/build_animations.py. The looping set is
+## Clips baked by assets/source/blender/build_animations.py. The looping set is
 ## marked here because glTF carries no loop flag.
 const LOOPING_CLIPS := ["Idle", "Walk", "Run", "CrouchIdle", "CrouchWalk", "Fall", "Float",
 	"Fly", "Tread", "Swim"]

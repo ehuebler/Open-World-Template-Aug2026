@@ -13,10 +13,6 @@
 ; variation breaks every highlight into patches. Together they read as unfired
 ; clay. A character is small, close, and almost always moving, which is what
 ; gives it shape instead; it does not need relief invented for it.
-;
-; The wardrobe station is the one prop borrowing this, and it is flat-albedo and
-; clean rather than lumpy for the same reason. A prop that does want relief
-; should carry its own material, not turn these back on here.
 
 [resource]
 resource_name = "PlayerSuitVivid"

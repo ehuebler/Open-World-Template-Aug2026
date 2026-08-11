@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" path="res://dev/shader_lab.gd" id="1_lab"]
 [ext_resource type="Theme" path="res://ui/themes/main_theme.tres" id="2_theme"]
-[ext_resource type="PackedScene" path="res://blender_assets/cute_astronaut_player.glb" id="3_astronaut"]
+[ext_resource type="PackedScene" path="res://assets/runtime/characters/cute_astronaut_player.glb" id="3_astronaut"]
 
 [sub_resource type="SphereMesh" id="SphereMesh_prop"]
 radius = 0.9

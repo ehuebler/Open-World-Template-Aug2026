@@ -2,7 +2,7 @@ extends SceneTree
 
 
 func _initialize() -> void:
-	var scene: PackedScene = load("res://blender_assets/player_character.glb")
+	var scene: PackedScene = load("res://assets/runtime/characters/player_character.glb")
 	var root := scene.instantiate()
 	_walk(root, 0)
 	quit()

@@ -183,9 +183,10 @@ func _pool_mesh(pool: Dictionary) -> ArrayMesh:
 			uvs.append(Vector2(0.5, 0.5)
 				+ Vector2(cos(angle), sin(angle)) * share * 0.5)
 
-	# Lower pools sit above a ten-metre basin floor. A surface-only disc exposed
-	# that empty space whenever the camera reached its irregular shoreline.
-	# Duplicate the rim with lateral normals and bury a skirt below the floor.
+	# The terrain now rises to this exact irregular shoreline, which is the real
+	# fix for seeing beneath a surface-only pool. Keep a buried side skirt as
+	# overlap for terrain LOD: a coarse triangle can cross the analytical bank a
+	# little below the liquid before its finer replacement arrives.
 	var skirt_top := vertices.size()
 	var skirt_depth := maxf(
 		_shape.volcano_pool_depth + POOL_SKIRT_MARGIN, POOL_SKIRT_MARGIN)
@@ -409,11 +410,7 @@ func _smoke_quad() -> QuadMesh:
 
 
 func _pool_radius(base: float, angle: float, seed: int) -> float:
-	var phase := float(seed) * 0.731
-	return base * (0.91
-		+ sin(angle * 3.0 + phase) * 0.045
-		+ sin(angle * 7.0 - phase * 1.7) * 0.028
-		+ sin(angle * 11.0 + phase * 0.43) * 0.018)
+	return _shape.volcano_pool_radius(base, angle, seed)
 
 
 func _flow_centre(index: int, distance: float, along: float) -> Vector2:
