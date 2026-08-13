@@ -21,6 +21,13 @@ uniform float wisp_curl : hint_range(0.0, 1.0) = 0.2;
 uniform float wisp_curl_speed : hint_range(0.0, 4.0) = 0.42;
 group_uniforms;
 
+group_uniforms Camera_Rim;
+uniform vec3 camera_rim_color : source_color = vec3(0.20, 1.0, 0.58);
+uniform float camera_rim_energy : hint_range(0.0, 8.0) = 0.6;
+uniform float camera_rim_dark : hint_range(0.0, 1.0) = 0.68;
+uniform float camera_rim_light : hint_range(0.0, 1.0) = 0.84;
+group_uniforms;
+
 group_uniforms Lifetime;
 // A complete visible-plus-hidden cycle. Custom data varies this per instance.
 uniform float cycle_seconds : hint_range(0.5, 60.0) = 8.0;
@@ -157,8 +164,15 @@ void fragment() {
 		mask *= shimmer;
 	}
 
-	float alpha = clamp(mask * v_visibility * opacity, 0.0, 1.0);
+	// These meshes are camera-facing cards, so Layer Weight is identically
+	// front-facing. The authored mask supplies the equivalent silhouette ramp:
+	// a soft outer gate and the same narrow dark/light edge used by 3D fauna.
+	float camera_rim = smoothstep(0.04, 0.18, mask)
+		* (1.0 - smoothstep(camera_rim_dark, camera_rim_light, mask));
+	float alpha = clamp(max(mask * opacity, camera_rim * 0.65)
+		* v_visibility, 0.0, 1.0);
 	ALBEDO = v_colour * 0.08;
-	EMISSION = v_colour * emission_energy * mask * v_visibility;
+	EMISSION = (v_colour * emission_energy * mask
+		+ camera_rim_color * camera_rim_energy * camera_rim) * v_visibility;
 	ALPHA = alpha;
 }

@@ -14,8 +14,20 @@ signal ability_activated(slot: int, ability_id: String)
 ## The ability button came back up. Sustained abilities need both edges; a
 ## one-shot ability simply ignores this one.
 signal ability_released(slot: int)
+signal health_changed(current: float, maximum: float)
+signal died(source_peer: int, cause: String)
+signal respawned
+signal status_changed(id: StringName, remaining: float)
+signal parry_started
+signal parry_blocked(perfect: bool, hit: DamageHit)
+## Public foundation for a future enemy flash and outgoing damage numbers.
+signal enemy_damaged(target: Node, amount: float, hit: DamageHit)
+signal grabbed(socket: Node)
+signal released_from_grab(throw_velocity: Vector3)
 
 const SYNC_INTERVAL := 1.0 / 20.0
+const DEFAULT_STAGGER_TIME := 0.28
+const DAMAGE_RAGDOLL_TIME := 0.75
 ## Floor under the teleport check, in metres between two packets. What a flying
 ## player can legitimately cover is far more than this, so the real limit is
 ## worked out from their stance; see `_speed_limit`.
@@ -178,6 +190,14 @@ const METEOR_FIST_RADIUS := 4.0
 const METEOR_SPREAD := 12.0
 const METEOR_CRATER_RADIUS := 6.0
 const METEOR_CRATER_DEPTH := 2.5
+## Flora damage is separate from actor damage at a landing. The latter fades
+## across the visible blast; the former must remove every root over ground the
+## crater no longer contains, including stone-tough cover at its rim.
+const METEOR_FLORA_DAMAGE := 6000.0
+## Roots and the sampled crater edge are not infinitely thin. This small lip
+## keeps plants whose origins round just outside the last terrain sample from
+## being left overhanging it.
+const METEOR_FLORA_MARGIN := 0.75
 ## How much bigger a fast arrival digs, at most. `fly_speed` is 1000 m/s, so a
 ## dive can arrive five times faster than the punch's own top speed and a hole
 ## the same size either way makes the dive pointless. Square-rooted rather than
@@ -533,6 +553,11 @@ const WALK_CAMERA_SPEED_SHARE := 1.35
 @export var mouse_sensitivity := 0.0025
 @export var invert_y := false
 
+@export_group("Parry")
+@export_range(0.05, 1.0, 0.01) var parry_window := 0.32
+@export_range(0.01, 0.5, 0.01) var parry_perfect_window := 0.10
+@export_range(0.1, 5.0, 0.05) var parry_cooldown := 1.5
+
 @onready var collider: CollisionShape3D = $CollisionShape3D
 @onready var ceiling_check: RayCast3D = $CeilingCheck
 @onready var character: Node3D = $Character
@@ -543,6 +568,7 @@ const WALK_CAMERA_SPEED_SHARE := 1.35
 @onready var camera_arm: SpringArm3D = $Head/CameraArm
 @onready var camera: Camera3D = $Head/CameraArm/Camera3D
 @onready var aim_ray: RayCast3D = $Head/CameraArm/Camera3D/AimRay
+@onready var dust: PlayerDust = $Dust
 @onready var hud: CanvasLayer = $HUD
 @onready var reticle: Reticle = $HUD/Reticle
 ## Each HUD line is a label on a drawn plate, and the plate is what gets hidden:
@@ -551,9 +577,6 @@ const WALK_CAMERA_SPEED_SHARE := 1.35
 @onready var prompt_plate: Control = $HUD/Prompts/PromptPlate
 @onready var target_name: Label = $HUD/Prompts/TargetPlate/Panel/Padding/TargetName
 @onready var interact_prompt: Label = $HUD/Prompts/PromptPlate/Panel/Padding/InteractPrompt
-@onready var stance_label: Label = $HUD/Prompts/StancePlate/Panel/Padding/Stance
-@onready var flight_plate: Control = $HUD/Prompts/FlightPlate
-@onready var flight_speed_label: Label = $HUD/Prompts/FlightPlate/Panel/Padding/Lines/Speed
 
 var controls_enabled := true
 
@@ -575,9 +598,9 @@ var weapons: ItemContainer:
 		return hotbar
 
 ## What this player is made of, listed on the inventory tab and editable from the
-## admin tab. Health is carried but nothing spends it yet; Speed is wired through
-## to the three speed exports below.
+## admin tab. Health is host-authoritative; Speed is wired through to movement.
 var stats := PlayerStats.new()
+var statuses := CombatStatuses.new()
 
 ## Quests and achievements. Local and never replicated — a session shares a world,
 ## not a diary — which is why this is built here rather than handed down from the
@@ -733,6 +756,47 @@ var _print_from := Vector3.INF
 ## The ragdoll on the character's skeleton, or null on a body whose .glb came
 ## without one — in which case a crash falls back to the tumble in [method _lay_out].
 var _ragdoll: Ragdoll
+var _dead := false
+## What the death screen says happened, decided by the host at the killing blow
+## and carried in the combat snapshot. The hit that did it is dropped straight
+## afterwards, so nothing downstream can work this out for itself later.
+var _death_cause := ""
+## Local player only, and only while they are dead.
+var _death_screen: DeathScreen
+var _stagger_left := 0.0
+## Damage/throw ragdolls do not start blending upright until they have landed.
+var _forced_ragdoll := false
+var _forced_recovery_started := false
+var _forced_ragdoll_left := 0.0
+var _grabbed := false
+var _grab_socket_path := NodePath()
+var _grab_socket_node: Node3D
+var _grab_offset := Transform3D.IDENTITY
+var _parry_window_left := 0.0
+var _parry_perfect_left := 0.0
+var _parry_cooldown_left := 0.0
+var _parry_request_sequence := 0
+var _last_parry_request_sequence := 0
+var _parry_event_sequence := 0
+var _last_parry_event_sequence := 0
+var _combat_event_sequence := 0
+var _host_combat_publish_sequence := 0
+var _last_combat_request_sequence := 0
+var _last_combat_event_sequence := 0
+var _beam_request_sequence := 0
+var _last_beam_request_sequence := 0
+var _host_beam_sequence := 0
+var _last_beam_sequence := 0
+var _combat_state_sequence := 0
+var _last_combat_state_sequence := 0
+var _feedback_sequence := 0
+var _last_feedback_sequence := 0
+var _grab_sequence := 0
+var _last_grab_sequence := 0
+var _respawn_sequence := 0
+var _parry_shield: ParryShield
+## Present only on the owning peer.
+var _combat_feedback: CombatFeedback
 ## Whether the feet were under the surface last frame. Only the change matters —
 ## it is what a splash is drawn from — and it is tracked for remote players too,
 ## so everyone sees everyone else go in.
@@ -794,13 +858,16 @@ var _confirmed_drop_ids: Dictionary = {}
 var _received_pickup_ids: Dictionary = {}
 var _waypoints: WaypointLayer
 ## Tilde opens the planet-wide navigation overlay. It is deliberately false on
-## spawn: no landmark, including the colony ship, is ambient HUD furniture.
+## spawn: no landmark, including the colony ship, is ambient HUD furniture. The
+## compact diagnostic plate follows the same toggle so it is absent from ordinary
+## play and available beside the navigation context when requested.
 var _waypoints_wanted := false
-## Where the player is, in terms that can be read out to somebody else. On by
-## default and toggled with `coordinates`, because it exists to be quoted when
-## something looks wrong and a readout nobody knows about would never be.
+## Where the player is, in terms that can be read out to somebody else. Hidden
+## until the tilde navigation overlay is requested.
 var _coordinates: CoordinatePlate
-var _coordinates_wanted := true
+var _coordinates_wanted := false
+## Present only on the owning peer.
+var _combat_hud: Node
 ## Charge left per weapon id, kept while a weapon is put away so switching is not
 ## a way to refill it. Fractional, because it trickles back up.
 var _cells: Dictionary = {}
@@ -810,6 +877,11 @@ var _clip := ""
 var _land_left := 0.0
 var _was_airborne := false
 var _airborne_time := 0.0
+## Fastest downward speed held during the current arc. Landing has already spent
+## its velocity by the time the presentation pass sees the feet come down, so the
+## previous airborne frames are the only honest measure of how large its dust
+## ring should be.
+var _landing_speed := 0.0
 
 var _sync_elapsed := 0.0
 var _target_transform := Transform3D.IDENTITY
@@ -825,6 +897,7 @@ var _extrapolated := 0.0
 
 func _ready() -> void:
 	add_to_group("network_players")
+	add_to_group(DamageHit.COMBATANT_GROUP)
 	var settings := get_node_or_null("/root/SettingsManager")
 	if settings != null and settings.has_method("get_setting"):
 		mouse_sensitivity = float(settings.call("get_setting", &"gameplay", &"mouse_sensitivity", 0.35)) / 140.0
@@ -842,6 +915,7 @@ func _ready() -> void:
 	_authored_speeds = Vector4(walk_speed, sprint_speed, crouch_speed, arms_back_speed)
 	stats.set_base(PlayerStats.SPEED, walk_speed)
 	stats.changed.connect(_on_stat_changed)
+	statuses.changed.connect(_on_status_changed)
 
 	for index in ItemDB.SLOT_ORDER.size():
 		equipment.set_filter(index, ItemDB.SLOT_ORDER[index])
@@ -862,7 +936,7 @@ func _ready() -> void:
 		apply_look(CharacterDB.load_look())
 	else:
 		_bind_character_nodes()
-		_character_meshes = SurfaceSkin.apply(character)
+		_character_meshes = SurfaceSkin.apply(character, true)
 		_prepare_animations()
 		_add_weapon_pose()
 		_add_ragdoll()
@@ -871,17 +945,20 @@ func _ready() -> void:
 	camera_arm.add_excluded_object(get_rid())
 	aim_ray.add_exception(self)
 	_apply_stance(_stance)
+	_parry_shield = ParryShield.new()
+	_parry_shield.name = "ParryShield"
+	add_child(_parry_shield, false, Node.INTERNAL_MODE_BACK)
+	_parry_shield.fit_body(_body_height)
 
 	# The plate is drawn behind the padding rather than behind the wrapper, so it
 	# hugs the text instead of spanning the screen.
 	for panel: PanelContainer in [
 		$HUD/Prompts/TargetPlate/Panel,
 		$HUD/Prompts/PromptPlate/Panel,
-		$HUD/Prompts/StancePlate/Panel,
-		$HUD/Prompts/FlightPlate/Panel,
 	]:
-		AuroraSurface.add_to(panel, AuroraSurface.Style.HUD)
-	flight_plate.visible = false
+		RedHudTheme.panel(panel)
+	RedHudTheme.label(target_name, 14)
+	RedHudTheme.label(interact_prompt, 14)
 
 	var is_local := peer_id == multiplayer.get_unique_id()
 	camera.current = is_local and not defer_camera
@@ -889,6 +966,10 @@ func _ready() -> void:
 	_target_transform = global_transform
 	_host_last_position = global_position
 	if is_local:
+		_combat_feedback = CombatFeedback.new()
+		_combat_feedback.name = "CombatFeedback"
+		add_child(_combat_feedback)
+		_combat_feedback.configure(camera, hud)
 		# Only the local player simulates their own abilities. A remote peer's
 		# beam arrives as broadcast effects, the same way their shots do.
 		_ability_controller = AbilityController.new()
@@ -911,7 +992,14 @@ func _ready() -> void:
 		_coordinates = CoordinatePlate.new()
 		_coordinates.body = self
 		_coordinates.aim_ray = aim_ray
+		_coordinates.visible = _coordinates_wanted
 		hud.add_child(_coordinates)
+		_combat_hud = load("res://ui/combat/combat_hud.gd").new()
+		_combat_hud.configure(self, hud, _coordinates, _weapon_bar)
+		hud.add_child(_combat_hud)
+		# Only the person who died is told about it. Everyone else sees a body.
+		died.connect(_on_died)
+		respawned.connect(_on_respawned)
 		if not defer_camera:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		# A host already owns its canonical containers. A client sends the
@@ -976,18 +1064,22 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("swap_shoulder"):
 		_shoulder = -_shoulder
 	elif event.is_action_pressed("interact"):
-		_interact()
+		if not _interact():
+			# E always tries the thing under the crosshair first. Empty space
+			# switches back to ability mode by putting the weapon away.
+			holster()
+	elif event.is_action_pressed("parry"):
+		request_parry()
 	elif event.is_action_pressed("waypoints"):
 		_waypoints_wanted = not _waypoints_wanted
+		_coordinates_wanted = _waypoints_wanted
 		if _waypoints != null:
 			_waypoints.enabled = _waypoints_wanted
 			_waypoints.visible = _waypoints_wanted
-	elif event.is_action_pressed("coordinates"):
-		_coordinates_wanted = not _coordinates_wanted
 		if _coordinates != null:
 			_coordinates.visible = _coordinates_wanted
 	elif event.is_action_pressed("inventory"):
-		_open_game_menu(GameMenu.Tab.INVENTORY)
+		_open_game_menu(GameMenu.Tab.HERO)
 	elif event.is_action_pressed("pause"):
 		_open_game_menu(GameMenu.Tab.SETTINGS)
 	elif event.is_action_pressed("holster"):
@@ -1025,7 +1117,9 @@ func _process(delta: float) -> void:
 	_update_body_lean(delta)
 	_update_camera(delta)
 	_update_animation(delta)
+	_update_dust_trails()
 	_update_meteor_shock()
+	_update_parry_shield()
 	if _weapon_pose != null:
 		# Everyone's, not just our own: a remote player's pitch is synced, and their
 		# barrel should point where they are looking.
@@ -1036,15 +1130,31 @@ func _process(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_tick_combat(delta)
+	if _grabbed:
+		_follow_grab_socket()
+		_track_water_crossing()
+		_track_footprints()
+		return
 	var is_local := peer_id == multiplayer.get_unique_id()
-	if is_local and controls_enabled:
+	# A remote player normally predicts their own movement. Damage reactions are
+	# the exception: the host advances the same crash/stagger path and relays it,
+	# so a client cannot submit movement that walks out of an authored reaction.
+	var host_driven_reaction := not is_local and _is_host_authority() \
+		and (_dead or _forced_ragdoll or _stagger_left > 0.0)
+	# A corpse keeps simulating with its controls taken away, because the death
+	# screen takes them: a body that stopped there would hang wherever it was
+	# killed instead of coming down. Nothing it reads is input —
+	# [method _simulate_local_player] puts the dead straight into a crash.
+	if (is_local and (controls_enabled or _dead)) or host_driven_reaction:
 		_simulate_local_player(delta)
-		_update_target_label()
-		journal.track(global_position, get_tree(), delta)
+		if is_local:
+			_update_target_label()
+			journal.track(global_position, get_tree(), delta)
 		_sync_elapsed += delta
 		if _sync_elapsed >= SYNC_INTERVAL:
 			_sync_elapsed = 0.0
-			if multiplayer.is_server():
+			if _is_host_authority():
 				_host_last_position = global_position
 				_host_has_state = true
 				_apply_state.rpc(global_transform, velocity, _pitch, _stance)
@@ -1087,10 +1197,14 @@ func _interact_target() -> Node:
 	return null
 
 
-func _interact() -> void:
+func _interact() -> bool:
+	if _dead or _grabbed:
+		return false
 	var target := _interact_target()
 	if target != null:
 		target.call("interact", self)
+		return true
+	return false
 
 
 ## Tab and Escape are the same menu opened at a different tab. Both are handled
@@ -1102,11 +1216,11 @@ func _open_game_menu(tab: GameMenu.Tab) -> void:
 		return
 	var menu := GameMenu.new()
 	menu.configure(self)
+	menu.show_tab(tab)
 	menu.closed.connect(_on_game_menu_closed)
 	menu.leave_requested.connect(_on_leave_requested)
 	open_menu()
 	hud.add_child(menu)
-	menu.show_tab(tab)
 	# The world decides what being in a menu costs: a real stop in single player, a
 	# local one in company. Asked after open_menu, which is what took the mouse.
 	var world := NetworkManager.active_world as GameWorld
@@ -1115,10 +1229,55 @@ func _open_game_menu(tab: GameMenu.Tab) -> void:
 
 
 func _on_game_menu_closed() -> void:
-	close_menu()
+	# Dying with the menu open leaves the death screen behind it. Closing the
+	# menu hands the mouse to that rather than back to the world.
+	if is_instance_valid(_death_screen):
+		open_menu()
+	else:
+		close_menu()
 	var world := NetworkManager.active_world as GameWorld
 	if world != null:
 		world.set_local_pause(false)
+
+
+## Only ever reached on the peer that owns this body; nobody is shown anyone
+## else's death. The world is left running underneath: in company it has to be,
+## and alone a frozen ragdoll reads as the game having hung rather than as a
+## death.
+func _on_died(_source_peer: int, cause: String) -> void:
+	if is_instance_valid(_death_screen):
+		_death_screen.set_notice(cause)
+		return
+	_death_screen = DeathScreen.new()
+	_death_screen.set_notice(cause)
+	_death_screen.respawn_requested.connect(_on_respawn_requested)
+	open_menu()
+	hud.add_child(_death_screen)
+
+
+func _on_respawned() -> void:
+	if not is_instance_valid(_death_screen):
+		return
+	_death_screen.queue_free()
+	_death_screen = null
+	# Unless the Tab menu is what is now in front of them, which owns the mouse
+	# until it is closed.
+	if hud.get_node_or_null("GameMenu") == null:
+		close_menu()
+
+
+## The host decides, as it does for every other way a body changes state. A
+## client that asks twice, or asks while alive, is simply ignored.
+func _on_respawn_requested() -> void:
+	# The world this body is in, rather than whichever one is current: the RPC
+	# has to arrive at the same node on the host as it left on the client.
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		world.request_colony_respawn.rpc_id(1)
+	else:
+		world.request_colony_respawn()
 
 
 func _on_leave_requested() -> void:
@@ -1168,6 +1327,9 @@ func clear_tint(target: String) -> void:
 ## what they were authored as. Scaling them together is what keeps a sprint faster
 ## than a walk however far the stat is moved.
 func _on_stat_changed(id: StringName, value: float) -> void:
+	if id == PlayerStats.HEALTH:
+		health_changed.emit(stats.health(), stats.base_of(PlayerStats.HEALTH))
+		return
 	if id != PlayerStats.SPEED:
 		return
 	var scale := value / maxf(_authored_speeds.x, 0.01)
@@ -1175,6 +1337,13 @@ func _on_stat_changed(id: StringName, value: float) -> void:
 	sprint_speed = _authored_speeds.y * scale
 	crouch_speed = _authored_speeds.z * scale
 	arms_back_speed = _authored_speeds.w * scale
+
+
+func _on_status_changed(id: StringName, remaining: float) -> void:
+	status_changed.emit(id, remaining)
+	if id == CombatStatuses.FLIGHTLESS and remaining > 0.0 \
+			and _stance == Stance.FLY:
+		_end_flight()
 
 
 ## A menu has the mouse. The body keeps being simulated so it still falls and is
@@ -1192,6 +1361,8 @@ func open_menu() -> void:
 		_waypoints.visible = false
 	if _coordinates != null:
 		_coordinates.visible = false
+	if _combat_hud != null:
+		_combat_hud.set_menu_open(true)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
@@ -1204,6 +1375,8 @@ func close_menu() -> void:
 	# Back to what it was, not to on: the menu is not a reason to undo a toggle.
 	if _coordinates != null:
 		_coordinates.visible = _coordinates_wanted
+	if _combat_hud != null:
+		_combat_hud.set_menu_open(false)
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -1290,11 +1463,13 @@ func _set_body(next_body: String) -> void:
 		parent.move_child(fresh, index)
 	_worn.clear()
 	_bind_character_nodes()
-	_character_meshes = SurfaceSkin.apply(character)
+	_character_meshes = SurfaceSkin.apply(character, true)
 	_prepare_animations()
 	_add_weapon_pose()
 	_add_ragdoll()
 	_apply_stance(_stance)
+	if _parry_shield != null:
+		_parry_shield.fit_body(_body_height)
 
 
 func _bind_character_nodes() -> void:
@@ -1311,7 +1486,8 @@ func _apply_tints() -> void:
 			continue
 		if String(mesh_instance.name).begins_with(Wardrobe.NODE_PREFIX):
 			continue
-		SurfaceSkin.paint(mesh_instance)
+		SurfaceSkin.paint(
+			mesh_instance, {}, String(mesh_instance.name) == "Character")
 		if String(mesh_instance.name) == "Character":
 			SurfaceSkin.set_texture(mesh_instance,
 				CharacterDB.skin_texture(_body_id, _skin_id))
@@ -1324,7 +1500,7 @@ func _apply_tints() -> void:
 			break
 		if garment == null:
 			continue
-		SurfaceSkin.paint(garment)
+		SurfaceSkin.paint(garment, {}, true)
 		if _tints.has(slot):
 			SurfaceSkin.tint(garment, _tints[slot])
 
@@ -1717,7 +1893,7 @@ func _dress() -> void:
 			continue
 		var garment := Wardrobe.equip(character, body_slot, ItemDB.scene_path(id))
 		if garment != null:
-			SurfaceSkin.paint(garment)
+			SurfaceSkin.paint(garment, {}, true)
 	_refresh_mesh_list()
 	_apply_tints()
 
@@ -1785,7 +1961,7 @@ func is_holstered() -> bool:
 
 
 ## Draws a numbered slot. Selecting an empty slot leaves the hands in ability
-## mode, just like F.
+## mode, just like pressing E with no interactable under the crosshair.
 func select_hotbar(index: int) -> void:
 	if index < 0 or index >= hotbar.size():
 		return
@@ -1877,10 +2053,22 @@ func _on_weapons_changed() -> void:
 
 
 func activate_primary() -> void:
+	if not can_attack():
+		return
 	if _hotbar_drawn and not _held.is_empty():
 		_attack()
 	else:
 		activate_ability(0)
+
+
+## Whether this body can begin or continue an offensive action.
+##
+## Controls remain enabled during a crash because the local body still has to
+## simulate its fall. That must not also leave the weapon and ability entry
+## points live while its hands are attached to a grab socket or physically limp.
+func can_attack() -> bool:
+	return not _dead and not _grabbed and not _forced_ragdoll \
+		and _stance != Stance.CRASH
 
 
 ## Which of [enum Stance] the body is in. Abilities gate on this — a meteor
@@ -1993,10 +2181,51 @@ func meteor_shock() -> MeteorShock:
 ## grows with the size of the field being mown down.
 func fire_beam(id: String, left_eye: Vector3, right_eye: Vector3, at: Vector3,
 		landed: bool) -> void:
-	if _has_listeners():
-		_ability_beam.rpc(id, left_eye, right_eye, at, landed)
-	else:
+	if not can_attack():
+		return
+	_beam_request_sequence += 1
+	if not _has_listeners():
 		LaserEyes.apply_effect(self, id, left_eye, right_eye, at, landed)
+	elif multiplayer.is_server():
+		_publish_ability_beam(id, left_eye, right_eye, at, landed)
+	else:
+		_request_ability_beam.rpc_id(
+			1, _beam_request_sequence, id, left_eye, right_eye, at, landed)
+
+
+func _publish_ability_beam(id: String, left_eye: Vector3,
+		right_eye: Vector3, at: Vector3, landed: bool) -> void:
+	if not can_attack() or id != "laser_eyes" or not ItemDB.accepts_ability(id) \
+			or not left_eye.is_finite() \
+			or not right_eye.is_finite() or not at.is_finite():
+		return
+	_host_beam_sequence += 1
+	_apply_ability_beam.rpc(
+		_host_beam_sequence, id, left_eye, right_eye, at, landed)
+
+
+## Cosmetic dust at a laser landing. Beam packets and carbine bolts already run
+## on every peer, so this must not send another packet; each copy calls it from
+## the impact it resolved locally.
+func play_laser_impact_dust(at: Vector3, facing: Vector3,
+		sustained := true) -> bool:
+	if not is_instance_valid(dust):
+		return false
+	return dust.laser_impact(
+		at, facing,
+		0.6 if sustained else 0.82,
+		0.55 if sustained else 0.78,
+		not sustained)
+
+
+## Sends the one-off Meteor cloud to every peer. Unlike the beam and bolt, the
+## landing itself is simulated only by the player who threw the punch.
+func play_meteor_impact_dust(at: Vector3, facing: Vector3,
+		radius: float, strength: float) -> void:
+	if _has_listeners():
+		_meteor_impact_cloud.rpc(at, facing, radius, strength)
+	else:
+		_meteor_impact_cloud(at, facing, radius, strength)
 
 
 ## Asks the world to cut a mark into the ground. Routed through the player
@@ -2007,10 +2236,530 @@ func request_scar(scar: TerrainScars.Scar) -> void:
 		world.request_scar(scar)
 
 
+# --- Combat -----------------------------------------------------------------
+
+func combat_faction() -> int:
+	return DamageHit.Faction.PLAYER
+
+
+func combat_peer_id() -> int:
+	return peer_id
+
+
+func combat_display_name() -> String:
+	return display_name
+
+
+func combat_position() -> Vector3:
+	return global_position + _up() * (_stance_height(_stance) * 0.5)
+
+
+func combat_radius() -> float:
+	return maxf(_stance_height(_stance) * 0.42, 0.35)
+
+
+func health() -> float:
+	return stats.health()
+
+
+func maximum_health() -> float:
+	return stats.base_of(PlayerStats.HEALTH)
+
+
+func is_dead() -> bool:
+	return _dead
+
+
+## Why this player is on the floor, as the death screen puts it. Empty while
+## alive.
+func death_cause() -> String:
+	return _death_cause
+
+
+## The overlay in front of the local player, or null: while alive, and on every
+## body but their own.
+func death_screen() -> DeathScreen:
+	return _death_screen if is_instance_valid(_death_screen) else null
+
+
+func has_status(id: StringName) -> bool:
+	return statuses.has(id)
+
+
+func status_remaining(id: StringName) -> float:
+	return statuses.remaining(id)
+
+
+func status_rows() -> Array[Dictionary]:
+	return statuses.rows()
+
+
+func status_snapshot() -> Dictionary:
+	return statuses.to_wire()
+
+
+func can_fly() -> bool:
+	return not _dead and not _grabbed \
+		and not statuses.has(CombatStatuses.FLIGHTLESS)
+
+
+## Stable late-join representation. Every key has a safe fallback in
+## [method apply_combat_snapshot], so snapshots made before combat existed still
+## load as a living, full-health player.
+func combat_snapshot() -> Dictionary:
+	return {
+		"health": stats.health(),
+		"maximum_health": stats.base_of(PlayerStats.HEALTH),
+		"dead": _dead,
+		"death_cause": _death_cause,
+		"statuses": statuses.to_wire(),
+		"parry_window": _parry_window_left,
+		"parry_perfect": _parry_perfect_left,
+		"parry_cooldown": _parry_cooldown_left,
+		"stagger": _stagger_left,
+		"forced_ragdoll": _forced_ragdoll,
+		"velocity": velocity,
+		"grabbed": _grabbed,
+		"grab_socket": String(_grab_socket_path),
+		"grab_offset": _grab_offset,
+	}
+
+
+func apply_combat_snapshot(snapshot: Dictionary) -> void:
+	var maximum := float(snapshot.get(
+		"maximum_health", stats.base_of(PlayerStats.HEALTH)))
+	if is_finite(maximum) and maximum > 0.0:
+		stats.set_base(PlayerStats.HEALTH, maximum)
+	var next_health := float(snapshot.get(
+		"health", stats.base_of(PlayerStats.HEALTH)))
+	stats.set_health(next_health if is_finite(next_health) else maximum)
+	var status_wire: Variant = snapshot.get("statuses", {})
+	statuses.apply_wire(status_wire as Dictionary if status_wire is Dictionary else {})
+	_parry_window_left = maxf(float(snapshot.get("parry_window", 0.0)), 0.0)
+	_parry_perfect_left = minf(maxf(
+		float(snapshot.get("parry_perfect", 0.0)), 0.0), _parry_window_left)
+	_parry_cooldown_left = maxf(float(snapshot.get("parry_cooldown", 0.0)), 0.0)
+	_stagger_left = maxf(float(snapshot.get("stagger", 0.0)), 0.0)
+	var velocity_variant: Variant = snapshot.get("velocity", velocity)
+	if velocity_variant is Vector3 and (velocity_variant as Vector3).is_finite():
+		velocity = velocity_variant
+	_grabbed = bool(snapshot.get("grabbed", false))
+	_grab_socket_path = NodePath(String(snapshot.get("grab_socket", ""))) \
+		if _grabbed else NodePath()
+	_grab_socket_node = null
+	var offset_variant: Variant = snapshot.get(
+		"grab_offset", Transform3D.IDENTITY)
+	_grab_offset = offset_variant as Transform3D \
+		if offset_variant is Transform3D else Transform3D.IDENTITY
+	if collider != null:
+		collider.set_deferred(&"disabled", _grabbed)
+	var was_dead := _dead
+	_dead = bool(snapshot.get("dead", false))
+	_death_cause = String(snapshot.get(
+		"death_cause", DeathScreen.DEFAULT_NOTICE)) if _dead else ""
+	var snapshot_forced := bool(snapshot.get("forced_ragdoll", false))
+	if _grabbed:
+		_interrupt_combat_actions()
+	if _dead:
+		if not _forced_ragdoll:
+			_force_full_ragdoll_local(velocity, DAMAGE_RAGDOLL_TIME)
+		if not was_dead:
+			_interrupt_combat_actions()
+			died.emit(0, _death_cause)
+	elif snapshot_forced and not _dead:
+		if not _forced_ragdoll:
+			_force_full_ragdoll_local(velocity, DAMAGE_RAGDOLL_TIME)
+	elif not _dead and (was_dead or _forced_ragdoll):
+		_clear_ragdoll()
+
+
+func respawn_at(at_transform: Transform3D, sequence := 0) -> void:
+	if sequence > 0 and sequence <= _respawn_sequence:
+		return
+	_respawn_sequence = maxi(sequence, _respawn_sequence + 1)
+	_dead = false
+	_death_cause = ""
+	_grabbed = false
+	_grab_socket_path = NodePath()
+	_grab_socket_node = null
+	_grab_offset = Transform3D.IDENTITY
+	collider.set_deferred(&"disabled", false)
+	statuses.clear()
+	_parry_window_left = 0.0
+	_parry_perfect_left = 0.0
+	_parry_cooldown_left = 0.0
+	_clear_ragdoll()
+	stats.set_health(stats.base_of(PlayerStats.HEALTH))
+	velocity = Vector3.ZERO
+	global_transform = at_transform
+	reset_physics_interpolation()
+	reset_network_state(at_transform)
+	respawned.emit()
+
+
+## Host-authoritative entry point used by [DamageHit]. Returns actual HP lost.
+func apply_damage(hit: DamageHit) -> float:
+	if hit == null or _dead or not _is_host_authority():
+		return 0.0
+	if hit.faction != DamageHit.Faction.ENEMY:
+		return 0.0
+	if hit.target_peer > 0 and hit.target_peer != peer_id:
+		return 0.0
+	if hit.parryable and parry_active():
+		_accept_parry_hit(hit)
+		return 0.0
+
+	var before := stats.health()
+	var authored_amount := hit.amount if is_finite(hit.amount) else 0.0
+	var actual := minf(maxf(authored_amount, 0.0), before)
+	if actual > 0.0:
+		stats.set_health(before - actual)
+	var status_impact := not hit.status.is_empty() and hit.status_duration > 0.0
+	if status_impact:
+		statuses.apply_status(hit.status, hit.status_duration)
+	var became_dead := stats.health() <= 0.0 and before > 0.0
+	if became_dead:
+		_die(hit)
+	_broadcast_combat_state(actual, hit, status_impact, false, false)
+	return actual
+
+
+func _accept_parry_hit(hit: DamageHit) -> void:
+	var perfect := parry_perfect_active()
+	parry_blocked.emit(perfect, hit)
+	if perfect:
+		var source := hit.source_node(self)
+		var reflected := hit.reflection if hit.reflection > 0.0 else hit.amount
+		if not is_finite(reflected):
+			reflected = 0.0
+		if source != null and reflected > 0.0 \
+				and source.has_method(&"receive_reflected_damage"):
+			source.call(&"receive_reflected_damage", reflected, peer_id)
+	_broadcast_combat_state(0.0, hit, false, true, perfect)
+
+
+## Forces the existing full-body ragdoll without changing HP. Future enemy code
+## can use this for authored grabs/throws without reaching into controller state.
+func force_full_ragdoll(throw_velocity := Vector3.ZERO) -> bool:
+	if not _is_host_authority() or _dead:
+		return false
+	var hit := DamageHit.impact(combat_position(), combat_radius(), 0.0)
+	hit.faction = DamageHit.Faction.ENEMY
+	hit.target_peer = peer_id
+	hit.reaction = DamageHit.Reaction.RAGDOLL
+	hit.world_impulse = throw_velocity
+	_broadcast_combat_state(0.0, hit, false, false, false)
+	return true
+
+
+## Attaches every network copy to the same world-relative socket.
+func grab_at_socket(socket: Node3D,
+		offset := Transform3D.IDENTITY) -> bool:
+	if not _is_host_authority() or _dead or socket == null \
+			or not DamageHit.in_same_world(self, socket):
+		return false
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return false
+	_grab_sequence += 1
+	var path := world.get_path_to(socket)
+	if _has_listeners():
+		_apply_grab_state.rpc(_grab_sequence, String(path), offset, Vector3.ZERO)
+	else:
+		_apply_grab_state(_grab_sequence, String(path), offset, Vector3.ZERO)
+	return true
+
+
+func attach_to_socket(socket: Node3D,
+		offset := Transform3D.IDENTITY) -> bool:
+	return grab_at_socket(socket, offset)
+
+
+## Releases a socket and, when given velocity, throws directly into the full
+## ragdoll path.
+func release_grab(throw_velocity := Vector3.ZERO) -> bool:
+	if not _is_host_authority() or not _grabbed:
+		return false
+	_grab_sequence += 1
+	if _has_listeners():
+		_apply_grab_state.rpc(_grab_sequence, "", Transform3D.IDENTITY,
+			throw_velocity)
+	else:
+		_apply_grab_state(_grab_sequence, "", Transform3D.IDENTITY,
+			throw_velocity)
+	return true
+
+
+func is_grabbed() -> bool:
+	return _grabbed
+
+
+func grab_socket() -> Node3D:
+	if is_instance_valid(_grab_socket_node):
+		return _grab_socket_node
+	var world := DamageHit.game_world_of(self)
+	if world == null or _grab_socket_path.is_empty():
+		return null
+	_grab_socket_node = world.get_node_or_null(_grab_socket_path) as Node3D
+	return _grab_socket_node
+
+
+func request_parry() -> bool:
+	if peer_id != multiplayer.get_unique_id() or not can_attack():
+		return false
+	_parry_request_sequence += 1
+	if _is_host_authority():
+		return _server_accept_parry(_parry_request_sequence, peer_id)
+	_request_parry.rpc_id(1, _parry_request_sequence)
+	return true
+
+
+func parry_active() -> bool:
+	return _parry_window_left > 0.0
+
+
+func parry_perfect_active() -> bool:
+	return _parry_perfect_left > 0.0 and _parry_window_left > 0.0
+
+
+func parry_window_remaining() -> float:
+	return _parry_window_left
+
+
+func parry_perfect_remaining() -> float:
+	return _parry_perfect_left
+
+
+func parry_cooldown_remaining() -> float:
+	return _parry_cooldown_left
+
+
+func _server_accept_parry(request_sequence: int, sender: int) -> bool:
+	if not _is_host_authority() or sender != peer_id \
+			or request_sequence <= _last_parry_request_sequence:
+		return false
+	_last_parry_request_sequence = request_sequence
+	if not can_attack() or _parry_cooldown_left > 0.0:
+		return false
+	_parry_event_sequence += 1
+	var window := maxf(parry_window, 0.01)
+	var perfect := minf(maxf(parry_perfect_window, 0.0), window)
+	var cooldown := maxf(parry_cooldown, window)
+	if _has_listeners():
+		_apply_parry_state.rpc(
+			_parry_event_sequence, window, perfect, cooldown)
+	else:
+		_apply_parry_state(
+			_parry_event_sequence, window, perfect, cooldown)
+	return true
+
+
+func _broadcast_combat_state(actual_damage: float, hit: DamageHit,
+		status_impact: bool, blocked: bool, perfect: bool) -> void:
+	_combat_state_sequence += 1
+	var effect := {
+		"actual_damage": maxf(actual_damage, 0.0),
+		"at": hit.centre(),
+		"source_peer": hit.source_peer,
+		"reaction": int(DamageHit.Reaction.NONE if blocked else hit.reaction),
+		"world_impulse": Vector3.ZERO if blocked else hit.world_impulse,
+		"status_impact": status_impact and not blocked,
+		"blocked": blocked,
+		"perfect": perfect,
+	}
+	if _dead and not blocked:
+		effect["reaction"] = DamageHit.Reaction.RAGDOLL
+	if _has_listeners():
+		_apply_combat_state.rpc(
+			_combat_state_sequence, combat_snapshot(), effect)
+	else:
+		_apply_combat_state(
+			_combat_state_sequence, combat_snapshot(), effect)
+
+
+func _die(hit: DamageHit) -> void:
+	if _dead:
+		return
+	_dead = true
+	_death_cause = _death_notice(hit)
+	_interrupt_combat_actions()
+	_grabbed = false
+	_grab_socket_path = NodePath()
+	_grab_socket_node = null
+	if collider != null:
+		collider.set_deferred(&"disabled", false)
+	died.emit(hit.source_peer if hit != null else 0, _death_cause)
+
+
+## One line for the death screen. Named attackers get the credit; anything that
+## cannot be attributed — a source already gone from the tree, a future hazard —
+## reads as a plain death rather than as a killer called nothing.
+func _death_notice(hit: DamageHit) -> String:
+	if hit == null:
+		return DeathScreen.DEFAULT_NOTICE
+	var attacker := hit.attacker_name(self)
+	if attacker.is_empty():
+		return DeathScreen.DEFAULT_NOTICE
+	var attack := hit.ability_display_name()
+	if not attack.is_empty():
+		return "Killed by %s: %s" % [attacker, attack]
+	return "Killed by %s" % attacker
+
+
+func _cancel_active_abilities() -> void:
+	if is_instance_valid(_ability_controller) \
+			and _ability_controller.has_method(&"cancel_all"):
+		_ability_controller.call(&"cancel_all")
+	for index in abilities.size():
+		release_ability(index)
+
+
+func _interrupt_combat_actions() -> void:
+	_cancel_active_abilities()
+	_parry_window_left = 0.0
+	_parry_perfect_left = 0.0
+	if _weapon_pose != null:
+		_weapon_pose.interrupt_attack()
+
+
+func _apply_authoritative_reaction(effect: Dictionary) -> void:
+	var reaction := clampi(int(effect.get("reaction", DamageHit.Reaction.NONE)),
+		0, DamageHit.Reaction.size() - 1)
+	var impulse_variant: Variant = effect.get("world_impulse", Vector3.ZERO)
+	var impulse := impulse_variant as Vector3 if impulse_variant is Vector3 \
+		else Vector3.ZERO
+	if not impulse.is_finite():
+		impulse = Vector3.ZERO
+	match reaction:
+		DamageHit.Reaction.STAGGER:
+			_stagger_left = maxf(_stagger_left, DEFAULT_STAGGER_TIME)
+			velocity += impulse * 0.35
+			if _ragdoll != null and _ragdoll.built() and not _ragdoll.limp():
+				_ragdoll.take_hit(
+					effect.get("at", combat_position()), impulse,
+					-_up() * _gravity())
+		DamageHit.Reaction.KNOCKBACK:
+			_stagger_left = maxf(_stagger_left, DEFAULT_STAGGER_TIME)
+			velocity += impulse
+		DamageHit.Reaction.RAGDOLL:
+			var carried := velocity + impulse
+			velocity = carried
+			_force_full_ragdoll_local(carried, DAMAGE_RAGDOLL_TIME)
+
+
+func _force_full_ragdoll_local(carried: Vector3, minimum_time: float) -> void:
+	if _stance != Stance.CRASH:
+		_begin_crash(carried, true)
+	_forced_ragdoll = true
+	_forced_recovery_started = false
+	_forced_ragdoll_left = maxf(minimum_time, DAMAGE_RAGDOLL_TIME)
+	_crash_left = maxf(_crash_left, maxf(minimum_time, DAMAGE_RAGDOLL_TIME))
+
+
+func _clear_ragdoll() -> void:
+	_forced_ragdoll = false
+	_forced_recovery_started = false
+	_forced_ragdoll_left = 0.0
+	_stagger_left = 0.0
+	if _ragdoll != null:
+		_ragdoll.stand_up()
+	if _weapon_pose != null:
+		_weapon_pose.active = true
+	floor_snap_length = _floor_snap
+	_apply_stance(Stance.STAND)
+
+
+func _tick_combat(delta: float) -> void:
+	_parry_window_left = maxf(_parry_window_left - delta, 0.0)
+	_parry_perfect_left = minf(
+		maxf(_parry_perfect_left - delta, 0.0), _parry_window_left)
+	_parry_cooldown_left = maxf(_parry_cooldown_left - delta, 0.0)
+	_stagger_left = maxf(_stagger_left - delta, 0.0)
+	var expired := statuses.tick(delta)
+	if expired and _is_host_authority():
+		var quiet := DamageHit.impact(combat_position(), 0.01, 0.0)
+		quiet.faction = DamageHit.Faction.ENEMY
+		_broadcast_combat_state(0.0, quiet, false, false, false)
+
+
+func _update_parry_shield() -> void:
+	if _parry_shield == null:
+		return
+	var share := _parry_window_left / maxf(parry_window, 0.01)
+	_parry_shield.set_state(
+		parry_active(), parry_perfect_active(), clampf(share, 0.0, 1.0))
+
+
+func _follow_grab_socket() -> void:
+	var socket := grab_socket()
+	if socket == null:
+		if _is_host_authority():
+			release_grab()
+		return
+	global_transform = socket.global_transform * _grab_offset
+	velocity = Vector3.ZERO
+	reset_physics_interpolation()
+
+
+## Explicit local feedback hooks are useful to hazards and focused tests without
+## granting either one access to camera transforms.
+func combat_feedback() -> CombatFeedback:
+	return _combat_feedback
+
+
+func combat_hud() -> Node:
+	return _combat_hud
+
+
+func damage_feedback(amount: float, at := Vector3.ZERO,
+		source_peer := 0) -> void:
+	if _combat_feedback != null:
+		_combat_feedback.damage_taken(amount, at, source_peer)
+
+
+func status_impact_feedback(strength := 0.55) -> void:
+	if _combat_feedback != null:
+		_combat_feedback.status_impact(strength)
+
+
+func camera_shake(strength: float, duration: float) -> void:
+	if _combat_feedback != null:
+		_combat_feedback.shake(strength, duration)
+
+
+func flora_contact_feedback(speed: float) -> void:
+	if _combat_feedback != null:
+		_combat_feedback.flora_contact(speed)
+
+
+func combat_damage_dealt(target: Node, amount: float, hit: DamageHit) -> void:
+	if not _is_host_authority() or amount <= 0.0:
+		return
+	enemy_damaged.emit(target, amount, hit)
+	_feedback_sequence += 1
+	var target_peer_id := int(target.call(&"combat_peer_id")) \
+		if target != null and target.has_method(&"combat_peer_id") else 0
+	var event := DamageNumberEvent.new()
+	event.amount = amount
+	event.world_position = hit.centre()
+	if target != null and target.has_method(&"combat_position"):
+		var target_position: Variant = target.call(&"combat_position")
+		if target_position is Vector3 and (target_position as Vector3).is_finite():
+			event.world_position = target_position
+	elif target is Node3D:
+		event.world_position = (target as Node3D).global_position
+	event.source_peer = peer_id
+	event.target_peer = target_peer_id
+	if _has_listeners():
+		_apply_outgoing_feedback.rpc(_feedback_sequence, event.to_wire())
+	else:
+		_apply_outgoing_feedback(_feedback_sequence, event.to_wire())
+
+
 ## Returns whether a real ability was dispatched. Empty or invalid slots are a
 ## safe no-op until ability definitions are introduced.
 func activate_ability(index: int) -> bool:
-	if index < 0 or index >= abilities.size():
+	if not can_attack() or index < 0 or index >= abilities.size():
 		return false
 	var ability_id := abilities.get_item(index)
 	if not ItemDB.accepts_ability(ability_id):
@@ -2029,7 +2778,7 @@ func release_ability(index: int) -> void:
 
 
 func _attack() -> void:
-	if _held.is_empty():
+	if not can_attack() or _held.is_empty():
 		return
 	if ItemDB.is_item(_held):
 		item_activated.emit(_held)
@@ -2045,7 +2794,7 @@ func _attack() -> void:
 
 
 func _shoot() -> void:
-	if _charge() < 1:
+	if not can_attack() or _charge() < 1:
 		return
 	_cells[_held] = float(_cells.get(_held, 0.0)) - 1.0
 	_cell_pause = CELL_PAUSE
@@ -2091,7 +2840,7 @@ func _update_weapon(delta: float) -> void:
 		return
 	# Only something that shoots can be sighted, and only while the body is under
 	# the player's control.
-	var can_aim := controls_enabled and _hotbar_drawn \
+	var can_aim := controls_enabled and can_attack() and _hotbar_drawn \
 		and ItemDB.attack_of(_held) == ItemDB.ATTACK_SHOOT
 	_weapon_pose.set_aimed(can_aim and Input.is_action_pressed("aim"))
 
@@ -2120,8 +2869,16 @@ func _simulate_local_player(delta: float) -> void:
 	_settle_into_crater(delta)
 	var grounded := _grounded()
 	_swept_grounded = grounded
+	if _dead and _stance != Stance.CRASH:
+		_force_full_ragdoll_local(velocity, DAMAGE_RAGDOLL_TIME)
 	if _stance == Stance.CRASH:
 		_crash_move(delta)
+		return
+	if _stagger_left > 0.0:
+		if not grounded:
+			velocity -= _up() * (_gravity() * delta)
+		move_and_slide()
+		_catch_ground()
 		return
 	if _stance == Stance.HERO:
 		_hero_land_move(delta)
@@ -2738,7 +3495,7 @@ func _horizontal_speed() -> float:
 ## no ground under it. Take-off proper wants clearance below and a jump press,
 ## and both are answers to questions that do not arise in orbit.
 func start_flying() -> void:
-	if _stance == Stance.FLY:
+	if _stance == Stance.FLY or not can_fly():
 		return
 	var starts_underwater := _submersion() >= FLIGHT_SWIM_ENTER
 	velocity = Vector3.ZERO
@@ -2757,11 +3514,16 @@ func start_flying() -> void:
 func _update_flight_state(delta: float, grounded: bool) -> void:
 	_swim_launch_left = maxf(_swim_launch_left - delta, 0.0)
 	if _stance == Stance.FLY:
+		if not can_fly():
+			_end_flight()
+			return
 		if grounded or Input.is_action_just_pressed("land"):
 			_end_flight()
 		elif velocity.length() <= float_speed * 1.6 \
 				and test_move(global_transform, -_up() * land_clearance):
 			_end_flight()
+		return
+	if not can_fly():
 		return
 	var launched_from_swim := _stance == Stance.SWIM
 	if launched_from_swim:
@@ -2853,6 +3615,8 @@ func _resolve_flora_contacts(carried: Vector3) -> Dictionary:
 		momentum_keep = minf(momentum_keep,
 			float(result.get("momentum_keep", 1.0)))
 		bounce_up = maxf(bounce_up, float(result.get("bounce_up", 0.0)))
+	if not handled.is_empty():
+		flora_contact_feedback(carried.length())
 	return {
 		"handled": handled,
 		"broken": broke,
@@ -2990,7 +3754,7 @@ func _knock_limb(carried: Vector3, handled: Dictionary = {}) -> void:
 		-_up() * _gravity())
 
 
-func _begin_crash(carried: Vector3) -> void:
+func _begin_crash(carried: Vector3, preserve_velocity := false) -> void:
 	# One crash per crash. A flight into a hillside reaches here twice — once
 	# through `_end_flight`, which the ground guard calls, and once from the
 	# guard's own answer back in the move — and a second pass would restart the
@@ -3003,13 +3767,17 @@ func _begin_crash(carried: Vector3) -> void:
 		TUMBLE_RATE_RANGE.x, TUMBLE_RATE_RANGE.y)
 	_crashes += 1
 	floor_snap_length = _floor_snap
-	velocity = _flat(carried).limit_length(CRASH_SLIDE)
+	# Ordinary impacts settle into a ground slide. An authored combat throw keeps
+	# all three axes so the capsule and newly limp bones receive the same launch.
+	velocity = carried if preserve_velocity \
+		else _flat(carried).limit_length(CRASH_SLIDE)
 	# Spent. Left standing it would have the next landing judged by this crash.
 	_flight_velocity = Vector3.ZERO
 	_underwater_launch = false
 	_run_speed = 0.0
 	_cruise = float_speed
 	_apply_stance(Stance.CRASH)
+	_interrupt_combat_actions()
 	if _ragdoll != null and _ragdoll.built():
 		# The hold is arms placed by IK, and a limp body has no use for either.
 		if _weapon_pose != null:
@@ -3040,8 +3808,24 @@ func _begin_crash(carried: Vector3) -> void:
 ## capsule cannot follow pulls the view for a moment and then gives up, rather
 ## than firing the player across the world after it.
 func _crash_move(delta: float) -> void:
-	_crash_left = maxf(_crash_left - delta, 0.0)
-	if not _grounded():
+	var grounded_before := _grounded()
+	var can_recover := not _dead
+	if _forced_ragdoll:
+		_forced_ragdoll_left = maxf(_forced_ragdoll_left - delta, 0.0)
+		if not _dead and grounded_before and _forced_ragdoll_left <= 0.0:
+			if not _forced_recovery_started:
+				_forced_recovery_started = true
+				_crash_left = CRASH_RISE
+			else:
+				_crash_left = maxf(_crash_left - delta, 0.0)
+		else:
+			# Keep the physics influence fully limp while airborne (and forever
+			# while dead), even after the minimum reaction time has elapsed.
+			_crash_left = maxf(_crash_left, CRASH_RISE)
+			can_recover = false
+	else:
+		_crash_left = maxf(_crash_left - delta, 0.0)
+	if not grounded_before:
 		velocity -= _up() * (_gravity() * delta)
 	var limp := _ragdoll != null and _ragdoll.limp()
 	var along := _flat(velocity)
@@ -3069,17 +3853,27 @@ func _crash_move(delta: float) -> void:
 		# The last of the crash is the pose easing out of where the body actually
 		# landed and into the clip that stands it up, which is what makes getting
 		# up a movement rather than a cut.
-		if _crash_left < CRASH_RISE:
+		if can_recover and _crash_left < CRASH_RISE:
 			_ragdoll.settle(_crash_left / CRASH_RISE)
-	if _crash_left <= 0.0 and _grounded():
+	if can_recover and _crash_left <= 0.0 and _grounded():
 		# The chase is a means of keeping up, not momentum the player earned, so
 		# it does not survive into the stance that can be steered.
+		var completed_forced_reaction := _forced_ragdoll
 		velocity = _up() * _rise()
 		if _ragdoll != null:
 			_ragdoll.stand_up()
 		if _weapon_pose != null:
 			_weapon_pose.active = true
+		_forced_ragdoll = false
+		_forced_recovery_started = false
+		_forced_ragdoll_left = 0.0
 		_try_stand()
+		# Reliable completion keeps an owning client from predicting out of the
+		# reaction a frame before the host and then ignoring the final correction.
+		if completed_forced_reaction and _is_host_authority():
+			var quiet := DamageHit.impact(combat_position(), 0.01, 0.0)
+			quiet.faction = DamageHit.Faction.ENEMY
+			_broadcast_combat_state(0.0, quiet, false, false, false)
 
 
 func _end_flight() -> void:
@@ -3157,8 +3951,7 @@ func _hero_land_move(delta: float) -> void:
 ## it. [param stats] is the ability's catalogue entry, so the reach and the top
 ## speed shown in the menu are the ones the body actually uses.
 func begin_meteor_punch(stats: Dictionary) -> bool:
-	if _stance == Stance.METEOR or _stance == Stance.HERO \
-			or _stance == Stance.CRASH:
+	if not can_attack() or _stance == Stance.METEOR or _stance == Stance.HERO:
 		return false
 	_meteor_stats = stats
 	_meteor_along = look_direction()
@@ -3331,6 +4124,10 @@ func _land_meteor(at: Vector3, struck: bool, arrival: float) -> void:
 	var blow := DamageHit.area(at, METEOR_SPREAD * force,
 		float(_meteor_stats.get("impact", 0.0)) * force, 1.0)
 	blow.ability_id = "meteor_punch"
+	# Flora gets the smaller categorical crater volume below. Offering this
+	# wider actor spread to it first both left a tapered rim and paid for the
+	# densest part of the jungle twice on the landing frame.
+	blow.affects_flora = false
 	deal_damage(blow)
 
 	# Measured before the hole is cut, so that whenever it does turn up — this
@@ -3339,10 +4136,26 @@ func _land_meteor(at: Vector3, struck: bool, arrival: float) -> void:
 	_await_crater()
 
 	var world_planet := _planet_below()
+	var impact_up := world_planet.up_at(at) if world_planet != null else _up()
+	play_meteor_impact_dust(
+		at, impact_up, METEOR_CRATER_RADIUS * force, force)
 	if world_planet != null:
 		var centre := at
 		if not struck:
 			centre = at + _flat(_meteor_along).normalized() * METEOR_CONE_AHEAD
+		# The combat blast above deliberately dissipates. Terrain does not:
+		# anywhere inside this circle loses its surface, so a plant there either
+		# comes out by the root or hangs in the air over the new floor. This
+		# second, flora-only volume is flat across the scar and quiet under the
+		# impact cloud; it cannot increase what another combatant takes.
+		var flatten := DamageHit.area(centre,
+			METEOR_CRATER_RADIUS * force + METEOR_FLORA_MARGIN,
+			maxf(METEOR_FLORA_DAMAGE,
+				float(_meteor_stats.get("impact", 0.0)) * force), 0.0)
+		flatten.ability_id = "meteor_punch"
+		flatten.affects_combatants = false
+		flatten.plant_break_effects = false
+		deal_damage(flatten)
 		var scar := TerrainScars.Scar.new()
 		scar.direction = world_planet.to_local(centre).normalized()
 		scar.radius = METEOR_CRATER_RADIUS * force
@@ -3461,13 +4274,31 @@ func fist_point() -> Vector3:
 ## nothing added here. Reliable: a dropped packet is a plant left standing on
 ## one machine and gone on another.
 func deal_damage(hit: DamageHit) -> void:
-	if hit == null:
+	if hit == null or not can_attack():
 		return
-	hit.source_peer = peer_id
-	if _has_listeners():
-		_ability_damage.rpc(hit.to_wire())
+	hit.faction = DamageHit.Faction.PLAYER
+	hit.set_source(self, peer_id)
+	_combat_event_sequence += 1
+	hit.sequence = _combat_event_sequence
+	if not _has_listeners():
+		DamageHit.apply_to_world(self,
+			DamageHit.sanitize_player_packet(hit.to_wire(), peer_id, self))
+	elif multiplayer.is_server():
+		_publish_hero_combat_hit(
+			DamageHit.sanitize_player_packet(hit.to_wire(), peer_id, self))
 	else:
-		DamageHit.apply_to_world(self, hit)
+		_request_hero_combat_hit.rpc_id(
+			1, _combat_event_sequence, hit.to_wire())
+
+
+func _publish_hero_combat_hit(hit: DamageHit) -> void:
+	if hit == null or not can_attack():
+		return
+	# The server's event sequence is independent from a client's request
+	# sequence, so reconnects and two sources cannot collide.
+	_host_combat_publish_sequence += 1
+	hit.sequence = _host_combat_publish_sequence
+	_apply_hero_combat_hit.rpc(hit.sequence, hit.to_wire())
 
 
 ## Whether sending an ability tick to the network would reach anybody.
@@ -3480,6 +4311,10 @@ func deal_damage(hit: DamageHit) -> void:
 func _has_listeners() -> bool:
 	return multiplayer.has_multiplayer_peer() \
 		and not multiplayer.get_peers().is_empty()
+
+
+func _is_host_authority() -> bool:
+	return not multiplayer.has_multiplayer_peer() or multiplayer.is_server()
 
 
 func _fly_move(delta: float) -> void:
@@ -3891,11 +4726,19 @@ func _try_stand() -> bool:
 
 
 func _apply_stance(next: int) -> void:
+	if next == Stance.FLY and not can_fly():
+		next = Stance.STAND
+	var entered_hero := next == Stance.HERO and _stance != Stance.HERO
 	_stance = next
 	var capsule := collider.shape as CapsuleShape3D
 	var height := _stance_height(_stance)
 	capsule.height = height
 	collider.position.y = height * 0.5
+	# HERO is always an impact pose: steep flight and Meteor both enter it once.
+	# Driving the pop from the transition makes remote players see it from the
+	# replicated stance without adding a cosmetic network packet.
+	if entered_hero and is_instance_valid(dust):
+		dust.pop_ground(_dust_ground_point(), _up(), 2.0)
 
 
 ## Stance heights scale with the body's authored height so a 1.6 m settler does
@@ -4203,8 +5046,29 @@ func _update_meteor_shock() -> void:
 
 func _update_animation(delta: float) -> void:
 	var airborne := not _grounded_for_display()
-	if _was_airborne and not airborne:
+	var took_off := not _was_airborne and airborne
+	var landed := _was_airborne and not airborne
+	if airborne:
+		_landing_speed = maxf(_landing_speed, maxf(-_rise(), 0.0))
+	# Positive launch speed separates a jump (and an intentional flora bounce)
+	# from simply walking off a ledge or spawning in the air.
+	if took_off and _stance == Stance.STAND \
+			and _rise() >= jump_velocity * 0.35 and is_instance_valid(dust):
+		dust.pop_ground(_dust_ground_point(), _up(), 0.7)
+	if landed:
 		_land_left = LAND_TIME
+		# A normal hop keeps its landing clean. The longer arc that earns
+		# AirRun, or an unusually fast fall, gets the circular ground pop. HERO
+		# is excluded because its stance transition has already made the larger
+		# version above.
+		var big_jump := _airborne_time >= AIR_RUN_DELAY \
+			or _landing_speed >= jump_velocity * 0.85
+		if big_jump and _stance != Stance.HERO and is_instance_valid(dust):
+			var strength := clampf(maxf(
+				_airborne_time / maxf(AIR_RUN_DELAY, 0.01),
+				_landing_speed / maxf(jump_velocity, 0.01)), 1.0, 1.65)
+			dust.pop_ground(_dust_ground_point(), _up(), strength)
+		_landing_speed = 0.0
 	_was_airborne = airborne
 	if airborne and _stance == Stance.STAND:
 		_airborne_time += delta
@@ -4274,11 +5138,66 @@ func _update_animation(delta: float) -> void:
 		_play("Idle")
 
 
+## Keeps the two emitters on the animated feet, but leaves every puff behind in
+## world space. Velocity rather than the sprint key is the public fact here:
+## remote peers do not know our input and a locally released sprint is still a
+## sprint until its earned momentum has actually been spent.
+func _update_dust_trails() -> void:
+	if not is_instance_valid(dust):
+		return
+	var speed := _horizontal_speed()
+	var sprinting := _stance == Stance.STAND and _grounded_for_display() \
+		and speed >= sprint_speed * 0.95
+	dust.update_trails(character, _up(), _flat(velocity), speed, sprinting)
+
+
+## Ground directly under the feet. A physics face wins so a jump from a roof
+## pops on the roof; the height field is the fallback that keeps the effect on
+## terrain whose nearby chunk collider has not finished streaming yet.
+func _dust_ground_point() -> Vector3:
+	var up := _up()
+	if is_inside_tree():
+		var query := PhysicsRayQueryParameters3D.create(
+			global_position + up * 0.45, global_position - up * 2.5)
+		query.exclude = [get_rid()]
+		query.collision_mask = collision_mask
+		query.collide_with_areas = false
+		var hit := get_world_3d().direct_space_state.intersect_ray(query)
+		if hit.has("position"):
+			return hit["position"] as Vector3
+	var planet := _planet_below()
+	if planet == null or planet.shape == null:
+		return global_position
+	var local := planet.to_local(global_position)
+	if local.length_squared() < 1.0:
+		return global_position
+	var out := local.normalized()
+	var radius := planet.shape.radius \
+		+ planet.shape.elevation(out, planet.spacing_underfoot())
+	return planet.to_global(out * radius)
+
+
 ## Remote players are interpolated rather than simulated, so is_on_floor() never
-## fires for them and their contact has to be inferred from the synced velocity.
+## fires for them. A velocity-only guess calls the apex of every jump a landing;
+## that used to be merely the wrong clip for a few frames, but with take-off dust
+## it would also throw a second ring in mid-air. Ask collision first for roofs and
+## streamed terrain, then the height field for planet ground whose collider has
+## not arrived yet.
 func _grounded_for_display() -> bool:
 	if peer_id == multiplayer.get_unique_id():
 		return _grounded()
+	if test_move(global_transform, -_up() * FOOT_REACH):
+		return true
+	var planet := _planet_below()
+	if planet != null and planet.shape != null:
+		var local := planet.to_local(global_position)
+		var span := local.length()
+		if span >= 1.0:
+			var out := local / span
+			var ground := planet.shape.radius \
+				+ planet.shape.elevation(out, planet.spacing_underfoot())
+			return absf(span - ground) <= FOOT_REACH
+	# Scene tests without a planet retain the old conservative inference.
 	return absf(_rise()) < 1.5
 
 
@@ -4287,7 +5206,14 @@ func _update_hud(delta: float) -> void:
 	# shot has settled.
 	reticle.set_spread(_horizontal_speed() / sprint_speed * (1.0 - 0.7 * _aim_amount()))
 	if _coordinates != null and _coordinates.visible:
+		_coordinates.set_motion_info(
+			_hud_motion_state(),
+			_hud_pov(),
+			velocity.length() if _stance == Stance.FLY else _horizontal_speed()
+		)
 		_coordinates.refresh(global_position, _planet_below(), delta)
+	if _combat_hud != null:
+		_combat_hud.refresh(delta)
 	if _weapon_bar != null:
 		var cell := ItemDB.cell_size(_held)
 		_weapon_bar.show_cell("cell  %d / %d" % [_charge(), cell] if cell > 0 else "")
@@ -4296,38 +5222,42 @@ func _update_hud(delta: float) -> void:
 		prompt_plate.visible = target != null
 		if target != null:
 			interact_prompt.text = "E    %s" % target.call("interact_prompt")
-	var parts: Array[String] = []
-	match _camera_mode:
-		CameraMode.FIRST:
-			parts.append("first person")
-		CameraMode.THIRD_NEAR:
-			parts.append("third person, close")
-		CameraMode.THIRD_FAR:
-			parts.append("third person, far")
-	if _camera_mode != CameraMode.FIRST:
-		parts.append("left shoulder" if _shoulder < 0.0 else "right shoulder")
-	if _stance == Stance.CROUCH:
-		parts.append("crouched")
-	elif _stance == Stance.SLIDE:
-		parts.append("sliding")
-	elif _stance == Stance.SWIM:
-		parts.append("swimming")
-	elif _stance == Stance.HERO:
-		parts.append("hero landing")
-	elif _stance == Stance.METEOR:
-		parts.append("meteor punch")
-	# Only once a run has actually wound up past a sprint: a readout that sat
-	# there saying "5 m/s" through every walk would be noise.
-	if _stance != Stance.FLY and _horizontal_speed() > sprint_speed:
-		parts.append("%d m/s" % roundi(_horizontal_speed()))
-	stance_label.text = "  ".join(parts)
 
-	# The flight controls are nowhere else in the game, so they are on screen for
-	# as long as they apply and gone the moment the feet are back down.
-	flight_plate.visible = _stance == Stance.FLY and not _menu_open
-	if _stance == Stance.FLY:
-		flight_speed_label.text = "%s  %d m/s" % [
-			"flying" if _fly_blend > 0.45 else "floating", roundi(velocity.length())]
+
+func _hud_motion_state() -> String:
+	match _stance:
+		Stance.FLY:
+			return "flying" if _fly_blend > 0.45 else "floating"
+		Stance.CROUCH:
+			return "crouched"
+		Stance.SLIDE:
+			return "sliding"
+		Stance.SWIM:
+			return "swimming"
+		Stance.HERO:
+			return "hero landing"
+		Stance.METEOR:
+			return "meteor punch"
+		Stance.CRASH:
+			return "crashed"
+	if _horizontal_speed() > sprint_speed:
+		return "running"
+	if _horizontal_speed() > 0.2:
+		return "walking"
+	return "standing"
+
+
+func _hud_pov() -> String:
+	match _camera_mode:
+		CameraMode.THIRD_NEAR:
+			return "third close, %s" % (
+				"left shoulder" if _shoulder < 0.0 else "right shoulder"
+			)
+		CameraMode.THIRD_FAR:
+			return "third far, %s" % (
+				"left shoulder" if _shoulder < 0.0 else "right shoulder"
+			)
+	return "first person"
 
 
 func _update_target_label() -> void:
@@ -4365,6 +5295,11 @@ func _submit_state(next_transform: Transform3D, next_velocity: Vector3, look_pit
 	if sender != peer_id:
 		return
 	var next_stance := clampi(stance, 0, Stance.size() - 1)
+	if _dead or _grabbed or _stagger_left > 0.0 or _forced_ragdoll \
+			or (next_stance == Stance.FLY
+				and statuses.has(CombatStatuses.FLIGHTLESS)):
+		_apply_state.rpc_id(sender, global_transform, velocity, _pitch, _stance)
+		return
 	var limit := _speed_limit(next_stance)
 	# What counts as a teleport depends on what the sender claims to be doing: a
 	# flying player covers ten metres between packets, so a fixed few metres would
@@ -4418,7 +5353,7 @@ func _hold(id: String) -> void:
 ## `call_local` means the shooter takes the same path as everyone else.
 @rpc("any_peer", "call_local", "reliable")
 func _swing_weapon() -> void:
-	if not _sender_owns_this_player():
+	if not _sender_owns_this_player() or not can_attack():
 		return
 	if _weapon_pose != null:
 		_weapon_pose.swing()
@@ -4426,28 +5361,196 @@ func _swing_weapon() -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func _fire_bolt(from: Vector3, along: Vector3) -> void:
-	if not _sender_owns_this_player():
+	if not _sender_owns_this_player() or not can_attack():
 		return
 	LaserBolt.fire(get_parent(), from, along, self)
 
 
-## One tick of a sustained beam: where it starts, where it ends, and whether it
-## landed on anything. Reliable, because a dropped tick is a plant that survives
-## on one machine and not on another, and the whole point of sending the volume
-## rather than the outcome is that every peer reaches the same answer.
-@rpc("any_peer", "call_local", "reliable")
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_beam(request_sequence: int, id: String,
+		left_eye: Vector3, right_eye: Vector3, at: Vector3,
+		landed: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id or request_sequence <= _last_beam_request_sequence:
+		return
+	_last_beam_request_sequence = request_sequence
+	if not can_attack():
+		return
+	_publish_ability_beam(id, left_eye, right_eye, at, landed)
+
+
+## One host-approved tick of a sustained beam. Every peer applies its flora;
+## only the host dispatches the generated player-faction hit to combatants.
+@rpc("authority", "call_local", "reliable")
+func _apply_ability_beam(event_sequence: int, id: String,
+		left_eye: Vector3, right_eye: Vector3, at: Vector3,
+		landed: bool) -> void:
+	if event_sequence <= _last_beam_sequence:
+		return
+	_last_beam_sequence = event_sequence
+	if id != "laser_eyes" or not ItemDB.accepts_ability(id) \
+			or not left_eye.is_finite() \
+			or not right_eye.is_finite() or not at.is_finite():
+		return
+	LaserEyes.apply_effect(self, id, left_eye, right_eye, at, landed)
+
+
+## Backward-compatible local helper retained for older harnesses.
 func _ability_beam(id: String, left_eye: Vector3, right_eye: Vector3,
 		at: Vector3, landed: bool) -> void:
-	if not _sender_owns_this_player():
+	if not can_attack():
 		return
 	LaserEyes.apply_effect(self, id, left_eye, right_eye, at, landed)
 
 
 @rpc("any_peer", "call_local", "reliable")
-func _ability_damage(wire: Dictionary) -> void:
-	if not _sender_owns_this_player():
+func _meteor_impact_cloud(at: Vector3, facing: Vector3,
+		radius: float, strength: float) -> void:
+	if not _sender_owns_this_player() or not is_instance_valid(dust):
 		return
-	DamageHit.apply_to_world(self, DamageHit.from_wire(wire))
+	if not at.is_finite() or not facing.is_finite():
+		return
+	dust.impact_cloud(at, facing, radius, strength)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_hero_combat_hit(request_sequence: int,
+		wire: Dictionary) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id or request_sequence <= _last_combat_request_sequence:
+		return
+	_last_combat_request_sequence = request_sequence
+	if not can_attack():
+		return
+	_publish_hero_combat_hit(
+		DamageHit.sanitize_player_packet(wire, sender, self))
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_hero_combat_hit(event_sequence: int,
+		wire: Dictionary) -> void:
+	if event_sequence <= _last_combat_event_sequence:
+		return
+	_last_combat_event_sequence = event_sequence
+	var hit := DamageHit.from_wire(wire)
+	if hit.faction != DamageHit.Faction.PLAYER \
+			or hit.source_peer != peer_id:
+		return
+	DamageHit.apply_to_world(self, hit)
+
+
+## Backward-compatible local entry; unlike the old RPC it still passes through
+## the player-packet sanitizer.
+func _ability_damage(wire: Dictionary) -> void:
+	if not can_attack():
+		return
+	var hit := DamageHit.sanitize_player_packet(wire, peer_id, self)
+	DamageHit.apply_to_world(self, hit)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_parry(request_sequence: int) -> void:
+	if not multiplayer.is_server():
+		return
+	_server_accept_parry(
+		request_sequence, multiplayer.get_remote_sender_id())
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_parry_state(event_sequence: int, window: float,
+		perfect: float, cooldown: float) -> void:
+	if event_sequence <= _last_parry_event_sequence:
+		return
+	_last_parry_event_sequence = event_sequence
+	if not can_attack():
+		return
+	_parry_window_left = clampf(window, 0.0, 1.0)
+	_parry_perfect_left = clampf(perfect, 0.0, _parry_window_left)
+	_parry_cooldown_left = clampf(cooldown, _parry_window_left, 5.0)
+	parry_started.emit()
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_combat_state(event_sequence: int, snapshot: Dictionary,
+		effect: Dictionary) -> void:
+	if event_sequence <= _last_combat_state_sequence:
+		return
+	_last_combat_state_sequence = event_sequence
+	# The host already mutated canonical HP/status state before publishing this
+	# snapshot. Reapplying it there would emit every changed signal twice.
+	if not _is_host_authority():
+		apply_combat_snapshot(snapshot)
+	_apply_authoritative_reaction(effect)
+	if peer_id != multiplayer.get_unique_id() or _combat_feedback == null:
+		return
+	var actual := maxf(float(effect.get("actual_damage", 0.0)), 0.0)
+	var at_variant: Variant = effect.get("at", combat_position())
+	var at := at_variant as Vector3 if at_variant is Vector3 \
+		else combat_position()
+	if actual > 0.0:
+		_combat_feedback.damage_taken(
+			actual, at, int(effect.get("source_peer", 0)))
+	elif bool(effect.get("status_impact", false)) \
+			or int(effect.get("reaction", DamageHit.Reaction.NONE)) \
+				!= DamageHit.Reaction.NONE:
+		_combat_feedback.status_impact()
+	if bool(effect.get("blocked", false)):
+		var perfect := bool(effect.get("perfect", false))
+		_combat_feedback.parry_feedback(perfect, at)
+		if perfect and _parry_shield != null:
+			_parry_shield.celebrate_perfect()
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_outgoing_feedback(event_sequence: int,
+		wire: Dictionary) -> void:
+	if event_sequence <= _last_feedback_sequence:
+		return
+	_last_feedback_sequence = event_sequence
+	if peer_id != multiplayer.get_unique_id() or _combat_feedback == null:
+		return
+	var event := DamageNumberEvent.from_wire(wire)
+	_combat_feedback.outgoing_damage(
+		event.amount, event.world_position, event.target_peer, event.critical)
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_grab_state(event_sequence: int, socket_path: String,
+		offset: Transform3D, throw_velocity: Vector3) -> void:
+	if event_sequence <= _last_grab_sequence:
+		return
+	_last_grab_sequence = event_sequence
+	if not throw_velocity.is_finite():
+		throw_velocity = Vector3.ZERO
+	if not socket_path.is_empty():
+		var path := NodePath(socket_path)
+		if path.is_absolute():
+			return
+		for index in path.get_name_count():
+			if path.get_name(index) == &"..":
+				return
+		_grab_socket_path = path
+		_grab_socket_node = null
+		_grab_offset = offset
+		_grabbed = true
+		_clear_ragdoll()
+		_interrupt_combat_actions()
+		collider.set_deferred(&"disabled", true)
+		grabbed.emit(grab_socket())
+		return
+	_grabbed = false
+	_grab_socket_path = NodePath()
+	_grab_socket_node = null
+	_grab_offset = Transform3D.IDENTITY
+	collider.set_deferred(&"disabled", false)
+	velocity = throw_velocity
+	released_from_grab.emit(throw_velocity)
+	if throw_velocity.length_squared() > 0.0001:
+		_force_full_ragdoll_local(throw_velocity, DAMAGE_RAGDOLL_TIME)
 
 
 ## A local call reports no sender, so that stands for this player themselves.
@@ -4458,10 +5561,25 @@ func _sender_owns_this_player() -> bool:
 
 @rpc("authority", "call_remote", "unreliable_ordered")
 func _apply_state(next_transform: Transform3D, next_velocity: Vector3, look_pitch: float, stance: int) -> void:
-	if peer_id == multiplayer.get_unique_id():
+	var local_owner := peer_id == multiplayer.get_unique_id()
+	var authoritative_override := _dead or _grabbed or _stagger_left > 0.0 \
+		or _forced_ragdoll \
+		or (statuses.has(CombatStatuses.FLIGHTLESS) and _stance == Stance.FLY)
+	if local_owner and not authoritative_override:
+		return
+	var next_stance := clampi(stance, 0, Stance.size() - 1)
+	if _stance == Stance.CRASH and next_stance != Stance.CRASH and not _dead:
+		_clear_ragdoll()
+	if local_owner:
+		global_transform = next_transform
+		velocity = next_velocity
+		_pitch = clampf(look_pitch, -1.48, 1.48)
+		head.rotation.x = _pitch
+		_apply_stance(next_stance)
+		reset_physics_interpolation()
 		return
 	_target_transform = next_transform
 	_target_velocity = next_velocity
 	_target_pitch = clampf(look_pitch, -1.48, 1.48)
 	_extrapolated = 0.0
-	_apply_stance(clampi(stance, 0, Stance.size() - 1))
+	_apply_stance(next_stance)

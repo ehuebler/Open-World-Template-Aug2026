@@ -23,6 +23,7 @@ const SPARK_TIME := 0.09
 
 var _direction := Vector3.FORWARD
 var _shooter_rid := RID()
+var _shooter: Node
 var _live := 0.0
 var _spark := -1.0
 var _mesh: MeshInstance3D
@@ -38,6 +39,7 @@ static func fire(world: Node, from: Vector3, along: Vector3, shooter: CollisionO
 	bolt._direction = along.normalized() if along.length_squared() > 0.0 else Vector3.FORWARD
 	if shooter != null:
 		bolt._shooter_rid = shooter.get_rid()
+		bolt._shooter = shooter
 	world.add_child(bolt)
 	bolt.global_position = from
 	bolt.look_at(from + bolt._direction, Vector3.UP)
@@ -94,11 +96,14 @@ func _physics_process(delta: float) -> void:
 		global_position = to
 		return
 	global_position = hit["position"]
-	_land()
+	_land(hit["normal"] as Vector3)
 
 
-func _land() -> void:
+func _land(normal: Vector3) -> void:
 	_mesh.visible = false
 	_lamp.light_energy = 2.6
 	_lamp.omni_range = 2.6
 	_spark = SPARK_TIME
+	if is_instance_valid(_shooter) \
+			and _shooter.has_method(&"play_laser_impact_dust"):
+		_shooter.call(&"play_laser_impact_dust", global_position, normal, false)

@@ -70,6 +70,13 @@ DEFAULT_SKIN = os.path.join(CHARACTER_DIR, "luke.png")
 # directly on that atlas. A tint still multiplies any finished design at runtime,
 # while no tint leaves the authored paint intact.
 WHITE = (1.0, 1.0, 1.0, 1.0)
+# Camera-following silhouette light. Blender uses these values in the authored
+# Layer Weight -> Color Ramp -> Mix Shader graph; player_suit.tres mirrors them
+# in Godot because glTF cannot carry arbitrary Blender shader graphs.
+RIM_COLOR = (0.20, 1.0, 0.58, 1.0)
+RIM_STRENGTH = 1.25
+RIM_RAMP_DARK = 0.68
+RIM_RAMP_LIGHT = 0.84
 
 # Where the hair is cut out of the dressed sculpt, as a box in that sculpt's own
 # metres once it has been turned to face +Y. The other two regions are no longer
@@ -1120,6 +1127,87 @@ def paint_body(mesh_obj: bpy.types.Object, texture_path: str) -> None:
     mesh_obj.data.materials.append(material)
 
 
+def add_camera_rim(material: bpy.types.Material) -> None:
+    """Build the editable camera-rim graph from the Render Recipes layout."""
+    material.use_nodes = True
+    tree = material.node_tree
+    nodes = tree.nodes
+    links = tree.links
+    bsdf = nodes.get("Principled BSDF")
+    output = nodes.get("Material Output")
+    if bsdf is None or output is None:
+        raise RuntimeError("camera rim needs Principled BSDF and Material Output: "
+                           + material.name)
+
+    layer_weight = nodes.get("Camera Rim Layer Weight")
+    if layer_weight is None:
+        layer_weight = nodes.new("ShaderNodeLayerWeight")
+        layer_weight.name = "Camera Rim Layer Weight"
+    layer_weight.label = "Camera-facing rim mask"
+    layer_weight.inputs["Blend"].default_value = 0.35
+    layer_weight.location = (120.0, -160.0)
+
+    ramp = nodes.get("Camera Rim Color Ramp")
+    if ramp is None:
+        ramp = nodes.new("ShaderNodeValToRGB")
+        ramp.name = "Camera Rim Color Ramp"
+    ramp.label = "Rim thickness and sharpness"
+    ramp.color_ramp.interpolation = "EASE"
+    ramp.color_ramp.elements[0].position = RIM_RAMP_DARK
+    ramp.color_ramp.elements[0].color = (0.0, 0.0, 0.0, 1.0)
+    ramp.color_ramp.elements[-1].position = RIM_RAMP_LIGHT
+    ramp.color_ramp.elements[-1].color = (1.0, 1.0, 1.0, 1.0)
+    ramp.location = (340.0, -160.0)
+
+    emission = nodes.get("Camera Rim Emission")
+    if emission is None:
+        emission = nodes.new("ShaderNodeEmission")
+        emission.name = "Camera Rim Emission"
+    emission.label = "Neon green rim"
+    emission.inputs["Color"].default_value = RIM_COLOR
+    emission.inputs["Strength"].default_value = RIM_STRENGTH
+    emission.location = (350.0, 80.0)
+
+    mix = nodes.get("Camera Rim Mix Shader")
+    if mix is None:
+        mix = nodes.new("ShaderNodeMixShader")
+        mix.name = "Camera Rim Mix Shader"
+    mix.label = "Base surface + camera rim"
+    mix.location = (590.0, 120.0)
+    output.location = (820.0, 120.0)
+
+    # Replace only the four links owned by this rim graph. Texture-to-Principled
+    # links stay intact, so selectable skins still author and preview correctly.
+    for socket in (ramp.inputs["Fac"], mix.inputs[0], mix.inputs[1],
+                   mix.inputs[2], output.inputs["Surface"]):
+        for link in list(socket.links):
+            links.remove(link)
+    links.new(layer_weight.outputs["Fresnel"], ramp.inputs["Fac"])
+    links.new(ramp.outputs["Color"], mix.inputs[0])
+    links.new(bsdf.outputs["BSDF"], mix.inputs[1])
+    links.new(emission.outputs["Emission"], mix.inputs[2])
+    links.new(mix.outputs["Shader"], output.inputs["Surface"])
+
+
+def add_camera_rim_to_character() -> list[str]:
+    """Put the rim on the body and every garment visible in the work blend."""
+    rimmed: list[str] = []
+    seen: set[int] = set()
+    for obj in bpy.data.objects:
+        if obj.type != "MESH":
+            continue
+        for slot in obj.material_slots:
+            material = slot.material
+            if material is None or material.as_pointer() in seen:
+                continue
+            seen.add(material.as_pointer())
+            add_camera_rim(material)
+            rimmed.append(material.name)
+    if not rimmed:
+        raise RuntimeError("character 3 has no materials to receive the camera rim")
+    return rimmed
+
+
 def load_body() -> bpy.types.Object:
     bpy.ops.wm.open_mainfile(filepath=SRC_BLEND)
     if bpy.context.object is not None and bpy.context.object.mode != "OBJECT":
@@ -1176,6 +1264,12 @@ def main() -> None:
     paint_body(mesh_obj, DEFAULT_SKIN)
 
     bake_locomotion(rig, body)
+    # Keep the GLB's PBR graph export-safe, then add the requested Blender-only
+    # Mix Shader graph to the editable work file. Godot renders the same Fresnel
+    # ramp through player_suit.tres/vivid_surface.gdshader.
+    rimmed = add_camera_rim_to_character()
+    bpy.ops.wm.save_as_mainfile(filepath=OUT_BLEND)
+    print("camera rim:", ", ".join(sorted(rimmed)))
     print("wrote", OUT_BLEND)
 
 

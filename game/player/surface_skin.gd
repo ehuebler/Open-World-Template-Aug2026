@@ -14,21 +14,29 @@ extends RefCounted
 ## surface needs is either in the template or manufactured by the shader.
 
 const TEMPLATE := preload("res://game/player/player_suit.tres")
+const CAMERA_RIM_COLOR := Color(0.20, 1.0, 0.58)
+const CAMERA_RIM_ENERGY := 1.25
+const CAMERA_RIM_DARK := 0.68
+const CAMERA_RIM_LIGHT := 0.84
 
 
 ## Paints every mesh under `root`, returning them so callers can keep hold of
 ## them for shadow and visibility work.
-static func apply(root: Node) -> Array[MeshInstance3D]:
+static func apply(root: Node, camera_rim := false) -> Array[MeshInstance3D]:
 	var painted: Array[MeshInstance3D] = []
 	# Shared across the whole tree, so surfaces that came from one Blender
 	# material still share one material here.
 	var derived := {}
 	for node in root.find_children("*", "MeshInstance3D", true, false):
-		painted.append(paint(node as MeshInstance3D, derived))
+		painted.append(paint(node as MeshInstance3D, derived, camera_rim))
 	return painted
 
 
-static func paint(mesh_instance: MeshInstance3D, derived: Dictionary = {}) -> MeshInstance3D:
+static func paint(
+		mesh_instance: MeshInstance3D,
+		derived: Dictionary = {},
+		camera_rim := false
+	) -> MeshInstance3D:
 	# Characters cast no shadow, and it is decided here because this is the one
 	# call every body's meshes already pass through — the player, the home
 	# screen's preview, the editor's, and each garment as it is put on. Left to
@@ -41,17 +49,23 @@ static func paint(mesh_instance: MeshInstance3D, derived: Dictionary = {}) -> Me
 	for surface in mesh.get_surface_count():
 		var source := mesh.surface_get_material(surface)
 		if not derived.has(source):
-			derived[source] = material_for(source)
+			derived[source] = material_for(source, camera_rim)
 		mesh_instance.set_surface_override_material(surface, derived[source])
 	return mesh_instance
 
 
-static func material_for(source: Material) -> ShaderMaterial:
+static func material_for(source: Material, camera_rim := false) -> ShaderMaterial:
 	var material := TEMPLATE.duplicate() as ShaderMaterial
 	var standard := source as BaseMaterial3D
 	if standard != null:
 		material.set_shader_parameter(&"base_color", standard.albedo_color)
 		material.set_shader_parameter(&"base_texture", standard.albedo_texture)
+	material.set_shader_parameter(
+		&"camera_rim_color", CAMERA_RIM_COLOR if camera_rim else Color.BLACK)
+	material.set_shader_parameter(
+		&"camera_rim_energy", CAMERA_RIM_ENERGY if camera_rim else 0.0)
+	material.set_shader_parameter(&"camera_rim_dark", CAMERA_RIM_DARK)
+	material.set_shader_parameter(&"camera_rim_light", CAMERA_RIM_LIGHT)
 	return material
 
 

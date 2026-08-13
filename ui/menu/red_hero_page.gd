@@ -49,6 +49,8 @@ var _stats_open := false
 var _main_grid: GridContainer
 var _stats_frame: PanelContainer
 var _stats_rows: VBoxContainer
+var _status_rows: VBoxContainer
+var _status_section: VBoxContainer
 var _character_block: VBoxContainer
 var _loadout_column: VBoxContainer
 var _hero_name: Label
@@ -101,6 +103,7 @@ func refresh() -> void:
 	_hero_name.text = player_name.to_upper()
 
 	_fill_stats()
+	_fill_status_effects()
 	_refresh_apparel()
 	_refresh_hotbar()
 	if _preview != null:
@@ -167,6 +170,8 @@ func _connect_sources() -> void:
 			source.changed.connect(refresh)
 	if _stats != null and not _stats.changed.is_connected(_on_stats_changed):
 		_stats.changed.connect(_on_stats_changed)
+	if _player != null and not _player.status_changed.is_connected(_on_status_changed):
+		_player.status_changed.connect(_on_status_changed)
 	_sources_connected = true
 
 
@@ -176,11 +181,17 @@ func _disconnect_sources() -> void:
 			source.changed.disconnect(refresh)
 	if _stats != null and _stats.changed.is_connected(_on_stats_changed):
 		_stats.changed.disconnect(_on_stats_changed)
+	if _player != null and _player.status_changed.is_connected(_on_status_changed):
+		_player.status_changed.disconnect(_on_status_changed)
 	_sources_connected = false
 
 
 func _on_stats_changed(_id: StringName, _value: float) -> void:
 	refresh()
+
+
+func _on_status_changed(_id: StringName, _remaining: float) -> void:
+	_fill_status_effects()
 
 
 func _build() -> void:
@@ -234,6 +245,22 @@ func _build_stats_frame() -> PanelContainer:
 	_stats_rows.add_theme_constant_override(&"separation", 7)
 	_stats_rows.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	column.add_child(_stats_rows)
+
+	_status_section = VBoxContainer.new()
+	_status_section.name = "StatusSection"
+	_status_section.add_theme_constant_override(&"separation", 6)
+	_status_section.visible = false
+	column.add_child(_status_section)
+
+	var status_heading := _section_heading("TEMPORARY EFFECTS  //  LIVE", 13)
+	status_heading.name = "StatusHeading"
+	_status_section.add_child(status_heading)
+	_status_section.add_child(_rule())
+
+	_status_rows = VBoxContainer.new()
+	_status_rows.name = "StatusRows"
+	_status_rows.add_theme_constant_override(&"separation", 7)
+	_status_section.add_child(_status_rows)
 
 	var frame := _glow_frame(column, "StatsFrame", 13.0)
 	frame.visible = false
@@ -513,6 +540,46 @@ func _fill_stats() -> void:
 		value.name = "Stat_%s_Value" % id_text
 		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		row.add_child(value)
+
+
+func _fill_status_effects() -> void:
+	if _status_rows == null or _status_section == null:
+		return
+	_clear_children(_status_rows)
+	var rows: Array = []
+	if _player != null:
+		rows = _player.status_rows()
+	_status_section.visible = not rows.is_empty()
+	if rows.is_empty():
+		return
+	for row_variant: Variant in rows:
+		if not row_variant is Dictionary:
+			continue
+		var row: Dictionary = row_variant
+		var row_panel := PanelContainer.new()
+		row_panel.name = "Status_%s" % String(row.get("id", ""))
+		row_panel.tooltip_text = String(row.get("description", ""))
+		row_panel.add_theme_stylebox_override(
+			&"panel",
+			_style(BLACK_42, Color(YELLOW, 0.55), 1, 7.0)
+		)
+		_status_rows.add_child(row_panel)
+
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override(&"separation", 12)
+		row_panel.add_child(line)
+
+		var title := _label(String(row.get("title", "")), 12, YELLOW)
+		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		line.add_child(title)
+
+		var value := _label(
+			"%.1f s" % float(row.get("remaining", 0.0)),
+			16,
+			GREEN
+		)
+		value.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		line.add_child(value)
 
 
 func _format_stat_number(id: StringName, value: float) -> String:

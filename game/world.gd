@@ -8,6 +8,10 @@ extends Node3D
 
 const PLAYER_SCENE := preload("res://game/player/player.tscn")
 
+## The title view opens at the light the authored cycle reaches after three
+## minutes: low over the Colony Ship and close to local sunset. Gameplay still
+## begins from phase zero in [method _begin_session].
+const HOME_SUN_ADVANCE_SECONDS := 180.0
 const DROP_FORWARD_DISTANCE := 1.55
 const DROP_SURFACE_CLEARANCE := 0.08
 ## Slightly wider than the 2.4 m interaction ray to allow for the player's eye,
@@ -18,6 +22,13 @@ const PICKUP_MAX_DISTANCE := 3.2
 ## damage itself, because this is a correction and not the mechanism: the peers
 ## have already worked it out for themselves.
 const FLORA_CONFIRM_INTERVAL := 0.4
+const RESPAWN_CLEARANCE := 0.35
+## Outside the ship's roughly twelve-metre footprint, but still visibly at it.
+const RESPAWN_SPACING := 14.0
+## Shoulder-to-shoulder separation at the orbital start used by an online
+## sandbox. Wide enough that two flight capsules cannot begin intersecting, but
+## close enough that the party enters the world as one visible group.
+const ONLINE_SANDBOX_SPAWN_SPACING := 4.0
 
 @onready var spawn_points: Node3D = $SpawnPoints
 @onready var celestial_cycle: CelestialCycle = $CelestialCycle
@@ -30,6 +41,8 @@ var _pickups: Dictionary = {}
 var _pickup_nodes: Dictionary = {}
 var _next_pickup_id := 1
 var _locally_paused := false
+var _simulation_frozen := false
+var _time_scale_before_pause := 1.0
 var _home_screen: HomeScreen
 ## Set once a session has been opened here, so a second `session_started` — the
 ## one a client gets on connecting, after the host's — cannot spawn twice.
@@ -44,19 +57,29 @@ var _has_look_override := false
 ## Seconds until the next flora reconciliation pass. See
 ## [method confirm_flora_breaks].
 var _flora_confirm_left := 0.0
+## Host-only respawn counter per player peer id, so a late or duplicated
+## respawn packet cannot put an already-living body back at the colony.
+var _respawn_sequence: Dictionary = {}
+## Stable host-assigned formation slot per online sandbox player. Peer ids from
+## Steam and ENet are identities, not roster indices; modulo-ing one by the
+## number of authored markers can put two different peers on the same marker.
+var _sandbox_spawn_slots: Dictionary = {}
 
 
 func _ready() -> void:
-	process_mode = Node.PROCESS_MODE_ALWAYS
+	# The GameMenu opts into ALWAYS processing itself. The world must remain
+	# pausable so its inherited gameplay, physics, audio, timers, and animations
+	# all stop beneath that menu in a single-player session.
+	process_mode = Node.PROCESS_MODE_PAUSABLE
 	NetworkManager.active_world = self
 	NetworkManager.player_registered.connect(_on_player_registered)
 	NetworkManager.player_left.connect(_despawn_player)
 	NetworkManager.session_started.connect(_begin_session)
 
-	if NetworkManager.state == NetworkManager.SessionState.IDLE:
-		_open_home_screen()
-	else:
+	if NetworkManager.state == NetworkManager.SessionState.IN_GAME:
 		_begin_session()
+	else:
+		_open_home_screen()
 
 
 func _physics_process(delta: float) -> void:
@@ -78,6 +101,8 @@ func _exit_tree() -> void:
 		NetworkManager.session_started.disconnect(_begin_session)
 	_pickups.clear()
 	_pickup_nodes.clear()
+	_respawn_sequence.clear()
+	_sandbox_spawn_slots.clear()
 
 
 func local_player() -> OnlinePlayer:
@@ -111,7 +136,9 @@ func request_scar(scar: TerrainScars.Scar) -> void:
 func _request_scar_from_client(wire: Dictionary) -> void:
 	if not multiplayer.is_server():
 		return
-	if multiplayer.get_remote_sender_id() <= 1:
+	var sender := multiplayer.get_remote_sender_id()
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
 		return
 	_apply_scar.rpc(wire)
 
@@ -157,7 +184,8 @@ func apply_scar_snapshot(wire: Array) -> void:
 func flora_snapshot() -> Dictionary:
 	var state := {}
 	for field in get_tree().get_nodes_in_group(DamageHit.FIELD_GROUP):
-		if not field.has_method(&"broken_keys"):
+		if not (field is Node) or not DamageHit.in_same_world(self, field) \
+				or not field.has_method(&"broken_keys"):
 			continue
 		var keys: PackedInt32Array = field.call(&"broken_keys")
 		if not keys.is_empty():
@@ -168,6 +196,94 @@ func flora_snapshot() -> Dictionary:
 func apply_flora_snapshot(state: Dictionary) -> void:
 	for path: String in state:
 		_apply_flora_breaks(path, state[path])
+
+
+# --- Colony respawn ---------------------------------------------------------
+
+## Asked for by the death screen, rather than run down by a clock: being dead is
+## the one moment a player is reading the screen instead of the world, and a
+## timer that takes the body back mid-sentence loses them the only account they
+## get of what killed them.
+@rpc("any_peer", "call_local", "reliable")
+func request_colony_respawn() -> void:
+	if not _is_host_authority():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender <= 0:
+		sender = multiplayer.get_unique_id()
+	var player := _spawned_players.get(sender) as OnlinePlayer
+	if not is_instance_valid(player) or not player.is_dead():
+		return
+	respawn_player_at_colony(sender)
+
+
+func respawn_player_at_colony(peer_id: int) -> bool:
+	if not _is_host_authority():
+		return false
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if not is_instance_valid(player):
+		return false
+	var sequence := int(_respawn_sequence.get(peer_id, 0)) + 1
+	_respawn_sequence[peer_id] = sequence
+	var at_transform := safe_colony_respawn_transform(peer_id)
+	if multiplayer.has_multiplayer_peer() and not multiplayer.get_peers().is_empty():
+		_apply_colony_respawn.rpc(peer_id, at_transform, sequence)
+	else:
+		_apply_colony_respawn(peer_id, at_transform, sequence)
+	return true
+
+
+## Terrain-sampled, deterministic positions beside the colony ship (or the
+## landing site fallback). The host computes and broadcasts the exact transform,
+## so peers need not agree on their local terrain streaming state that frame.
+func safe_colony_respawn_transform(peer_id: int) -> Transform3D:
+	var anchor := get_node_or_null("Planet/ColonyShip") as Node3D
+	if anchor == null:
+		anchor = get_node_or_null("Planet/LandingSite") as Node3D
+	if anchor == null:
+		return _spawn_transform(peer_id)
+	var world_planet := planet()
+	var up := anchor.global_basis.y.normalized()
+	var forward := -anchor.global_basis.z
+	forward -= up * forward.dot(up)
+	if forward.length_squared() < 0.0001:
+		forward = anchor.global_basis.x
+	forward = forward.normalized()
+	var right := forward.cross(up).normalized()
+	var slot := posmod(peer_id - 1, 8)
+	var angle := TAU * float(slot) / 8.0
+	var offset := (right * cos(angle) + forward * sin(angle)) \
+		* RESPAWN_SPACING
+	if world_planet == null or world_planet.shape == null:
+		return Transform3D(_upright_basis(forward, up),
+			anchor.global_position + offset + up * RESPAWN_CLEARANCE)
+
+	var local := world_planet.to_local(anchor.global_position + offset)
+	if local.length_squared() < 1.0:
+		return Transform3D(_upright_basis(forward, up),
+			anchor.global_position + offset + up * RESPAWN_CLEARANCE)
+	var direction := local.normalized()
+	var spacing := world_planet.finest_spacing()
+	var normal_local := world_planet.shape.normal_at(direction, spacing).normalized()
+	var surface_local := world_planet.shape.surface_point(direction, spacing)
+	var normal := (world_planet.global_basis * normal_local).normalized()
+	var facing := forward - normal * forward.dot(normal)
+	if facing.length_squared() < 0.0001:
+		facing = right.cross(normal)
+	return Transform3D(_upright_basis(facing.normalized(), normal),
+		world_planet.to_global(surface_local) + normal * RESPAWN_CLEARANCE)
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_colony_respawn(peer_id: int, at_transform: Transform3D,
+		sequence: int) -> void:
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if is_instance_valid(player):
+		player.respawn_at(at_transform, sequence)
+
+
+func _is_host_authority() -> bool:
+	return not multiplayer.has_multiplayer_peer() or multiplayer.is_server()
 
 
 ## Runs on the host only, a few times a second. Anything that has broken since
@@ -181,7 +297,8 @@ func confirm_flora_breaks() -> void:
 	var broadcasting := multiplayer.has_multiplayer_peer() \
 		and multiplayer.is_server() and multiplayer.get_peers().size() > 0
 	for field in get_tree().get_nodes_in_group(DamageHit.FIELD_GROUP):
-		if not field.has_method(&"drain_new_breaks"):
+		if not (field is Node) or not DamageHit.in_same_world(self, field) \
+				or not field.has_method(&"drain_new_breaks"):
 			continue
 		# Drained whether or not it is going anywhere. On a client nothing reads
 		# the list, and left alone it would grow all session.
@@ -195,6 +312,35 @@ func _apply_flora_breaks(path: String, keys: PackedInt32Array) -> void:
 	var field := get_node_or_null(NodePath(path))
 	if field != null and field.has_method(&"apply_broken_keys"):
 		field.call(&"apply_broken_keys", keys)
+
+
+## Undoes every break inside a sphere and reports how many plants stood back up.
+##
+## The sphere goes over the wire rather than the plants in it: flora is placed
+## deterministically, so every peer can work out for itself which of its own
+## instances the volume covers, exactly as it already does for the damage that
+## broke them. Called by an encounter that resets the ground it was fought over.
+func regrow_flora(centre: Vector3, radius: float) -> int:
+	if not _is_host_authority():
+		return 0
+	if multiplayer.has_multiplayer_peer() and not multiplayer.get_peers().is_empty():
+		_apply_flora_regrow.rpc(centre, radius)
+	return _regrow_flora_here(centre, radius)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _apply_flora_regrow(centre: Vector3, radius: float) -> void:
+	_regrow_flora_here(centre, radius)
+
+
+func _regrow_flora_here(centre: Vector3, radius: float) -> int:
+	var restored := 0
+	for field in get_tree().get_nodes_in_group(DamageHit.FIELD_GROUP):
+		if not (field is Node) or not DamageHit.in_same_world(self, field) \
+				or not field.has_method(&"restore_within"):
+			continue
+		restored += int(field.call(&"restore_within", centre, radius))
+	return restored
 
 
 func pickup_node(pickup_id: int) -> DroppedItem:
@@ -233,6 +379,9 @@ func override_local_look(look: Dictionary) -> void:
 
 
 func _open_home_screen() -> void:
+	if celestial_cycle != null and celestial_cycle.period_seconds > 0.0:
+		celestial_cycle.set_phase(
+			HOME_SUN_ADVANCE_SECONDS / celestial_cycle.period_seconds)
 	_home_screen = HomeScreen.new()
 	_home_screen.name = "HomeScreen"
 	_home_screen.frame = _spawn_transform(1)
@@ -248,6 +397,7 @@ func _begin_session() -> void:
 		# should begin at the authored noon rather than inherit however long the
 		# player spent in the menu. Joining clients receive this phase below.
 		celestial_cycle.set_phase(0.0)
+		celestial_cycle.set_day_index(0)
 		for peer_id in NetworkManager.players:
 			_spawn_player(int(peer_id), NetworkManager.get_player_metadata(int(peer_id)), _spawn_transform(int(peer_id)), true)
 	else:
@@ -266,7 +416,26 @@ func _begin_session() -> void:
 ##   [method OnlinePlayer.open_menu] has already done by the time this is called.
 func set_local_pause(paused: bool) -> void:
 	_locally_paused = paused
-	get_tree().paused = paused and NetworkManager.is_single_player
+	var freeze_simulation := paused and NetworkManager.is_single_player
+	if freeze_simulation == _simulation_frozen:
+		get_tree().paused = freeze_simulation
+		return
+	_simulation_frozen = freeze_simulation
+	if freeze_simulation:
+		_time_scale_before_pause = Engine.time_scale
+		if celestial_cycle != null:
+			celestial_cycle.set_time_paused(true)
+		# SceneTree pause stops nodes; zero time scale also freezes shader TIME,
+		# so wind, water, clouds, lava, and other material animation do not keep
+		# moving behind the translucent menu.
+		Engine.time_scale = 0.0
+		get_tree().paused = true
+		return
+
+	get_tree().paused = false
+	Engine.time_scale = _time_scale_before_pause
+	if celestial_cycle != null:
+		celestial_cycle.set_time_paused(false)
 
 
 ## Whether a menu is holding this player out of the world. Not the same question as
@@ -277,11 +446,11 @@ func locally_paused() -> bool:
 	return _locally_paused
 
 
-## Drop the session and go back to the home screen. Reached from the Settings tab's
-## LEAVE GAME; the menu raises it rather than doing it, because what a world is is
-## this node's business.
+## Drop the session and go back to the home screen. Reached from GameMenu's
+## HOLD LEAVE action; the menu raises it rather than doing it, because what a
+## world is is this node's business.
 func leave_session() -> void:
-	get_tree().paused = false
+	set_local_pause(false)
 	NetworkManager.leave_game()
 	if NetworkManager.menu_scene_path.is_empty():
 		queue_free()
@@ -321,7 +490,8 @@ func _request_drop_from_client(
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	if sender <= 1:
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
 		return
 	_server_drop(sender, source, index, expected_item_id, generation)
 
@@ -347,7 +517,8 @@ func _request_pickup_from_client(pickup_id: int, generation: int) -> void:
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	if sender <= 1:
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
 		return
 	_server_pickup(sender, pickup_id, generation)
 
@@ -579,7 +750,8 @@ func _upright_basis(forward: Vector3, up: Vector3) -> Basis:
 
 
 func _on_player_registered(peer_id: int, metadata: Dictionary) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() \
+			or NetworkManager.state != NetworkManager.SessionState.IN_GAME:
 		return
 	_spawn_player.rpc(peer_id, metadata, _spawn_transform(peer_id), true)
 
@@ -634,6 +806,8 @@ func _spawn_player(peer_id: int, metadata: Dictionary, at_transform: Transform3D
 func _despawn_player(peer_id: int) -> void:
 	var player := _spawned_players.get(peer_id) as OnlinePlayer
 	_spawned_players.erase(peer_id)
+	_respawn_sequence.erase(peer_id)
+	_sandbox_spawn_slots.erase(peer_id)
 	if is_instance_valid(player):
 		player.queue_free()
 
@@ -643,6 +817,9 @@ func _request_world_state() -> void:
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
+		return
 	var snapshots: Array = []
 	for peer_id in NetworkManager.players:
 		var id := int(peer_id)
@@ -658,6 +835,7 @@ func _request_world_state() -> void:
 			"worn": player.worn_items() if is_instance_valid(player) else PackedStringArray(),
 			"held": player.held_item() if is_instance_valid(player) else "",
 			"body": player.body_id() if is_instance_valid(player) else str(meta.get("body", CharacterDB.DEFAULT_BODY)),
+			"combat": player.combat_snapshot() if is_instance_valid(player) else {},
 		})
 	# A joining peer loaded this scene later than the host. Send the host's sky
 	# phase with the same snapshot so both see the same day rather than each
@@ -666,7 +844,8 @@ func _request_world_state() -> void:
 	# cleared away are as much world state as the sky is.
 	_receive_world_state.rpc_id(
 		sender, snapshots, celestial_cycle.phase(), pickup_snapshots(),
-		scar_snapshot(), flora_snapshot())
+		scar_snapshot(), flora_snapshot(), bigfoot_snapshot(),
+		celestial_cycle.day_index())
 
 
 @rpc("authority", "reliable")
@@ -675,12 +854,16 @@ func _receive_world_state(
 		day_phase := -1.0,
 		pickup_state: Array = [],
 		scar_state: Array = [],
-		flora_state: Dictionary = {}
+		flora_state: Dictionary = {},
+		boss_state: Dictionary = {},
+		day_number := 0
 	) -> void:
 	if float(day_phase) >= 0.0:
 		celestial_cycle.set_phase(float(day_phase))
+	celestial_cycle.set_day_index(int(day_number))
 	apply_scar_snapshot(scar_state)
 	apply_flora_snapshot(flora_state)
+	apply_bigfoot_snapshot(boss_state)
 	for snapshot_variant in snapshots:
 		if not snapshot_variant is Dictionary:
 			continue
@@ -700,6 +883,9 @@ func _receive_world_state(
 		if is_instance_valid(player):
 			player.apply_worn(snapshot.get("worn", PackedStringArray()))
 			player.apply_held(String(snapshot.get("held", "")))
+			var combat_state: Variant = snapshot.get("combat", null)
+			if combat_state is Dictionary:
+				player.apply_combat_snapshot(combat_state)
 	for pickup_variant in pickup_state:
 		if not pickup_variant is Dictionary:
 			continue
@@ -711,6 +897,8 @@ func _receive_world_state(
 
 
 func _spawn_transform(peer_id: int) -> Transform3D:
+	if _is_online_sandbox():
+		return _online_sandbox_spawn_transform(peer_id)
 	if _has_spawn_override and peer_id == multiplayer.get_unique_id():
 		return _spawn_override
 	var points := spawn_points.get_children()
@@ -718,3 +906,87 @@ func _spawn_transform(peer_id: int) -> Transform3D:
 		return Transform3D(Basis.IDENTITY, Vector3(0.0, 2.0, 0.0))
 	var index := posmod(peer_id - 1, points.size())
 	return (points[index] as Node3D).global_transform
+
+
+func _is_online_sandbox() -> bool:
+	return NetworkManager.state == NetworkManager.SessionState.IN_GAME \
+		and not NetworkManager.is_single_player \
+		and str(NetworkManager.session_options.get("mode", "")) == "sandbox"
+
+
+## A compact line across the first orbital marker's view plane. Slots alternate
+## right and left of the host (0, +1, -1, +2, -2...) so adding somebody never
+## moves a player who has already spawned.
+func _online_sandbox_spawn_transform(peer_id: int) -> Transform3D:
+	var anchor := _sandbox_spawn_anchor()
+	var centre_node := get_node_or_null("Planet") as Node3D
+	var centre := centre_node.global_position if centre_node != null \
+		else anchor.origin - anchor.basis.z
+	var anchor_basis := _planet_facing_basis(
+		anchor.origin, centre, anchor.basis.y, -anchor.basis.z)
+	var slot := _sandbox_spawn_slot(peer_id)
+	var lane := ceili(float(slot) * 0.5)
+	var side := 1.0 if slot % 2 == 1 else -1.0
+	var origin := anchor.origin + anchor_basis.x \
+		* (float(lane) * side * ONLINE_SANDBOX_SPAWN_SPACING)
+	var basis := _planet_facing_basis(
+		origin, centre, anchor_basis.y, -anchor_basis.z)
+	return Transform3D(basis, origin)
+
+
+func _sandbox_spawn_anchor() -> Transform3D:
+	if _has_spawn_override:
+		return _spawn_override
+	var points := spawn_points.get_children()
+	if not points.is_empty() and points[0] is Node3D:
+		return (points[0] as Node3D).global_transform
+	return Transform3D(Basis.IDENTITY, Vector3(0.0, 2.0, 0.0))
+
+
+func _sandbox_spawn_slot(peer_id: int) -> int:
+	if _sandbox_spawn_slots.has(peer_id):
+		return int(_sandbox_spawn_slots[peer_id])
+	var slot := 0
+	var occupied := _sandbox_spawn_slots.values()
+	while occupied.has(slot):
+		slot += 1
+	_sandbox_spawn_slots[peer_id] = slot
+	return slot
+
+
+## Keeps the body's -Z aimed at the planet while retaining a stable visual up
+## across the formation. The fallbacks also keep a stripped test world useful
+## when its anchor happens to sit at the nominal centre.
+func _planet_facing_basis(origin: Vector3, centre: Vector3, up_hint: Vector3,
+		forward_fallback: Vector3) -> Basis:
+	var forward := centre - origin
+	if forward.length_squared() < 0.0001:
+		forward = forward_fallback
+	if forward.length_squared() < 0.0001:
+		forward = Vector3.FORWARD
+	forward = forward.normalized()
+	up_hint -= forward * up_hint.dot(forward)
+	if up_hint.length_squared() < 0.0001:
+		var hint := Vector3.UP if absf(forward.y) < 0.9 else Vector3.RIGHT
+		up_hint = hint - forward * hint.dot(forward)
+	return _upright_basis(forward, up_hint.normalized())
+
+
+func bigfoot_snapshot() -> Dictionary:
+	for boss_variant: Variant in get_tree().get_nodes_in_group(&"bigfoot_boss"):
+		var boss := boss_variant as Node
+		if boss != null and DamageHit.in_same_world(self, boss) \
+				and boss.has_method(&"boss_snapshot"):
+			return boss.call(&"boss_snapshot") as Dictionary
+	return {}
+
+
+func apply_bigfoot_snapshot(wire: Dictionary) -> void:
+	if wire.is_empty():
+		return
+	for boss_variant: Variant in get_tree().get_nodes_in_group(&"bigfoot_boss"):
+		var boss := boss_variant as Node
+		if boss != null and DamageHit.in_same_world(self, boss) \
+				and boss.has_method(&"apply_boss_snapshot"):
+			boss.call(&"apply_boss_snapshot", wire)
+			return

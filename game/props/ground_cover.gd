@@ -193,6 +193,11 @@ const BROKEN := -1.0
 ## How dark a plant can get and still be standing. Short of black, so a burned
 ## survivor still reads as its own species rather than as a silhouette.
 const MAX_CHAR := 0.82
+## Damage tests take one up vector for a whole tile rather than one per plant.
+## Across a tile on a planet this size that is worth a fraction of a degree, and
+## this is the share of its own height a plant is allowed to lean by before the
+## tests stop trusting it.
+const UP_APPROXIMATION := 0.05
 ## How long the view-range setting has to hold still before the field is rebuilt
 ## around it.
 const REPLANT_SETTLE := 0.4
@@ -257,6 +262,18 @@ const TILE_BUDGET := 180
 const DETAIL_BANDS: Array[float] = [0.0, 0.0625, 0.125, 0.25, 0.5, 1.0]
 
 ## One square of ground and everything growing on it.
+## One damage volume reduced to what the per-plant loop needs, and put into this
+## field's own space. Built once per [method apply_damage] and read by every
+## stand the volume touches.
+class Sweep extends RefCounted:
+	var from := Vector3.ZERO
+	var along := Vector3.ZERO
+	var radius := 1.0
+	var to_world := Transform3D.IDENTITY
+	var into_local := Basis.IDENTITY
+	var centre := Vector3.ZERO
+
+
 class Tile extends RefCounted:
 	var cell: Vector3i
 	## Middle of the square in world metres, and how far the viewer is from it.
@@ -271,6 +288,17 @@ class Tile extends RefCounted:
 	var collisions: Array[StaticBody3D] = []
 	## What the thread produced, dropped once it has been uploaded.
 	var buffers: Array[PackedFloat32Array] = []
+	## What each stand is currently drawing, aligned with [member stands] and
+	## kept on this side of the rendering server. See [method _rows_of]: reading
+	## it back out of the MultiMesh instead costs half a millisecond of waiting
+	## per stand, whoever is asking and however few plants they are asking
+	## about, and a volume dragged along the ground asks tens of times a tick.
+	##
+	## Written only by [method _raise] and by the damage paths, both on the main
+	## thread, which is why this is not [member buffers]: that one is filled by
+	## a worker while the tile it belongs to may still be standing and taking
+	## hits.
+	var rows: Array[PackedFloat32Array] = []
 	## Where every plant of each species is rooted, in this node's own space,
 	## aligned with [member stands].
 	##
@@ -342,6 +370,12 @@ var _tile := 0.0
 var _grid: SphericalCoverGrid
 
 var _tiles := {}
+## The same tiles as a flat list, for the one caller that reads all of them
+## several times a second. Walking the dictionary means a hash lookup per tile,
+## and an ability offers its volume to every field on the planet — a few
+## thousand tiles between them — for every tick it lasts.
+var _tile_list: Array[Tile] = []
+var _tile_list_stale := true
 ## Session-local state over deterministic placement. Keys are tile cells, then
 ## species indices, then instance indices; the value is the ability damage that
 ## instance is carrying, or [constant BROKEN]. It deliberately survives ordinary
@@ -355,6 +389,10 @@ var _new_breaks := PackedInt32Array()
 ## per-tile rejection in [method apply_damage] so a beam level with a canopy is
 ## not discarded because the tile's centre is on the ground far below it.
 var _tallest := 0.0
+## Shortest species this field grows, by authored height. A volume that spares
+## anything above a given height can turn a field of nothing but trees away
+## whole, before a single tile of it is looked at.
+var _shortest := INF
 ## Stable tile keys rejected by the species' shared height band. This prevents a
 ## reef field from spending worker jobs proving that inland grassland is not
 ## eight metres under water (and grass from doing the inverse over open sea).
@@ -465,6 +503,7 @@ func _ready() -> void:
 		_glows.append(glow)
 		_reach = maxf(_reach, plant.draw_reach())
 		_tallest = maxf(_tallest, plant.height * (1.0 + plant.height_variation))
+		_shortest = minf(_shortest, plant.height)
 		growing += 1
 	_publish_wind()
 	_prepare_aerial_glow()
@@ -543,6 +582,8 @@ func _replant() -> void:
 			if body != null:
 				body.queue_free()
 	_tiles.clear()
+	_tile_list.clear()
+	_tile_list_stale = false
 	# A range change changes tile size, and therefore both cell and instance
 	# identity. Keeping the old overlay would hide unrelated plants in the new
 	# layout; this is the one streaming operation that intentionally resets it.
@@ -567,6 +608,7 @@ func _replant() -> void:
 				+ plant.steady_within)
 		_reach = maxf(_reach, plant.draw_reach())
 		_tallest = maxf(_tallest, plant.height * (1.0 + plant.height_variation))
+		_shortest = minf(_shortest, plant.height)
 	_since_survey = INF
 	_surveyed_at = Vector3.INF
 
@@ -649,10 +691,11 @@ func settling() -> int:
 func standing() -> Array[Transform3D]:
 	var found: Array[Transform3D] = []
 	for tile: Tile in _tiles.values():
-		for stand: MultiMeshInstance3D in tile.stands:
+		for species_index in tile.stands.size():
+			var stand := tile.stands[species_index] as MultiMeshInstance3D
 			if stand == null:
 				continue
-			var buffer := stand.multimesh.buffer
+			var buffer := _rows_of(tile, species_index, stand.multimesh)
 			for index in stand.multimesh.instance_count:
 				found.append(stand.global_transform
 					* _instance_transform(buffer, index))
@@ -675,7 +718,7 @@ func standing_by_species() -> Dictionary:
 			if stand == null or plant == null:
 				continue
 			var instances: Array = found[plant.resource_name]
-			var buffer := stand.multimesh.buffer
+			var buffer := _rows_of(tile, species_index, stand.multimesh)
 			for instance_index in stand.multimesh.instance_count:
 				instances.append(stand.global_transform
 					* _instance_transform(buffer, instance_index))
@@ -983,6 +1026,7 @@ func _survey(eye: Vector3) -> void:
 			if body != null:
 				body.queue_free()
 		_tiles.erase(cell)
+		_tile_list_stale = true
 
 
 func _survey_local(eye: Vector3, span: int) -> void:
@@ -1038,6 +1082,7 @@ func _want_cell(cell: Vector3i, eye: Vector3) -> void:
 		tile.slice = _next_slice
 		_next_slice = (_next_slice + 1) % DRESS_SLICES
 		_tiles[cell] = tile
+		_tile_list_stale = true
 	tile.away = eye.distance_to(tile.at)
 	# Coming closer earns a tile plants its distance had not. Re-sowing is not a
 	# rebuild: the finer band repeats the prefix it already grew and appends to
@@ -1166,6 +1211,8 @@ func _raise(tile: Tile) -> void:
 	tile.collisions.resize(species.size())
 	tile.roots.clear()
 	tile.roots.resize(species.size())
+	tile.rows.clear()
+	tile.rows.resize(species.size())
 	# Whatever pass this tile belongs to, it cannot wait for it: until it is
 	# dressed it is drawing every plant it holds and has no shadow or collision
 	# decision made about it.
@@ -1190,6 +1237,7 @@ func _raise(tile: Tile) -> void:
 		multimesh.instance_count = count
 		buffer = _apply_broken_instances(tile.cell, index, buffer)
 		multimesh.buffer = buffer
+		tile.rows[index] = buffer
 		tile.roots[index] = _roots_of(buffer, count)
 		multimesh.mesh = plant.near_mesh()
 		if stand == null:
@@ -1314,7 +1362,7 @@ func _dress_collision(tile: Tile, index: int, plant: PlantSpecies,
 	body.collision_layer = 1
 	body.collision_mask = 1
 	var multimesh := stand.multimesh
-	var buffer := multimesh.buffer
+	var buffer := _rows_of(tile, index, multimesh)
 	var mesh_shape := plant.mesh_collision_shape()
 	for plant_index in multimesh.instance_count:
 		if _is_broken(tile.cell, index, plant_index):
@@ -1412,11 +1460,12 @@ func resolve_flora_impact(collider: CollisionShape3D, impact_speed: float,
 		return {}
 
 	var multimesh := stand.multimesh
-	var buffer := multimesh.buffer
+	var buffer := _rows_of(tile, species_index, multimesh)
 	var stood := _instance_transform(buffer, instance_index)
 	var world_stood := stand.global_transform * stood
 	_mark_broken(cell, species_index, instance_index)
 	_hide_instance(buffer, instance_index)
+	tile.rows[species_index] = buffer
 	multimesh.buffer = buffer
 	collider.set_meta(IMPACT_BROKEN_META, true)
 	# Physics shapes cannot be changed while the server is flushing the
@@ -1524,23 +1573,37 @@ func _instance_height(buffer: PackedFloat32Array, instance_index: int,
 func apply_damage(hit: DamageHit) -> float:
 	if hit == null or _tiles.is_empty():
 		return 0.0
+	# Nothing here is in the band this volume touches. Worth its own line before
+	# the tile walk, and it is the whole reason a volume can be swept along the
+	# ground continuously: it turns away the grass fields, which hold most of the
+	# plants on the planet, without looking at a blade of it.
+	if hit.max_plant_height > 0.0 and _shortest > hit.max_plant_height:
+		return 0.0
+	if hit.min_plant_height > 0.0 and _tallest < hit.min_plant_height:
+		return 0.0
 	var absorbed := 0.0
-	var to_world := global_transform
+	var sweep := Sweep.new()
+	sweep.to_world = global_transform
+	var to_local := sweep.to_world.affine_inverse()
+	sweep.into_local = to_local.basis
+	sweep.from = to_local * hit.origin
+	sweep.along = to_local.basis * (hit.toward - hit.origin)
+	sweep.radius = hit.radius
 	var host := planet_host()
-	var centre := host.global_position if host != null else Vector3.ZERO
+	sweep.centre = host.global_position if host != null else Vector3.ZERO
 	var tile_bound := _tile * 0.71
-	# Walked by key rather than through `values()`, which builds an array of
-	# every tile in the field. A punch offers a volume to seventeen fields every
-	# tick, and that array was being allocated and thrown away each time.
 	# The volume reduced to a sphere, so a tile nowhere near it is turned away
 	# without the capsule arithmetic. Every field is offered every volume and
 	# between them they hold a few thousand streamed tiles, so this comparison
-	# runs more often than anything else an ability does.
+	# runs more often than anything else an ability does — which is also why it
+	# reads the flat list rather than looking every tile up by its cell.
 	var middle := (hit.origin + hit.toward) * 0.5
 	var gross := hit.extent() + tile_bound + _tallest
 	var gross_squared := gross * gross
-	for cell in _tiles:
-		var tile: Tile = _tiles[cell]
+	if _tile_list_stale:
+		_tile_list.assign(_tiles.values())
+		_tile_list_stale = false
+	for tile in _tile_list:
 		if tile.at.distance_squared_to(middle) >= gross_squared:
 			continue
 		if not hit.reaches(tile.at, tile_bound + _tallest):
@@ -1549,17 +1612,35 @@ func apply_damage(hit: DamageHit) -> float:
 			var plant := species[index] as PlantSpecies
 			if plant == null or not plant.takes_ability_damage():
 				continue
+			if hit.max_plant_height > 0.0 \
+					and plant.height > hit.max_plant_height:
+				continue
+			if plant.height < hit.min_plant_height:
+				continue
 			var stand := tile.stands[index] as MultiMeshInstance3D
 			if stand == null or not stand.visible:
 				continue
-			absorbed += _damage_stand(
-				hit, tile, index, plant, stand, to_world, centre)
+			# Asked again with this species' own height in place of the field's
+			# tallest. The tile above is admitted because a twenty-five metre
+			# tree rooted on it could reach the volume; that says nothing about
+			# the thousand blades of grass sharing the tile, and the grass is
+			# what makes the loop below long.
+			if not hit.reaches(tile.at, tile_bound + _standing_height(plant)):
+				continue
+			absorbed += _damage_stand(hit, sweep, tile, index, plant, stand)
 	return absorbed
 
 
-func _damage_stand(hit: DamageHit, tile: Tile, index: int, plant: PlantSpecies,
-		stand: MultiMeshInstance3D, to_world: Transform3D,
-		centre: Vector3) -> float:
+## Tallest any plant of this species grows, which is the only part of it the
+## rejection tests need to know.
+func _standing_height(plant: PlantSpecies) -> float:
+	return plant.height * (1.0 + plant.height_variation)
+
+
+func _damage_stand(hit: DamageHit, sweep: Sweep, tile: Tile, index: int,
+		plant: PlantSpecies, stand: MultiMeshInstance3D) -> float:
+	var to_world := sweep.to_world
+	var centre := sweep.centre
 	var multimesh := stand.multimesh
 	var showing := multimesh.visible_instance_count
 	if showing < 0:
@@ -1570,70 +1651,200 @@ func _damage_stand(hit: DamageHit, tile: Tile, index: int, plant: PlantSpecies,
 	showing = mini(showing, roots.size())
 	if showing <= 0:
 		return 0.0
-	# The volume's axis taken apart, so the rejection below is arithmetic on
-	# floats rather than a method call and a handful of temporaries per plant.
-	# This loop is the whole cost of an ability: a beam is offered thousands of
+	# This loop is the whole cost of an ability: a volume is offered thousands of
 	# plants and cuts a dozen, so what matters is not what happens to the dozen
-	# but how cheaply the rest are turned away.
-	var from := hit.origin
-	var along := hit.toward - from
-	var span := along.length_squared()
-	# Nothing rooted further than this from the axis can have any part of it
-	# inside the volume however tall it turns out to be, which is what lets the
-	# height, the up vector and both share tests wait until a plant is a real
-	# candidate. The bound is the one the per-tile test above already trusts.
-	var reach := hit.radius + plant.height * (1.0 + plant.height_variation)
+	# but how cheaply the rest are turned away. Everything in it is in this
+	# node's own space, which is the space the roots are already cached in —
+	# three vectors are brought down to it instead of a thousand roots being
+	# lifted out of it.
+	var from := sweep.from
+	var along := sweep.along
+	# A plant is a standing line, not a point, so a volume level with a canopy is
+	# over the root by the whole height of the tree. This used to be answered by
+	# growing the radius by that height, which on a jungle field of twenty-five
+	# metre trees made a six metre shock consider everything rooted within
+	# thirty-one metres of it: forty-seven thousand candidates for a hundred
+	# felled trees. Every plant on a tile stands along the same up, so the gap
+	# separates instead into a horizontal part, which no amount of height can
+	# close, and a vertical one, which is the only part height helps with.
+	var standing := (sweep.into_local * (tile.at - centre)).normalized()
+	var stem := _standing_height(plant)
+	var rise := along.dot(standing)
+	var along_flat := along - standing * rise
+	var flat_span := along_flat.length_squared()
+	# The tile's single up is a chord across a curved surface, so a plant at its
+	# corner leans a fraction of a degree away from it. Widened by that much of
+	# its own height rather than trusting the approximation exactly.
+	var reach := sweep.radius + stem * UP_APPROXIMATION
 	var reach_squared := reach * reach
+	var ceiling := stem + reach
 	# Which plants are worth decoding, found from the cached roots alone. The
 	# buffer behind them is a copy fetched back through the rendering server —
 	# tens of microseconds a stand — and a volume that turns out to touch
 	# nothing here must not pay for one.
 	var candidates := PackedInt32Array()
-	for instance_index in showing:
-		var offset := to_world * roots[instance_index] - from
-		var closest := offset
-		if span > 0.000001:
-			closest = offset - along * clampf(offset.dot(along) / span, 0.0, 1.0)
-		if closest.length_squared() < reach_squared:
+	if stem * 2.0 <= sweep.radius:
+		# Ground cover, where the height a plant could reach up into the volume
+		# is a fraction of the volume's own radius. Splitting the gap into its
+		# horizontal and vertical parts buys nothing here and the plain sphere
+		# against the axis is half the arithmetic — which is the whole of the
+		# difference, because this is the case that runs hundreds of thousands
+		# of times when a shock crosses a meadow.
+		var reach_flat := sweep.radius + stem
+		var flat_squared := reach_flat * reach_flat
+		var span := along.length_squared()
+		for instance_index in showing:
+			var offset := roots[instance_index] - from
+			var closest := offset
+			if span > 0.000001:
+				closest = offset - along * clampf(
+					offset.dot(along) / span, 0.0, 1.0)
+			if closest.length_squared() < flat_squared:
+				candidates.append(instance_index)
+	else:
+		for instance_index in showing:
+			var offset := roots[instance_index] - from
+			var offset_up := offset.dot(standing)
+			var offset_flat := offset - standing * offset_up
+			var share := 0.0
+			if flat_span > 0.000001:
+				share = clampf(offset_flat.dot(along_flat) / flat_span, 0.0, 1.0)
+			if (along_flat * share - offset_flat).length_squared() > reach_squared:
+				continue
+			# How high the axis runs over this root across its length. Out of
+			# reach under the plant's feet or clear over its head either way.
+			var low := minf(-offset_up, rise - offset_up)
+			if low > ceiling:
+				continue
+			var high := maxf(-offset_up, rise - offset_up)
+			if high < -reach:
+				continue
 			candidates.append(instance_index)
 	if candidates.is_empty():
 		return 0.0
 
-	var buffer := multimesh.buffer
+	var buffer := _rows_of(tile, index, multimesh)
+	# Everything the loop below needs from the species and from this stand's
+	# ledger, fetched once. Read per plant, these were property lookups on a
+	# Resource and two nested dictionary walks for every blade of grass standing
+	# under a shock, and a wide volume over jungle floor offers tens of
+	# thousands of those.
+	var authored := plant.authored_height()
+	var base_health := maxf(plant.health, 0.0)
+	var per_metre := maxf(plant.health_per_metre, 0.0)
+	var absorbs := plant.damage_taken(1.0)
+	var ledger := _ledger_for(tile.cell, index)
+	var span := along.length_squared()
+	var radius_squared := sweep.radius * sweep.radius
+	var falling := hit.falloff > 0.0
+	# A flat-ended cylinder is not a capsule past its caps, so the arithmetic
+	# below cannot answer for one. Authored waves are rare and are left to the
+	# general form.
+	var capsule := hit.shape == DamageHit.Shape.CAPSULE
+	var bursts := hit.plant_break_effects
 	var absorbed := 0.0
 	var touched := false
 	for instance_index in candidates:
-		var root := to_world * roots[instance_index]
-		var tall := _instance_height(buffer, instance_index, plant)
-		var up := (root - centre).normalized()
+		var root := roots[instance_index]
+		var row := instance_index * STRIDE
+		var tall := Vector3(buffer[row + 1], buffer[row + 5],
+			buffer[row + 9]).length() * authored
 		# Both ends of the plant. A beam level with a canopy is over the root by
 		# the whole height of the tree, and testing the root alone made tall
 		# species immune to anything not aimed at their feet.
-		var share := maxf(hit.share_at(root), hit.share_at(root + up * tall))
+		var share := 0.0
+		if capsule:
+			var offset := root - from
+			var foot := offset - along * (clampf(offset.dot(along) / span,
+				0.0, 1.0) if span > 0.000001 else 0.0)
+			var top := offset + standing * tall
+			var head := top - along * (clampf(top.dot(along) / span,
+				0.0, 1.0) if span > 0.000001 else 0.0)
+			var nearest := minf(foot.length_squared(), head.length_squared())
+			if nearest < radius_squared:
+				share = 1.0 if not falling else lerpf(1.0, 1.0 - hit.falloff,
+					sqrt(nearest) / sweep.radius)
+		else:
+			var world_root := to_world * root
+			var world_up := (world_root - centre).normalized()
+			share = maxf(hit.share_at(world_root),
+				hit.share_at(world_root + world_up * tall))
 		if share <= 0.0:
 			continue
-		var carried := _damage_carried(tile.cell, index, instance_index)
+		var carried := float(ledger.get(instance_index, 0.0))
 		if carried == BROKEN:
 			continue
-		var taken := plant.damage_taken(hit.amount * share)
+		var taken := hit.amount * share * absorbs
 		if taken <= 0.0:
 			continue
 		absorbed += taken
 		touched = true
 		carried += taken
-		var health := plant.health_for(tall)
+		var health := base_health + tall * per_metre
 		if carried < health:
-			_record_damage(tile.cell, index, instance_index, carried)
-			_char_instance(buffer, instance_index, carried / maxf(health, 0.001))
+			ledger[instance_index] = carried
+			# _char_instance, inlined: this is the branch nearly every plant
+			# under a wide volume takes, and all it comes to is one array write.
+			buffer[row + COLOR + 3] = 1.0 - clampf(
+				carried / maxf(health, 0.001), 0.0, 1.0) * MAX_CHAR
 			continue
 		_mark_broken(tile.cell, index, instance_index)
 		_hide_instance(buffer, instance_index)
 		_disable_collider(tile, index, instance_index)
-		_play_break_effect(root, up, plant.impact_threshold(tall), tall,
+		if not bursts:
+			continue
+		var world_root := to_world * root
+		_play_break_effect(world_root, (world_root - centre).normalized(),
+			plant.impact_threshold(tall), tall,
 			_break_tint(plant, buffer, instance_index), plant.break_effect)
 	if touched:
+		# Both sides, and this one first: writing an element of a buffer the
+		# tile is also holding copies the whole stand rather than editing it,
+		# so putting it back is what keeps the next hit's edits in place.
+		tile.rows[index] = buffer
 		multimesh.buffer = buffer
 	return absorbed
+
+
+## What one stand is drawing, without asking the rendering server for it.
+##
+## [member MultiMesh.buffer]'s getter is a round trip: it has to catch up with
+## the render thread before it can answer, and that wait costs about the same
+## whether the stand holds nine plants or nine thousand — half a millisecond a
+## call, measured against this world. A volume swept along the ground overlaps
+## tens of stands, so a single tick of a meteor charge spent twenty
+## milliseconds doing nothing but waiting, and the fields holding the fewest
+## plants were the worst of it: a colony of three trees per tile pays the same
+## half millisecond as a tile of five thousand blades of grass.
+##
+## The setter has no such cost — it queues the upload and returns — so writes
+## stay as they were and only the reads come from here.
+func _rows_of(tile: Tile, index: int,
+		multimesh: MultiMesh) -> PackedFloat32Array:
+	if index < tile.rows.size():
+		var kept: PackedFloat32Array = tile.rows[index]
+		# A stand raised before this tile last recorded its rows, or one whose
+		# instance count has moved on, is read back once and remembered.
+		if kept.size() == multimesh.instance_count * STRIDE:
+			return kept
+	var read := multimesh.buffer
+	if index < tile.rows.size():
+		tile.rows[index] = read
+	return read
+
+
+## The damage ledger for one stand, installed if nothing has touched it before.
+## Handed out whole so that the loop above can read and write it directly:
+## reaching every plant's entry down through two nested dictionaries was a
+## measurable share of what a wide volume over dense cover cost.
+func _ledger_for(cell: Vector3i, species_index: int) -> Dictionary:
+	var per_species: Dictionary = _instance_damage.get(cell, {})
+	if not _instance_damage.has(cell):
+		_instance_damage[cell] = per_species
+	var indices: Dictionary = per_species.get(species_index, {})
+	if not per_species.has(species_index):
+		per_species[species_index] = indices
+	return indices
 
 
 ## Turns off the streamed shape belonging to one destroyed instance, when this
@@ -1715,6 +1926,77 @@ func apply_broken_keys(keys: PackedInt32Array) -> void:
 		_hide_broken_now(cell, species_index, instance_index)
 
 
+## Regrows everything this field lost inside a sphere, and reports how many
+## plants came back.
+##
+## Damage is deliberately permanent for the session — walking away and back does
+## not un-burn a bush — so this is the one path that undoes it, for an encounter
+## that resets the ground it was fought over. It works in whole tiles: the ledger
+## records which instance was hit, not where it stood, and a tile is thirty-odd
+## metres against an arena of a hundred. Standing tiles are retired rather than
+## repaired, because a fresh sow with an empty ledger restores the plants, their
+## charring and their collision in one step and is the same code every streamed
+## tile already runs.
+func restore_within(centre: Vector3, radius: float) -> int:
+	if _instance_damage.is_empty() or radius <= 0.0 or not centre.is_finite():
+		return 0
+	var reach := radius + _tile * 0.71
+	var reach_squared := reach * reach
+	var restored := 0
+	var restored_cells := {}
+	for cell_key: Variant in _instance_damage.keys():
+		var cell: Vector3i = cell_key
+		if _ground_point(cell).distance_squared_to(centre) > reach_squared:
+			continue
+		var per_species: Dictionary = _instance_damage[cell]
+		for species_key: Variant in per_species:
+			restored += (per_species[species_key] as Dictionary).size()
+		_instance_damage.erase(cell)
+		restored_cells[cell] = true
+		_retire(cell)
+	if restored > 0:
+		# A break can still be waiting for the world's next reconciliation pass
+		# when an encounter resets. Broadcasting that stale key after clearing
+		# the ledger would hide the plant again on every client (and on any peer
+		# applying the confirmation locally), undoing the regrow.
+		var pending := PackedInt32Array()
+		var entry := 0
+		while entry + 4 < _new_breaks.size():
+			var pending_cell := Vector3i(
+				_new_breaks[entry], _new_breaks[entry + 1],
+				_new_breaks[entry + 2])
+			if not restored_cells.has(pending_cell):
+				pending.append_array(PackedInt32Array([
+					_new_breaks[entry], _new_breaks[entry + 1],
+					_new_breaks[entry + 2], _new_breaks[entry + 3],
+					_new_breaks[entry + 4]]))
+			entry += 5
+		_new_breaks = pending
+		# A survey is normally earned by the viewer walking onto new ground, and
+		# nobody has to be walking for this to happen — the plants would sit
+		# missing until someone did. This is the same nudge a range change gives.
+		_since_survey = INF
+		_surveyed_at = Vector3.INF
+	return restored
+
+
+## Drops a tile so the streamer sows it again from scratch. The plants are
+## placed deterministically, so what comes back stands exactly where it did.
+func _retire(cell: Vector3i) -> void:
+	var tile := _tiles.get(cell) as Tile
+	if tile == null:
+		return
+	for stand in tile.stands:
+		if stand != null:
+			stand.queue_free()
+	for body in tile.collisions:
+		if body != null:
+			body.queue_free()
+	_tiles.erase(cell)
+	_tile_list_stale = true
+	_dispatch_needed = true
+
+
 func _hide_broken_now(cell: Vector3i, species_index: int,
 		instance_index: int) -> void:
 	var tile := _tiles.get(cell) as Tile
@@ -1723,8 +2005,9 @@ func _hide_broken_now(cell: Vector3i, species_index: int,
 	var stand := tile.stands[species_index] as MultiMeshInstance3D
 	if stand == null or instance_index >= stand.multimesh.instance_count:
 		return
-	var buffer := stand.multimesh.buffer
+	var buffer := _rows_of(tile, species_index, stand.multimesh)
 	_hide_instance(buffer, instance_index)
+	tile.rows[species_index] = buffer
 	stand.multimesh.buffer = buffer
 	_disable_collider(tile, species_index, instance_index)
 
@@ -2084,7 +2367,9 @@ func _scatter(species_index: int, plant: PlantSpecies, patch: FastNoiseLite,
 				(Basis(up, rng.randf() * TAU) * tipped)
 					.scaled(Vector3(plant.width_scale, 1.0, plant.width_scale)
 						* plant.scale_for(tall)),
-				up * (_radius + ground - plant.ground_sink))
+				# The same buried origin reaches the MultiMesh and its streamed
+				# collision, so no invisible shelf remains below a sunk rock.
+				up * (_radius + ground - plant.ground_sink_for(tall)))
 			# Night-emissive plants cast light even when they do not use the
 			# separate daytime glowing-patch channel. This is the path coral
 			# was missing: its mesh emitted, but no point was ever offered to

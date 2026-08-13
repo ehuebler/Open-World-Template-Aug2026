@@ -212,7 +212,8 @@ static func apply_effect(shooter: OnlinePlayer, id: String, left_eye: Vector3,
 
 	var beam := DamageHit.beam(from, at, radius, per_tick)
 	beam.ability_id = id
-	beam.source_peer = shooter.peer_id
+	beam.faction = DamageHit.Faction.PLAYER
+	beam.set_source(shooter, shooter.peer_id)
 	DamageHit.apply_to_world(shooter, beam)
 
 	if not landed:
@@ -220,21 +221,22 @@ static func apply_effect(shooter: OnlinePlayer, id: String, left_eye: Vector3,
 	var burst := DamageHit.area(at, IMPACT_RADIUS,
 		per_tick * IMPACT_SHARE, 1.0)
 	burst.ability_id = id
-	burst.source_peer = shooter.peer_id
+	burst.faction = DamageHit.Faction.PLAYER
+	burst.set_source(shooter, shooter.peer_id)
 	DamageHit.apply_to_world(shooter, burst)
 
 	var world_planet := shooter.planet()
-	if world_planet == null or world_planet.scorches == null:
-		return
 	# Laid along the face that was hit rather than along the planet's up, so a
-	# burn on the side of a boulder is a round mark on the boulder instead of a
-	# stripe painted down it. The normal is re-found rather than sent: it is
-	# only ever used for a decal, and a peer's own colliders are the ones its
-	# own decal has to sit on.
-	var facing := world_planet.up_at(at)
+	# burn and its dust on the side of a boulder stay on that face instead of
+	# becoming a stripe and a vertical plume. The normal is re-found rather than
+	# sent: each peer's own colliders are the ones its effects have to sit on.
+	var facing := world_planet.up_at(at) if world_planet != null else Vector3.UP
 	var found := _surface(shooter, from, at + (at - from).normalized() * 0.3)
 	if not found.is_empty():
 		var normal: Vector3 = found["normal"]
 		if normal.length_squared() > 0.5:
 			facing = normal
+	shooter.play_laser_impact_dust(at, facing, true)
+	if world_planet == null or world_planet.scorches == null:
+		return
 	world_planet.scorches.scorch(at, facing, SCORCH_RADIUS, 0.85)

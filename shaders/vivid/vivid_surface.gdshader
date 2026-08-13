@@ -78,6 +78,15 @@ uniform float region_sheen : hint_range(0.0, 2.0) = 0.35;
 uniform float region_rim : hint_range(0.0, 1.0) = 0.4;
 group_uniforms;
 
+group_uniforms Camera_Rim;
+// Optional Layer Weight/Color Ramp equivalent for character silhouettes.
+// Disabled by default so the shared surface shader does not outline props.
+uniform vec3 camera_rim_color : source_color = vec3(0.0);
+uniform float camera_rim_energy : hint_range(0.0, 8.0) = 0.0;
+uniform float camera_rim_dark : hint_range(0.0, 1.0) = 0.68;
+uniform float camera_rim_light : hint_range(0.0, 1.0) = 0.84;
+group_uniforms;
+
 group_uniforms Emission;
 uniform vec3 emission_color : source_color = vec3(0.0, 0.0, 0.0);
 uniform float emission_energy : hint_range(0.0, 8.0) = 0.0;
@@ -179,7 +188,10 @@ void fragment() {
 			* texture_relief * 6.0 * detail_fade);
 	}
 
-	float fresnel = pow(1.0 - clamp(dot(shaped, view), 0.0, 1.0), 4.0);
+	float camera_facing = 1.0 - clamp(dot(shaped, view), 0.0, 1.0);
+	float fresnel = pow(camera_facing, 4.0);
+	float camera_rim = vivid_camera_rim(
+		shaped, view, camera_rim_dark, camera_rim_light);
 
 	ALBEDO = clamp(albedo, vec3(0.0), vec3(1.0));
 	NORMAL = view_normal;
@@ -205,5 +217,6 @@ void fragment() {
 	}
 	EMISSION = emission_color * emission_energy
 		+ region_color * fresnel * region_sheen * region.y * 0.5
+		+ camera_rim_color * camera_rim_energy * camera_rim
 		+ night_emission;
 }

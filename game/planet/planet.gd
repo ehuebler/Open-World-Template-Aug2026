@@ -27,6 +27,9 @@ extends Node3D
 const SURFACE_MATERIAL := preload("res://game/planet/planet_surface.tres")
 const ATMOSPHERE_MATERIAL := preload("res://game/planet/planet_atmosphere.tres")
 const CLOUD_MATERIAL := preload("res://game/planet/planet_clouds.tres")
+## Terrain occupies visual layer two so its own emissive-bounce light pool can
+## exclude the emitter while still reaching ordinary layer-one world objects.
+const TERRAIN_RENDER_LAYER := 1 << 1
 
 ## Outward normal, then the u and v axes of each cube face's [-1, 1] square.
 ## u cross v equals the normal on every face, so one winding order serves all six.
@@ -1311,6 +1314,7 @@ func _attach(chunk: Chunk) -> void:
 	var instance := MeshInstance3D.new()
 	instance.mesh = mesh
 	instance.material_override = SURFACE_MATERIAL
+	instance.layers = TERRAIN_RENDER_LAYER
 	# Vertices are stored around the chunk's own origin, so a chunk 8 km from the
 	# planet's centre still has small coordinates and a tight bounding box.
 	instance.position = chunk.origin

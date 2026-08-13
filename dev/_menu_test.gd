@@ -22,6 +22,7 @@ var _saved_players: Dictionary
 var _saved_state: int
 var _saved_single_player := false
 var _saved_host := false
+var _saved_time_scale := 1.0
 
 
 func _ready() -> void:
@@ -31,6 +32,7 @@ func _ready() -> void:
 	_saved_state = int(NetworkManager.state)
 	_saved_single_player = NetworkManager.is_single_player
 	_saved_host = NetworkManager.is_host
+	_saved_time_scale = Engine.time_scale
 
 	# Icon rendering is not under test. Supplying process-local placeholders keeps
 	# the dummy renderer away from material-instance APIs in headless runs.
@@ -52,6 +54,9 @@ func _ready() -> void:
 		_expect(false, "world spawns a local player")
 		await _finish()
 		return
+	_expect(_world.celestial_cycle != null
+		and _world.celestial_cycle.phase() < 0.01,
+		"gameplay resets the home-screen sunset to full daylight")
 	_player.display_name = "Menu Harness"
 
 	await _run()
@@ -71,6 +76,7 @@ func _run() -> void:
 	await _check_apparel(menu)
 	await _check_items_and_abilities(menu)
 	await _check_data_settings_and_admin(menu)
+	await _check_graphics_toggle_rows(menu)
 	await _check_isolated_leave_hold()
 	await _check_drop_round_trip(menu)
 
@@ -81,16 +87,30 @@ func _check_open_and_close_policy() -> void:
 	var menu := _menu()
 	_expect(menu != null, "Tab opens GameMenu")
 	if menu != null:
-		_expect(menu.current_tab() == GameMenu.Tab.ITEMS,
-			"Tab opens the canonical Items page")
+		_expect(menu.current_tab() == GameMenu.Tab.HERO,
+			"Tab opens the Hero page")
 	_expect(get_tree().paused, "single-player world pauses while menu is open")
 	_expect(_world.locally_paused(), "world records the local menu pause")
 	_expect(not _player.controls_enabled, "menu disables player controls")
 	_expect(Input.mouse_mode == Input.MOUSE_MODE_VISIBLE,
 		"menu releases a visible mouse")
+	var paused_phase := _world.celestial_cycle.phase()
+	_world._flora_confirm_left = 3.0
+	await _wait_frames(8)
+	_expect(is_zero_approx(Engine.time_scale)
+		and not _world.can_process()
+		and not _player.can_process()
+		and not _world.celestial_cycle.is_processing(),
+		"single-player menu freezes inherited simulation and the real-time sun")
+	_expect(is_equal_approx(_world.celestial_cycle.phase(), paused_phase)
+		and is_equal_approx(_world._flora_confirm_left, 3.0),
+		"single-player menu advances no celestial or world timer time")
 	if menu != null:
+		var shell := menu.find_child("InsetMenuShell", true, false) as Control
 		var background := menu.find_child(
 			"MenuBackground", true, false) as TextureRect
+		var outer_border := menu.find_child(
+			"MenuBackgroundBorder", true, false) as RedGlowPanel
 		var content := menu.find_child("ContentFrame", true, false) as Control
 		var selector := menu.find_child("BottomSelector", true, false) as Control
 		var hero_tab := menu.find_child("TabHero", true, false) as Control
@@ -101,10 +121,35 @@ func _check_open_and_close_policy() -> void:
 			"SettingsAction", true, false) as Button
 		var leave_button := menu.find_child(
 			"LeaveAction", true, false) as HoldActionButton
+		var viewport_rect := get_viewport().get_visible_rect()
+		var shell_rect := shell.get_global_rect() if shell != null else Rect2()
+		var edge_gaps := Vector4(
+			shell_rect.position.x - viewport_rect.position.x,
+			shell_rect.position.y - viewport_rect.position.y,
+			viewport_rect.end.x - shell_rect.end.x,
+			viewport_rect.end.y - shell_rect.end.y
+		)
+		_expect(shell != null and edge_gaps.x >= GameMenu.EDGE_GAP - 1.0
+			and edge_gaps.y >= GameMenu.EDGE_GAP - 1.0
+			and edge_gaps.z >= GameMenu.EDGE_GAP - 1.0
+			and edge_gaps.w >= GameMenu.EDGE_GAP - 1.0,
+			"Tab menu leaves the live world visible around every edge")
 		_expect(background != null
 			and background.texture == GameMenu.MENU_BACKGROUND
-			and background.stretch_mode == TextureRect.STRETCH_SCALE,
-			"menu background fits the viewport without cover-cropping")
+			and background.stretch_mode == TextureRect.STRETCH_SCALE
+			and background.get_global_rect().position.distance_to(
+				shell_rect.position) <= 1.0
+			and background.get_global_rect().size.distance_to(
+				shell_rect.size) <= 1.0,
+			"menu background fits the inset shell without cover-cropping")
+		_expect(outer_border != null
+			and outer_border.border_color.is_equal_approx(
+				Color(GameMenu.GREEN, 0.98))
+			and outer_border.get_global_rect().position.distance_to(
+				shell_rect.position) <= 1.0
+			and outer_border.get_global_rect().size.distance_to(
+				shell_rect.size) <= 1.0,
+			"Tab menu draws a green border around UI Background 2")
 		_expect(content != null and actions != null
 			and actions.get_global_rect().position.y
 				>= content.get_global_rect().end.y,
@@ -156,6 +201,9 @@ func _check_open_and_close_policy() -> void:
 	_expect(_menu() == null, "Tab closes the open menu")
 	_expect(not get_tree().paused and not _world.locally_paused(),
 		"Tab close resumes the single-player world")
+	_expect(is_equal_approx(Engine.time_scale, _saved_time_scale)
+		and _world.celestial_cycle.is_processing(),
+		"Tab close restores shader time and the celestial clock")
 	_expect(_player.controls_enabled, "Tab close restores player controls")
 	_expect_captured_mouse("Tab close captures the mouse")
 
@@ -164,11 +212,32 @@ func _check_open_and_close_policy() -> void:
 	menu = _menu()
 	_expect(menu != null and menu.current_tab() == GameMenu.Tab.SETTINGS,
 		"Escape opens directly on Settings")
+	_expect(get_tree().paused and is_zero_approx(Engine.time_scale)
+		and not _world.can_process(),
+		"Escape freezes the complete single-player simulation")
+	var escape_shell := (
+		menu.find_child("InsetMenuShell", true, false) as Control
+		if menu != null else null
+	)
+	var escape_rect := escape_shell.get_global_rect() if escape_shell != null else Rect2()
+	var escape_viewport_rect := get_viewport().get_visible_rect()
+	_expect(escape_shell != null
+		and escape_rect.position.x - escape_viewport_rect.position.x
+			>= GameMenu.EDGE_GAP - 1.0
+		and escape_rect.position.y - escape_viewport_rect.position.y
+			>= GameMenu.EDGE_GAP - 1.0
+		and escape_viewport_rect.end.x - escape_rect.end.x
+			>= GameMenu.EDGE_GAP - 1.0
+		and escape_viewport_rect.end.y - escape_rect.end.y
+			>= GameMenu.EDGE_GAP - 1.0,
+		"Escape menu leaves the live world visible around every edge")
 	await _tap_action(&"pause")
 	await _wait_frames(4)
 	_expect(_menu() == null, "Escape closes the open menu")
 	_expect(not get_tree().paused and _player.controls_enabled,
 		"Escape close restores pause and control policy")
+	_expect(is_equal_approx(Engine.time_scale, _saved_time_scale),
+		"Escape close restores simulation time")
 
 
 func _check_hero(menu: GameMenu) -> void:
@@ -513,10 +582,14 @@ func _check_data_settings_and_admin(menu: GameMenu) -> void:
 	if settings_action != null:
 		settings_action.pressed.emit()
 	await _wait_frames(3)
+	var settings_panel := _active_page(menu) as SettingsPanel
 	_expect(menu.current_tab() == GameMenu.Tab.SETTINGS
-		and _active_page(menu) is SettingsPanel
-		and _active_page(menu).name == "InGameSettings",
+		and settings_panel != null
+		and settings_panel.name == "InGameSettings",
 		"side SettingsAction routes to in-game Settings")
+	_expect(settings_panel != null
+		and _panel_button(settings_panel, "LEAVE GAME") == null,
+		"in-game Settings omits the redundant Leave Game action")
 	await _capture("menu_settings_red")
 
 	menu.show_tab(GameMenu.Tab.ADMIN)
@@ -525,6 +598,123 @@ func _check_data_settings_and_admin(menu: GameMenu) -> void:
 	_expect(blank != null and blank.name == "AdminBlank"
 		and blank.get_child_count() == 0 and blank.get_script() == null,
 		"AdminBlank is a truly blank Control")
+
+
+## The two atmosphere toggles on the shared Display page.
+##
+## Driven through the rows a player actually presses rather than through
+## [GameSettingsManager], because the whole risk with a new setting is the wiring
+## between the two: a row that reads the wrong key shows the right word and does
+## nothing, and a row that writes the wrong one changes something else. Pressing
+## the button and then asking the manager what it now holds is the only check that
+## covers the join.
+##
+## The compositor is asked as well where the world has one. It is what turns "the
+## setting was written" into "the effect went off", which are not the same claim
+## and have failed apart before in this project — see the render distance, which is
+## applied by the planet rather than by the manager for the same reason.
+func _check_graphics_toggle_rows(menu: GameMenu) -> void:
+	menu.show_tab(GameMenu.Tab.SETTINGS)
+	await _wait_frames(3)
+	var panel := _active_page(menu) as SettingsPanel
+	if not _expect(panel != null, "Settings routes to the shared SettingsPanel"):
+		return
+	# Display is the first section and is where both rows live. Asked for
+	# explicitly rather than assumed, so this does not quietly start checking
+	# whatever section a previous row left open.
+	panel.show_section(0)
+	await _wait_frames(3)
+
+	var rays_row := _display_toggle(panel, "God rays")
+	var air_row := _display_toggle(panel, "Atmospheric scattering")
+	_expect(rays_row != null, "Display page offers a named God rays row")
+	_expect(air_row != null, "Display page offers a named Atmospheric scattering row")
+	if rays_row == null or air_row == null:
+		return
+	_expect(rays_row.button_pressed and rays_row.text == "ON",
+		"the God rays row opens showing the saved ON state")
+	_expect(air_row.button_pressed and air_row.text == "ON",
+		"the Atmospheric scattering row opens showing the saved ON state")
+
+	var effect := _god_rays_effect()
+	_expect(effect != null, "the loaded world carries a god rays compositor effect")
+
+	rays_row.button_pressed = false
+	await _wait_frames(2)
+	_expect(SettingsManager.get_setting(&"graphics", &"god_rays", true) == false,
+		"pressing the God rays row writes the setting off")
+	_expect(rays_row.text == "OFF", "the God rays row relabels itself when pressed")
+	_expect(effect == null or not effect.enabled,
+		"switching God rays off disables the compositor effect live")
+
+	air_row.button_pressed = false
+	await _wait_frames(2)
+	_expect(SettingsManager.get_setting(
+		&"graphics", &"atmospheric_scattering", true) == false,
+		"pressing the Atmospheric scattering row writes the setting off")
+	# Each row writes only its own key. Two toggles added together is exactly the
+	# shape of mistake where both end up pointing at the same one.
+	_expect(SettingsManager.get_setting(&"graphics", &"god_rays", true) == false,
+		"the scattering row leaves the God rays setting where it was")
+
+	# Reset rebuilds the whole panel, so the rows are looked up again rather than
+	# reused: the old Buttons have been freed by the time this returns.
+	var reset := _panel_button(panel, "RESET DEFAULTS")
+	if not _expect(reset != null, "the Display page offers RESET DEFAULTS"):
+		return
+	reset.pressed.emit()
+	await _wait_frames(4)
+	panel = _active_page(menu) as SettingsPanel
+	if panel != null:
+		panel.show_section(0)
+		await _wait_frames(3)
+	_expect(SettingsManager.get_setting(&"graphics", &"god_rays", false) == true
+		and SettingsManager.get_setting(
+			&"graphics", &"atmospheric_scattering", false) == true,
+		"resetting defaults returns both effects to on")
+	_expect(effect == null or effect.enabled,
+		"resetting defaults re-enables the compositor effect")
+	var rebuilt := _display_toggle(panel, "God rays") if panel != null else null
+	_expect(rebuilt != null and rebuilt.button_pressed and rebuilt.text == "ON",
+		"the rebuilt God rays row shows the restored default")
+
+
+## The toggle button belonging to the Display row labelled [param label_text].
+##
+## Found by its label rather than by a node name because the rows are built by a
+## generic helper that names nothing — which is also why the label text is worth
+## asserting on: it is the only thing a player has to go on.
+func _display_toggle(panel: SettingsPanel, label_text: String) -> Button:
+	for node: Node in panel.find_children("*", "Label", true, false):
+		var label := node as Label
+		if label == null or label.text != label_text:
+			continue
+		var row := label.get_parent()
+		if row == null:
+			continue
+		for sibling: Node in row.get_children():
+			var button := sibling as Button
+			if button != null and button.toggle_mode:
+				return button
+	return null
+
+
+func _panel_button(panel: SettingsPanel, text: String) -> Button:
+	for node: Node in panel.find_children("*", "Button", true, false):
+		var button := node as Button
+		if button != null and button.text == text:
+			return button
+	return null
+
+
+func _god_rays_effect() -> GodRaysEffect:
+	var host := _world.find_child("WorldEnvironment", true, false) as WorldEnvironment
+	if host == null or host.compositor == null:
+		return null
+	for effect: CompositorEffect in host.compositor.compositor_effects:
+		if effect is GodRaysEffect:
+			return effect
+	return null
 
 
 func _check_isolated_leave_hold() -> void:
@@ -831,6 +1021,7 @@ func _restore_settings() -> void:
 
 func _finish() -> void:
 	get_tree().paused = false
+	Engine.time_scale = _saved_time_scale
 	if is_instance_valid(_world):
 		_world.queue_free()
 	await _wait_frames(3)

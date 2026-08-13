@@ -14,9 +14,6 @@ extends CanvasLayer
 ## than event-driven, so a focused field is not enough to stop W walking away
 ## mid-sentence.
 
-const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
-## Needed for the empty PanelContainer and LineEdit styleboxes: the pencil
-## surfaces are drawn in place of them, and the stock ones would cover them up.
 const THEME: Theme = preload("res://ui/themes/main_theme.tres")
 
 ## Lines shown at once, and how long the log stays up after the last one.
@@ -171,12 +168,14 @@ func _line(entry: Dictionary) -> RichTextLabel:
 	# say gets its last line clipped for a frame or two.
 	line.custom_minimum_size.x = WIDTH - 2.0 * float(PAD_SIDE)
 	if str(entry.get("kind", ChatManager.SAY)) == ChatManager.SYSTEM:
-		line.add_theme_color_override(&"default_color", PALETTE.text_muted)
+		line.add_theme_color_override(&"default_color", Color(RedHudTheme.INK, 0.72))
 		line.text = str(entry.get("text", ""))
 		return line
-	line.add_theme_color_override(&"default_color", PALETTE.text_primary)
+	line.add_theme_color_override(&"default_color", RedHudTheme.INK)
 	line.text = "[color=#%s]%s[/color]  %s" % [
-		PALETTE.accent.to_html(false), str(entry.get("name", "")), str(entry.get("text", "")),
+		RedHudTheme.INK.to_html(false),
+		str(entry.get("name", "")),
+		str(entry.get("text", "")),
 	]
 	return line
 
@@ -229,8 +228,7 @@ func _build() -> void:
 	_talkers.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	_column.add_child(_talkers)
 	_talkers_label = Label.new()
-	_talkers_label.add_theme_font_size_override(&"font_size", 13)
-	_talkers_label.add_theme_color_override(&"font_color", PALETTE.accent)
+	RedHudTheme.label(_talkers_label, 11)
 	_talkers.get_node(^"Padding").add_child(_talkers_label)
 
 	_log_plate = _plate()
@@ -245,8 +243,7 @@ func _build() -> void:
 	_entry.placeholder_text = "say something"
 	_entry.max_length = ChatManager.MAX_LENGTH
 	_entry.visible = false
-	_entry.add_theme_font_size_override(&"font_size", 13)
-	AuroraSurface.add_to(_entry, AuroraSurface.Style.INPUT)
+	RedHudTheme.input(_entry, 11)
 	_entry.text_submitted.connect(_on_submitted)
 	# Losing focus any other way — a menu opening over the top — closes the line
 	# rather than leaving a field that swallows keys nobody can see going in.
@@ -261,7 +258,7 @@ func _build() -> void:
 func _plate() -> PanelContainer:
 	var plate := PanelContainer.new()
 	plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	AuroraSurface.add_to(plate, AuroraSurface.Style.HUD)
+	RedHudTheme.panel(plate)
 	var padding := MarginContainer.new()
 	padding.name = "Padding"
 	padding.mouse_filter = Control.MOUSE_FILTER_IGNORE

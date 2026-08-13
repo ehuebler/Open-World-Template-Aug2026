@@ -43,6 +43,10 @@
 [ext_resource type="PackedScene" path="res://game/props/night_wisp_model.tscn" id="41_wisp_model"]
 [ext_resource type="Material" path="res://game/props/night_wisp.tres" id="42_wisp_material"]
 [ext_resource type="Script" path="res://game/planet/volcano_biome.gd" id="43_volcano"]
+[ext_resource type="Script" path="res://game/render/god_rays_effect.gd" id="44_god_rays"]
+[ext_resource type="Script" path="res://game/enemies/bigfoot/bigfoot_site.gd" id="45_bigfoot_site"]
+[ext_resource type="PackedScene" path="res://game/enemies/bigfoot/bigfoot.tscn" id="46_bigfoot"]
+[ext_resource type="Script" path="res://game/planet/night_ground_glow.gd" id="47_night_ground_glow"]
 
 [sub_resource type="ShaderMaterial" id="SkyMaterial"]
 shader = ExtResource("4_space")
@@ -61,6 +65,11 @@ shader_parameter/sun_glow_falloff = 14.0
 shader_parameter/dusk_low = -0.3
 shader_parameter/dusk_high = 0.14
 shader_parameter/night_air = 0.05
+; Scattering. See vivid_air_scatter in vivid_lib.gdshaderinc; the player's
+; toggle scales these through the air_chroma global rather than replacing them.
+shader_parameter/scatter_strength = 0.75
+shader_parameter/scatter_density = 1.0
+shader_parameter/scatter_vacuum = 0.3
 shader_parameter/space_color = Color(0.012, 0.016, 0.038, 1)
 shader_parameter/star_brightness = 1.4
 shader_parameter/star_densities = Vector3(110, 240, 520)
@@ -83,6 +92,27 @@ sky_material = SubResource("SkyMaterial")
 ; regular whole-frame holds visible while walking. Realtime mode is the path
 ; intended for a dynamic sky and spreads that cost evenly.
 process_mode = 3
+
+; Typed as the engine class with the script attached, rather than by the script's
+; own `GodRaysEffect` global name. A global class name is resolved out of a cache
+; that is not yet populated the first time the project is scanned, and this scene
+; is loaded during that scan; the engine class always exists.
+[sub_resource type="CompositorEffect" id="GodRays_world"]
+script = ExtResource("44_god_rays")
+; CelestialCycle overwrites `enabled` from the player's setting on the first
+; frame. It ships on so that the editor and the harnesses that load this scene
+; without a SettingsManager see the effect.
+enabled = true
+strength = 0.45
+density = 0.96
+decay = 0.975
+halo = 0.3
+reach = 1.3
+veil_near = 25.0
+veil_far = 400.0
+
+[sub_resource type="Compositor" id="Compositor_world"]
+compositor_effects = Array[CompositorEffect]([SubResource("GodRays_world")])
 
 [sub_resource type="Environment" id="Environment_world"]
 background_mode = 2
@@ -112,6 +142,7 @@ script = ExtResource("1_world")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=876704567]
 environment = SubResource("Environment_world")
+compositor = SubResource("Compositor_world")
 
 [node name="Sun" type="DirectionalLight3D" parent="." unique_id=1310562230]
 ; CelestialCycle rewrites this transform on every rendered frame. Interpolation
@@ -209,6 +240,19 @@ world_environment = NodePath("../WorldEnvironment")
 noon_anchor = NodePath("../Planet/ColonyShip")
 period_seconds = 960.0
 
+[node name="NightGroundGlow" type="Node3D" parent="." node_paths=PackedStringArray("planet", "cycle")]
+script = ExtResource("47_night_ground_glow")
+planet = NodePath("../Planet")
+cycle = NodePath("../CelestialCycle")
+; Four shadowless lights follow the local viewer and sample the exact shader
+; field beneath them. This is the bounded fake for emissive terrain bounce:
+; enough to colour a character and nearby props, never a light per world patch.
+light_limit = 4
+light_range = 68.0
+light_energy = 2.0
+light_height = 7.0
+light_ring_radius = 26.0
+
 [node name="Planet" type="Node3D" parent="." node_paths=PackedStringArray("sun") unique_id=1088204411]
 script = ExtResource("5_planet")
 shape = SubResource("PlanetShape_world")
@@ -238,6 +282,14 @@ script = ExtResource("37_break_effects")
 
 [node name="SouthPoleVolcano" type="Node3D" parent="Planet"]
 script = ExtResource("43_volcano")
+
+; Landmark found by dev/_bigfoot_site.gd: 71.290 degrees from the ColonyShip in
+; dense ForestGiants habitat, with a dry, fully usable 200 m neighborhood.
+; Tilde includes its "Bigfoot" marker in the planet-wide navigation overlay.
+[node name="BigfootTerritory" type="Node3D" parent="Planet"]
+script = ExtResource("45_bigfoot_site")
+
+[node name="Bigfoot" parent="Planet/BigfootTerritory" instance=ExtResource("46_bigfoot")]
 
 [node name="SurfaceAnchor" type="Node3D" parent="Planet" unique_id=1597429631]
 transform = Transform3D(-0.9997214, 0.023402292, 0.0030863807, 0.022417346, 0.9822242, -0.18636784, -0.007392953, -0.18624672, -0.9824752, 187.93507, 7887.876, -1495.6777)
@@ -446,9 +498,17 @@ wind_heading = 35.0
 pending_limit = 1
 applies_per_frame = 1
 survey_interval = 0.3
+; Broad, low-frequency fill carries the coherent patch glow onto the terrain.
+; This is intentionally stronger than the blade emission: raster emission does
+; not illuminate nearby surfaces, and asking every sub-pixel blade to look
+; bright enough on its own is what turns a lawn into static.
 glow_light_limit = 10
-glow_light_range = 18.0
-glow_light_energy = 2.8
+glow_light_range = 28.0
+glow_light_energy = 4.0
+; Above the blades rather than among their tips. A grazing light mostly catches
+; vertical grass and contributes almost nothing to a horizontal terrain normal;
+; this height turns the same bounded pool into a soft patch of ground fill.
+glow_light_height = 1.4
 
 ; A separate low-cost grass horizon. The dense twenty-blade field above still
 ; owns the nearest 48 m; this eight-blade field streams five times farther at a

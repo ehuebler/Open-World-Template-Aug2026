@@ -41,3 +41,5 @@ collision_enabled = true
 collision_within = 380.0
 collision_primitive = 3
 impact_mode = 3
+ground_sink_share = 0.18
+ground_sink_above = 1.6

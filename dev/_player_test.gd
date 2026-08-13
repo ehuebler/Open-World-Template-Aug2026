@@ -65,6 +65,9 @@ var _eye_creep := 0.0
 ## Each plant material's shipped uniforms, remembered the first time it is seen
 ## so a row that changed one can put it back.
 var _plant_shipped := {}
+## Wiring checks failed by `--graphics-toggles`. Only that mode makes claims a
+## harness can be wrong about rather than measurements to be read.
+var _toggle_failures := 0
 
 
 func _ready() -> void:
@@ -124,6 +127,9 @@ func _run() -> void:
 		return
 	if "--gaits" in only:
 		await _gait_checks()
+		return
+	if "--dust" in only:
+		await _dust_checks()
 		return
 	if "--stall" in only:
 		await _stall_survey()
@@ -203,6 +209,9 @@ func _run() -> void:
 	if "--speed" in only:
 		await _speed_report()
 		return
+	if "--graphics-toggles" in only:
+		await _graphics_toggle_checks()
+		return
 	if "--orbit-glow" in only:
 		await _orbit_glow_checks()
 		return
@@ -274,6 +283,244 @@ func _gait_checks() -> void:
 				speed, _player._clip, expected])
 
 
+## Foot trails, movement rings, and the weapon clouds that share their pool.
+##
+## Particle counts and ring settings are checked directly because the dummy
+## renderer cannot draw them. A graphical run records the sprint, landing,
+## Meteor and laser sizes against the real character.
+func _dust_checks() -> void:
+	await _place(CLEAR, 0.0)
+	_player.controls_enabled = false
+	var dust := _player.dust
+	if dust == null:
+		push_error("player_test: player has no PlayerDust")
+		return
+	var trails := dust.trail_emitters()
+	var bursts := dust.burst_emitters()
+	print("player_test: dust  trails=%d burst pool=%d" % [
+		trails.size(), bursts.size()])
+	if trails.size() != 2:
+		push_error("player_test: dust needs one trail for each foot")
+	if bursts.size() < 3:
+		push_error("player_test: dust burst pool is too small for chained landings")
+	if not bursts.is_empty():
+		var process := bursts[0].process_material as ParticleProcessMaterial
+		if process == null or process.emission_shape \
+				!= ParticleProcessMaterial.EMISSION_SHAPE_RING:
+			push_error("player_test: ground dust is not emitted as a circular ring")
+
+	var forward := -_player.global_basis.z
+	_player.velocity = forward * _player.sprint_speed
+	_player._footed = true
+	dust.update_trails(_player.character, _player._up(), forward,
+		_player.sprint_speed, true)
+	await _drawn(2)
+	var running := 0
+	for trail in trails:
+		if trail.emitting:
+			running += 1
+	if running != 2:
+		push_error("player_test: sprint did not start both foot trails")
+	if trails.size() == 2:
+		var skeleton := Wardrobe.skeleton_of(_player.character)
+		if skeleton == null:
+			push_error("player_test: dust check could not find the character skeleton")
+		else:
+			for index in 2:
+				var foot := skeleton.find_bone(PlayerDust.FOOT_BONES[index])
+				if foot < 0:
+					push_error("player_test: dust check could not find foot %d" % index)
+					continue
+				var ankle := skeleton.global_transform \
+					* skeleton.get_bone_global_pose(foot).origin
+				var from_ankle := trails[index].global_position - ankle
+				var sideways := absf(from_ankle.dot(_player.global_basis.x))
+				var below := -from_ankle.dot(_player._up())
+				print("player_test: dust  sole %d lateral=%.3f below ankle=%.3f" % [
+					index, sideways, below])
+				if sideways > 0.015:
+					push_error(
+						"player_test: foot trail is offset toward the foot's side")
+				if absf(below - PlayerDust.FOOT_SOLE_DROP) > 0.015:
+					push_error("player_test: foot trail is not under the sole")
+
+	dust.update_trails(_player.character, _player._up(), Vector3.ZERO,
+		_player.walk_speed, false)
+	for trail in trails:
+		if trail.emitting:
+			push_error("player_test: foot trail remained on below a sprint")
+
+	# Take-off: move clear of the stale floor contact, then let the same
+	# airborne transition used by remote peers observe the jump.
+	var before := dust.burst_count
+	_player.global_position += _player._up() * 1.5
+	_player.velocity = _player._up() * _player.jump_velocity
+	_player._footed = false
+	_player.move_and_slide()
+	_player._was_airborne = false
+	_player._apply_stance(STAND)
+	_player._update_animation(1.0 / 60.0)
+	if dust.burst_count != before + 1:
+		push_error("player_test: jump take-off made no ground dust pop")
+
+	# A long ordinary arc gets one on the way down as well.
+	before = dust.burst_count
+	_player._was_airborne = true
+	_player._airborne_time = OnlinePlayer.AIR_RUN_DELAY + 0.1
+	_player._landing_speed = _player.jump_velocity
+	_player._footed = true
+	_player.velocity = Vector3.ZERO
+	_player._update_animation(1.0 / 60.0)
+	if dust.burst_count != before + 1:
+		push_error("player_test: big jump landing made no ground dust pop")
+
+	# Entering Hero owns the large pop. Receiving another sync packet with the
+	# same replicated stance must not restart it.
+	_player._apply_stance(STAND)
+	before = dust.burst_count
+	_player._apply_stance(HERO)
+	_player._apply_stance(HERO)
+	if dust.burst_count != before + 1:
+		push_error("player_test: Hero pose did not make exactly one dust pop")
+	print("player_test: dust  jump, big landing and Hero pops=%d" % [
+		dust.burst_count])
+
+	# A remote body has no move_and_slide floor flag. Zero vertical speed at a
+	# jump's apex must still be airborne, or it appears to land and take off a
+	# second time — which would duplicate both rings.
+	var ground_point := _player._dust_ground_point()
+	var local_peer := _player.peer_id
+	_player.peer_id = 2
+	_player.global_position = ground_point + _player._up() * 4.0
+	_player.velocity = Vector3.ZERO
+	_player._was_airborne = true
+	_player._airborne_time = OnlinePlayer.AIR_RUN_DELAY + 0.1
+	before = dust.burst_count
+	if _player._grounded_for_display():
+		push_error("player_test: remote jump apex was mistaken for ground")
+	_player._update_animation(1.0 / 60.0)
+	if dust.burst_count != before:
+		push_error("player_test: remote jump apex made a false dust ring")
+	_player.peer_id = local_peer
+
+	# Meteor fills its full crater footprint. The laser ability is rate-limited
+	# when held still, may puff immediately when swept to a new point, and the
+	# carbine's one-off bolt is never swallowed by that limiter.
+	_player.global_position = ground_point
+	_player._footed = true
+	var impact_at := _planet.standing_position(
+		_planet.to_local(ground_point + forward * 2.0))
+	var impact_up := _planet.up_at(impact_at)
+	before = dust.impact_count
+	_player.play_meteor_impact_dust(impact_at, impact_up, 6.0, 1.0)
+	if dust.impact_count != before + 1:
+		push_error("player_test: Meteor impact made no broad dust cloud")
+	var widest := 0.0
+	for burst in bursts:
+		var process := burst.process_material as ParticleProcessMaterial
+		if process != null:
+			widest = maxf(widest, process.emission_ring_radius)
+	if widest < 5.9:
+		push_error("player_test: Meteor dust did not cover its crater radius")
+
+	var eyes := _player.eye_points()
+	var laser_before := dust.laser_impact_count
+	before = dust.impact_count
+	LaserEyes.apply_effect(
+		_player, "laser_eyes", eyes[0], eyes[1], impact_at, true)
+	LaserEyes.apply_effect(
+		_player, "laser_eyes", eyes[0], eyes[1], impact_at, true)
+	if dust.laser_impact_count != laser_before + 1 \
+			or dust.impact_count != before + 1:
+		push_error("player_test: held laser dust was missing or not rate-limited")
+	var swept_at := _planet.standing_position(
+		_planet.to_local(impact_at + forward * 1.0))
+	LaserEyes.apply_effect(
+		_player, "laser_eyes", eyes[0], eyes[1], swept_at, true)
+	if dust.laser_impact_count != laser_before + 2:
+		push_error("player_test: swept laser impact made no new dust puff")
+
+	var bolt := LaserBolt.fire(
+		_player.get_parent(), swept_at + impact_up, impact_up, _player)
+	laser_before = dust.laser_impact_count
+	before = dust.impact_count
+	if bolt != null:
+		bolt.global_position = swept_at
+		bolt._land(impact_up)
+		bolt.queue_free()
+	if bolt == null or dust.laser_impact_count != laser_before + 1 \
+			or dust.impact_count != before + 1:
+		push_error("player_test: laser carbine impact made no dust puff")
+	print("player_test: dust  Meteor clouds=%d laser clouds=%d" % [
+		dust.impact_count, dust.laser_impact_count])
+
+	if DisplayServer.get_name() != "headless":
+		await _wait(140)
+
+	# One readable frame: a third-person body with white puffs outside both
+	# feet and a complete circular burst against the ground.
+	_player._apply_stance(STAND)
+	_player.set_camera_mode(OnlinePlayer.CameraMode.THIRD_NEAR)
+	_player.controls_enabled = true
+	await _place(CLEAR, 0.0)
+	_player.hud.visible = false
+	_look(-0.34)
+	var trail_starts := dust.trail_start_count
+	Input.action_press("move_forward")
+	Input.action_press("sprint")
+	await _wait(24)
+	running = 0
+	for trail in trails:
+		if trail.emitting:
+			running += 1
+	if running != 2:
+		push_error("player_test: real sprint did not keep both foot trails on")
+	print("player_test: dust  real sprint emitter starts=%d" % [
+		dust.trail_start_count - trail_starts])
+	var shot_camera := Camera3D.new()
+	shot_camera.fov = 58.0
+	add_child(shot_camera)
+	var up := _player._up()
+	var right := _player.global_basis.x
+	shot_camera.global_position = _player.global_position \
+		+ right * 5.5 - forward * 2.2 + up * 2.3
+	shot_camera.look_at(
+		_player.global_position - forward * 1.6 + up * 0.45, up)
+	shot_camera.current = true
+	await _shot("player_dust_trail")
+	Input.action_release("sprint")
+	Input.action_release("move_forward")
+	_player.controls_enabled = false
+	_player.velocity = Vector3.ZERO
+	dust.update_trails(_player.character, _player._up(), Vector3.ZERO,
+		0.0, false)
+	dust.pop_ground(_player._dust_ground_point(), _player._up(), 2.0)
+	await _drawn(8)
+	await _shot("player_dust_pop")
+	dust.update_trails(_player.character, _player._up(), Vector3.ZERO,
+		0.0, false)
+	if DisplayServer.get_name() != "headless":
+		await _wait(75)
+		var visual_at := _player._dust_ground_point()
+		dust.impact_cloud(visual_at, _player._up(), 6.0, 1.0)
+		await _wait(18)
+		await _shot("player_meteor_dust")
+		await _wait(100)
+		var laser_at := _planet.standing_position(
+			_planet.to_local(visual_at + forward * 2.4))
+		var laser_up := _planet.up_at(laser_at)
+		var visual_eyes := _player.eye_points()
+		_player.laser_beams().aim(
+			visual_eyes[0], visual_eyes[1], laser_at)
+		dust.laser_impact(laser_at, laser_up, 0.6, 0.55, true)
+		shot_camera.look_at(
+			_player.global_position + forward * 0.8 + up * 0.45, up)
+		await _wait(6)
+		await _shot("player_laser_dust")
+		_player.laser_beams().stop()
+	print("player_test: dust  PASS")
+
+
 ## Reports the shadow mode the renderer receives for every streamed cover tile.
 ##
 ## Species resources only express intent. The thing that matters is the live
@@ -322,14 +569,18 @@ func _night_light_checks() -> void:
 	var flowers := world.find_child("LandingFlowers", true, false) as GroundCover
 	var trees := world.find_child("LandingFlowerTrees", true, false) as FlowerTreeField
 	var grass := world.find_child("GlobalGrass", true, false) as GroundCover
-	if cycle == null or flowers == null or trees == null or grass == null:
+	var terrain_glow := world.find_child(
+		"NightGroundGlow", true, false) as NightGroundGlow
+	if cycle == null or flowers == null or trees == null or grass == null \
+			or terrain_glow == null:
 		push_error("player_test: night flora nodes are incomplete")
 		return
 	if flowers.glow_light_range < 30.0 or flowers.glow_light_energy < 7.0 \
 			or trees.night_light_range < 45.0 \
 			or trees.night_light_energy < 8.0 \
-			or grass.glow_light_range < 16.0 \
-			or grass.glow_light_energy < 2.5:
+			or grass.glow_light_range < 26.0 \
+			or grass.glow_light_energy < 3.8 \
+			or grass.glow_light_height < 1.0:
 		push_error("player_test: flora cast-light pools are not broad and strong")
 		return
 
@@ -358,15 +609,22 @@ func _night_light_checks() -> void:
 	await _wait(360)
 	var flower_lights := _omni_lights(flowers)
 	var tree_lights := _omni_lights(trees)
+	var grass_lights := _omni_lights(grass)
 	var flower_lit := _lit_lights(flower_lights)
 	var tree_lit := _lit_lights(tree_lights)
-	print("player_test: night lights flowers=%d/%d trees=%d/%d energy=(%.2f, %.2f)" % [
-		flower_lit, flower_lights.size(), tree_lit, tree_lights.size(),
-		_light_energy(flower_lights), _light_energy(tree_lights)])
+	var grass_lit := _lit_lights(grass_lights)
+	print("player_test: night lights flowers=%d/%d trees=%d/%d grass=%d/%d "
+			% [flower_lit, flower_lights.size(), tree_lit, tree_lights.size(),
+				grass_lit, grass_lights.size()]
+		+ "energy=(%.2f, %.2f, %.2f)" % [
+			_light_energy(flower_lights), _light_energy(tree_lights),
+			_light_energy(grass_lights)])
 	if flower_lights.size() != flowers.glow_light_limit or flower_lit == 0:
 		push_error("player_test: colony flower light pool did not illuminate at night")
 	if tree_lights.size() != trees.night_light_limit or tree_lit == 0:
 		push_error("player_test: flower-tree light pool did not illuminate at night")
+	if grass_lights.size() != grass.glow_light_limit or grass_lit == 0:
+		push_error("player_test: glowing grass did not illuminate its terrain")
 	await _shot("night_flora_cast_light")
 
 	var lights: Array[OmniLight3D] = []
@@ -392,6 +650,114 @@ func _night_light_checks() -> void:
 	if daylight_energy > 0.05:
 		push_error("player_test: night flora lights remained on in daylight")
 
+	# A plain lawn frame rather than the mixed flower/tree field above. This is
+	# the view that catches the failure mode where emissive blades are bright
+	# dots over black terrain even though the light pool exists.
+	cycle.set_phase(0.5)
+	_stand_on(direction)
+	flowers.visible = false
+	trees.visible = false
+	_player._camera_mode = 0
+	_player._pitch = -0.32
+	if _player.character != null:
+		_player.character.visible = false
+	if _player.hud != null:
+		_player.hud.visible = false
+	await _wait(240)
+	if _lit_lights(grass_lights) == 0:
+		push_error("player_test: grass lights went dark over the plain lawn")
+	await _shot("grass_glow_ground")
+	_player._camera_mode = 2
+	_player._pitch = -0.62
+	await _wait(30)
+	await _shot("grass_glow_distance")
+	grass.visible = false
+	var distant_grass := world.find_child(
+		"GlobalDistantGrass", true, false) as GroundCover
+	if distant_grass != null:
+		distant_grass.visible = false
+	await _wait(30)
+	await _shot("terrain_night_lava_glow")
+	var radial := (
+		_player.global_position - _planet.global_position).normalized()
+	_player.controls_enabled = false
+	_player.set_physics_process(false)
+	_player.global_position += radial * 300.0
+	_player._camera_mode = 0
+	_player._pitch = -1.35
+	await _wait(300)
+	await _shot("terrain_night_lava_glow_aerial")
+	var glow_frame := await _frame_sample()
+	var terrain := Planet.SURFACE_MATERIAL
+	var shipped_ground_glow: float = terrain.get_shader_parameter(
+		&"night_ground_glow_energy")
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	Engine.max_fps = 0
+	var glow_cost := await _frame_cost(120)
+	terrain.set_shader_parameter(&"night_ground_glow_energy", 0.0)
+	await _wait(2)
+	await _shot("terrain_night_lava_glow_aerial_off")
+	var dark_cost := await _frame_cost(120)
+	var dark_frame := await _frame_sample()
+	var glow_delta := _frame_difference(glow_frame, dark_frame)
+	print("player_test: night ground glow mean=%.3f peak=%d pixels=%d" % [
+		glow_delta.x, int(glow_delta.y), int(glow_delta.z)])
+	if glow_delta.x < 0.2 or glow_delta.y < 4.0:
+		push_error("player_test: night terrain glow is not visibly above black")
+	print("player_test: night ground glow cost %.2f on, %.2f off, %.2f ms/frame"
+		% [glow_cost["frame"], dark_cost["frame"],
+			float(glow_cost["frame"]) - float(dark_cost["frame"])])
+	terrain.set_shader_parameter(
+		&"night_ground_glow_energy", shipped_ground_glow)
+
+	# A new planetary night changes all three authored hues, and a real light
+	# sampled from the brightest nearby lobe must reach the character rather than
+	# remaining a green emission visible only on the terrain.
+	terrain_glow.palette_transition_seconds = 0.0
+	for other_light in _omni_lights(world):
+		if other_light.get_parent() != terrain_glow:
+			# Fields keep rewriting visibility and energy. A zero cull mask is
+			# the stable harness-only way to isolate the new terrain bounce.
+			other_light.light_cull_mask = 0
+	cycle.set_day_index(cycle.day_index() + 1)
+	cycle.set_phase(0.5)
+	await _wait(3)
+	var lit_direction := terrain_glow.brightest_direction_near(
+		direction, 520.0, 65.0, true)
+	_player.set_physics_process(true)
+	_stand_on(lit_direction)
+	_player._camera_mode = 2
+	_player._pitch = -0.28
+	if _player.character != null:
+		_player.character.visible = true
+	await _wait(240)
+	var terrain_lights := terrain_glow.active_lights()
+	var terrain_lit := _lit_lights(terrain_lights)
+	var non_green := false
+	var full_cull_mask := true
+	for light in terrain_lights:
+		non_green = non_green or light.light_color.r > light.light_color.g \
+			or light.light_color.b > light.light_color.g
+		full_cull_mask = full_cull_mask and light.light_cull_mask == 0xFFFFD
+	print("player_test: night ground cast %d/%d energy=%.2f non_green=%s" % [
+		terrain_lit, terrain_lights.size(), _light_energy(terrain_lights),
+		non_green])
+	if terrain_lit == 0 or not non_green or not full_cull_mask:
+		push_error("player_test: multicolour terrain glow did not cast on objects")
+	await _shot("terrain_glow_cast_character")
+	var cast_frame := await _frame_sample()
+	var shipped_cast_energy := terrain_glow.light_energy
+	terrain_glow.light_energy = 0.0
+	await _wait(120)
+	await _shot("terrain_glow_cast_character_off")
+	var uncast_frame := await _frame_sample()
+	var cast_delta := _frame_difference(cast_frame, uncast_frame)
+	print("player_test: terrain cast visible mean=%.3f peak=%d pixels=%d" % [
+		cast_delta.x, int(cast_delta.y), int(cast_delta.z)])
+	if cast_delta.x < 0.5 or cast_delta.y < 8.0:
+		push_error("player_test: terrain lights did not visibly reach nearby meshes")
+	terrain_glow.light_energy = shipped_cast_energy
+
 
 ## Whether the night-flowering fields can be seen from above them.
 ##
@@ -401,6 +767,275 @@ func _night_light_checks() -> void:
 ## the same frame with and without it: the smudge has to be there from orbit,
 ## and it has to be absent from the ground, where the real flowers are doing the
 ## job and a second copy underneath them would be double counting.
+## Both atmosphere effects in one session: the depth-marched god rays and the
+## wavelength scattering, switched through the player's own settings.
+##
+## One mode rather than two because the expensive part is standing a world up, and
+## the two are checked the same way — take a frame, flip the setting, take the
+## frame again, difference them. Sharing the session is what keeps the whole
+## feature inside a single launch.
+##
+## What each group of rows is for:
+##
+## - The wiring rows prove the compositor reached the scene and asked for the
+##   right callback stage and a resolved depth buffer. All three fail *silently*:
+##   the pass never runs, or runs at a stage where the sky has not been drawn yet,
+##   and the result looks like the effect merely being subtle.
+## - `open` is the sun in clear sky. `blocked` stands a slab between the eye and
+##   the sun, and it is the only row that proves the march reads depth at all —
+##   rays that ignored it would be indistinguishable from a radial glow drawn
+##   around the disc.
+## - `behind` turns around. Nothing should change, because the effect skips both
+##   passes once the sun is off screen; a difference here is cost being paid for a
+##   frame with no shafts in it.
+## - The scattering rows are one frame at `air_chroma` one and zero, which is
+##   exactly what the setting does. Off has to match what the game looked like
+##   before any of this existed.
+## - The timing pair is the performance claim, measured rather than argued.
+func _graphics_toggle_checks() -> void:
+	# Both figures at the end of this are frame times, and a vsynced frame time is
+	# the refresh rate whatever the pass costs: the first run of this reported the
+	# two effects as costing exactly 0.00 ms because on and off were both 6.95,
+	# which is 144 Hz to the microsecond.
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	Engine.max_fps = 0
+	var world := _planet.get_parent()
+	var cycle := world.find_child("CelestialCycle", true, false) as CelestialCycle
+	var host := world.find_child("WorldEnvironment", true, false) as WorldEnvironment
+	var sun := world.find_child("Sun", true, false) as DirectionalLight3D
+	if cycle == null or host == null or sun == null:
+		push_error("player_test: graphics toggles need the cycle, environment and sun")
+		return
+
+	var compositor := host.compositor
+	_expect(compositor != null, "the world environment carries a compositor")
+	var rays: GodRaysEffect = null
+	if compositor != null:
+		for effect: CompositorEffect in compositor.compositor_effects:
+			if effect is GodRaysEffect:
+				rays = effect
+	_expect(rays != null, "the compositor carries the god rays effect")
+	if rays == null:
+		_toggle_summary()
+		return
+	_expect(rays.effect_callback_type
+		== CompositorEffect.EFFECT_CALLBACK_TYPE_POST_TRANSPARENT,
+		"the effect runs after transparent, where the sky already exists")
+	_expect(rays.access_resolved_depth,
+		"the effect asks for a resolved depth buffer")
+
+	# Live write-through, both ways. The setting is left in memory rather than
+	# saved: this harness must not edit the player's own settings.cfg.
+	SettingsManager.set_setting(&"graphics", &"god_rays", false)
+	await _wait(2)
+	_expect(not rays.enabled, "switching the setting off disables the effect")
+	SettingsManager.set_setting(&"graphics", &"god_rays", true)
+	await _wait(2)
+	_expect(rays.enabled, "switching it back on re-enables the effect")
+
+	# A stopped sun, low over the landing site. Low because shafts are a low-sun
+	# sight, and stopped because a sun that moves between two frames would put
+	# its own change into every difference measured below.
+	cycle.period_seconds = 0.0
+	var site_up := (_ground.origin - _planet.global_position).normalized()
+	cycle.set_phase(_phase_for_elevation(cycle, sun, site_up, 0.22))
+	var to_sun := sun.global_basis.z.normalized()
+	print("player_test: rays  sun %.2f above the site's horizon, light (%.2f, %.2f, %.2f)" % [
+		site_up.dot(to_sun), -to_sun.x, -to_sun.y, -to_sun.z])
+
+	if _player.hud != null:
+		_player.hud.visible = false
+	_still_planet(world)
+	# High enough that the ground the player is standing on is not in the way of
+	# the sun, and that nothing near the site walks through the frame.
+	var eye := _planet.global_position + site_up * (_planet.shape.radius + 300.0)
+	var review := Camera3D.new()
+	add_child(review)
+	review.fov = 70.0
+	review.near = 0.25
+	review.far = _planet.shape.radius * 8.0
+	review.global_position = eye
+	review.look_at(eye + to_sun, site_up)
+	review.current = true
+	await _wait(180)
+
+	await _ray_case("open", review, to_sun)
+
+	# Bars across the sun, rather than one slab. Depth is the whole mechanism, so
+	# the shafts have to break around something standing in front of the sun, and
+	# terrain cannot be relied on to be in the right place on a procedural planet.
+	#
+	# Bars with gaps between them and not a single block, because a block only
+	# shows that the effect can be dimmed. What is being checked is that the light
+	# comes through the gaps and not through the bars — a wash passes the first
+	# test and fails this one.
+	var opaque := StandardMaterial3D.new()
+	opaque.albedo_color = Color(0.02, 0.02, 0.03)
+	var bars: Array[Node3D] = []
+	for slot in 5:
+		var bar := MeshInstance3D.new()
+		var block := BoxMesh.new()
+		# Tall enough to cross the whole frame at this distance, and spaced two
+		# widths apart so two thirds of the sun's light still gets past.
+		block.size = Vector3(1.4, 40.0, 0.6)
+		bar.mesh = block
+		bar.material_override = opaque
+		add_child(bar)
+		bars.append(bar)
+		var side := to_sun.cross(site_up).normalized()
+		bar.global_position = eye + to_sun * 14.0 \
+			+ side * (float(slot) - 2.0) * 4.2
+		bar.look_at(bar.global_position + to_sun, site_up)
+	await _wait(20)
+	await _ray_case("barred", review, to_sun)
+	for bar: Node3D in bars:
+		bar.queue_free()
+
+	# Away from the sun, where the effect should be doing nothing whatsoever.
+	review.look_at(eye - to_sun, site_up)
+	await _wait(60)
+	await _ray_case("behind", review, to_sun)
+
+	# The scattering, from the same viewpoint turned a quarter turn off the sun.
+	# Not at it: the sun's own halo blows the top of the frame to white, and the
+	# first run of this duly reported the sky as 0.92 grey at a saturation of 0.01
+	# with and without the model — a measurement of the sun, not of the air. Across
+	# the sun is where the sunset band and the blue left over both sit in frame.
+	var across := to_sun.cross(site_up).normalized()
+	review.look_at(eye + across, site_up)
+	await _wait(60)
+	for lit: bool in [true, false]:
+		SettingsManager.set_setting(&"graphics", &"atmospheric_scattering", lit)
+		# Long enough for the sky's radiance cubemap to catch up. The sky is the
+		# scene's ambient source, so the ground's own lighting changes with it and
+		# a frame taken too early has half the effect in it.
+		await _wait(90)
+		var image := await _frame("air_toggle_%s" % ("on" if lit else "off"))
+		var sky := _sky_mean(image)
+		print("player_test: scattering %-3s sky %.3f %.3f %.3f  hue %3.0f deg  sat %.2f  luma %.3f" % [
+			"on" if lit else "off", sky.r, sky.g, sky.b,
+			sky.h * 360.0, sky.s, sky.get_luminance()])
+	SettingsManager.set_setting(&"graphics", &"atmospheric_scattering", true)
+	await _wait(90)
+
+	# Back at the sun before timing anything. The ray pass skips every pixel
+	# outside `reach` of the sun and the whole dispatch when the sun is behind the
+	# camera, so a cost measured looking away from it is a measurement of the
+	# early-out.
+	review.look_at(eye + to_sun, site_up)
+	await _wait(60)
+
+	# Cost. Both effects on against both off, from the same viewpoint, after the
+	# terrain has settled — so the difference is the two passes and nothing else.
+	var costs := {}
+	for on: bool in [true, false]:
+		SettingsManager.set_setting(&"graphics", &"god_rays", on)
+		SettingsManager.set_setting(&"graphics", &"atmospheric_scattering", on)
+		await _wait(60)
+		costs["on" if on else "off"] = await _frame_cost(240)
+	var with: Dictionary = costs["on"]
+	var without: Dictionary = costs["off"]
+	print("player_test: cost  both on %.2f ms/frame (cpu %.2f, worst %.2f)" % [
+		with["frame"], with["cpu"], with["worst"]])
+	print("player_test: cost  both off %.2f ms/frame (cpu %.2f, worst %.2f)" % [
+		without["frame"], without["cpu"], without["worst"]])
+	print("player_test: cost  the two effects add %.2f ms/frame" % [
+		float(with["frame"]) - float(without["frame"])])
+
+	SettingsManager.set_setting(&"graphics", &"god_rays", true)
+	SettingsManager.set_setting(&"graphics", &"atmospheric_scattering", true)
+	review.queue_free()
+	_toggle_summary()
+
+
+## One god-rays case: the frame with the effect on, the same frame again with
+## nothing touched, and the frame with it off.
+##
+## The middle capture is the measurement's own noise floor and is why three frames
+## are taken rather than two. A world this busy never gives the same frame twice,
+## and without knowing by how much, a small difference cannot be told from no
+## difference at all.
+func _ray_case(tag: String, review: Camera3D, to_sun: Vector3) -> void:
+	SettingsManager.set_setting(&"graphics", &"god_rays", true)
+	await _wait(20)
+	var lit := await _frame_sample()
+	await _wait(4)
+	var again := await _frame_sample()
+	await _shot("rays_%s_on" % tag)
+	SettingsManager.set_setting(&"graphics", &"god_rays", false)
+	await _wait(20)
+	var dark := await _frame_sample()
+	await _shot("rays_%s_off" % tag)
+	var added := _frame_difference(dark, lit)
+	var noise := _frame_difference(lit, again)
+	_difference_picture(dark, lit).save_png(ProjectSettings.globalize_path(
+		SHOT_DIR + "rays_%s_added.png" % tag))
+	# Where the sun landed on screen, worked out here rather than read off the
+	# effect, so a frame with no shafts in it can be told from a frame whose sun
+	# was somewhere the shafts were never going to be.
+	var at := review.global_position + to_sun * 1.0e7
+	var where := "behind the camera"
+	var sun_uv := Vector2(0.5, 0.5)
+	if not review.is_position_behind(at):
+		sun_uv = review.unproject_position(at) \
+			/ review.get_viewport().get_visible_rect().size
+		where = "uv %.2f, %.2f" % [sun_uv.x, sun_uv.y]
+	var shape := _ray_shape(dark, lit, sun_uv)
+	print("player_test: rays %-8s added mean %.2f worst %.0f loud %d   near %.1f far %.1f (x%.1f)   noise %.2f   sun %s" % [
+		tag, added.x, added.y, int(added.z), shape.x, shape.y,
+		shape.x / maxf(shape.y, 0.01), noise.x, where])
+	SettingsManager.set_setting(&"graphics", &"god_rays", true)
+
+
+## The phase at which the sun stands [param elevation] above the horizon at
+## [param up], as the sine of that angle.
+##
+## Searched rather than solved. The orbit is built from the planet's frost axis
+## and a noon anchor, and reproducing that arithmetic here to invert it would be a
+## second copy of it that could disagree; asking the cycle itself two hundred and
+## forty times costs nothing and cannot.
+func _phase_for_elevation(cycle: CelestialCycle, sun: DirectionalLight3D,
+		up: Vector3, elevation: float) -> float:
+	var best := 0.0
+	var closest := INF
+	for step in 240:
+		var phase := float(step) / 240.0
+		cycle.set_phase(phase)
+		var error := absf(up.dot(sun.global_basis.z.normalized()) - elevation)
+		if error < closest:
+			closest = error
+			best = phase
+	return best
+
+
+## Mean colour of the top eighth of a frame, which at every pitch used by the
+## scattering rows is sky and nothing else.
+func _sky_mean(image: Image) -> Color:
+	var total := Vector3.ZERO
+	var counted := 0
+	for y in range(0, maxi(image.get_height() / 8, 1), 2):
+		for x in range(0, image.get_width(), 4):
+			var pixel := image.get_pixel(x, y)
+			total += Vector3(pixel.r, pixel.g, pixel.b)
+			counted += 1
+	total /= maxf(float(counted), 1.0)
+	return Color(total.x, total.y, total.z)
+
+
+func _expect(condition: bool, message: String) -> void:
+	if condition:
+		print("player_test: PASS  %s" % message)
+		return
+	_toggle_failures += 1
+	push_error("player_test: FAIL  %s" % message)
+
+
+func _toggle_summary() -> void:
+	print("player_test: graphics toggles %s" % (
+		"all wiring checks passed" if _toggle_failures == 0
+		else "%d wiring check(s) failed" % _toggle_failures))
+
+
 func _orbit_glow_checks() -> void:
 	var world := _planet.get_parent()
 	var cycle := world.find_child("CelestialCycle", true, false) as CelestialCycle
@@ -1935,6 +2570,7 @@ func _waypoint_toggle_checks() -> void:
 		return
 	var expected := PackedStringArray([
 		"Arctic Ring Site",
+		"Bigfoot",
 		"Colony Ship",
 		"North Pole",
 		"Other Side",
@@ -6749,6 +7385,44 @@ func _frame_difference(before: PackedByteArray, after: PackedByteArray) -> Vecto
 		if step > SHIMMER_LOUD:
 			loud += 1
 	return Vector3(float(total) / maxf(count / 3, 1), float(worst), float(loud))
+
+
+## How the added light is distributed about the sun: mean change within a third of
+## the frame height of [param sun_uv], and mean change beyond two thirds of it.
+##
+## The number that separates the two things god rays can be, which a whole-frame
+## mean cannot. Shafts are light from one place and must be far brighter at their
+## root than out at the edges; a pass that mistakes the whole sky for the light
+## source produces the same brightness everywhere, and reads as fog with the sun
+## inside it. The first run of this effect had a near/far ratio near one.
+func _ray_shape(before: PackedByteArray, after: PackedByteArray,
+		sun_uv: Vector2) -> Vector2:
+	var aspect := float(SHIMMER_WIDTH) / float(SHIMMER_HEIGHT)
+	var near_total := 0.0
+	var near_count := 0
+	var far_total := 0.0
+	var far_count := 0
+	for y in SHIMMER_HEIGHT:
+		for x in SHIMMER_WIDTH:
+			var index := (y * SHIMMER_WIDTH + x) * 3
+			if index + 2 >= before.size() or index + 2 >= after.size():
+				continue
+			var step := maxi(maxi(absi(before[index] - after[index]),
+				absi(before[index + 1] - after[index + 1])),
+				absi(before[index + 2] - after[index + 2]))
+			var at := Vector2((float(x) + 0.5) / float(SHIMMER_WIDTH),
+				(float(y) + 0.5) / float(SHIMMER_HEIGHT))
+			# Scaled by aspect for the same reason the shader does it: a circle
+			# around the sun in pixels is an ellipse in UV.
+			var away := ((at - sun_uv) * Vector2(aspect, 1.0)).length()
+			if away < 0.33:
+				near_total += float(step)
+				near_count += 1
+			elif away > 0.66:
+				far_total += float(step)
+				far_count += 1
+	return Vector2(near_total / maxf(near_count, 1.0),
+		far_total / maxf(far_count, 1.0))
 
 
 ## The change between two frames, as a picture: white where it moved, so a

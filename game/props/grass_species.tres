@@ -70,8 +70,10 @@ glow_seed = 20260818
 ; Blades a square metre, directly. Not spots: _scatter divides the number of
 ; spots it tests by clump_count, so raising the clump regroups the same blades
 ; into fewer, bigger tufts and adds none. This is the only number that decides
-; how much grass there is, and 18 was not enough of it.
-per_square_metre = 28.0
+; how much grass there is. Twenty retains the joined lawn that eighteen could
+; not, while removing almost a third of the overlapping sub-pixel edges that
+; made emissive grass read as static.
+per_square_metre = 20.0
 clump_count = 10
 clump_radius = 1.3
 bare_share = 0.0
@@ -83,13 +85,17 @@ random_seed = 20260817
 ; metre on the ground at 20 m, 5.6 at 40, 2.4 at 50 and 1.3 at 60 — a fourteen-
 ; fold collapse across ground the player is looking straight at, and the reason
 ; the field read as a patch of turf standing in a bare plain rather than as a
-; lawn going over a hill. They now run 27.9, 24.3, 15.5 and 9.0.
+; lawn going over a hill. The coverage repair first raised those to 27.9, 24.3,
+; 15.5 and 9.0.
 ;
 ; Three of the four causes were here. Thinning began at 14 m, which is close
 ; enough to be inside the part of the field that is meant to look solid; it then
 ; had no explicit end, so it stretched to draw_within and was already most of the
 ; way down by 40 m; and it bottomed out at nine percent. The fourth was that the
-; field simply stopped at 48 m, before the band in question had finished.
+; field simply stopped at 48 m, before the band in question had finished. With
+; those range fixes retained, this anti-noise density pass runs about 20, 17, 11
+; and 6 blades per square metre: continuous ground cover without buying edge
+; pixels nobody can resolve.
 ;
 ; thin_to is now stated rather than left to default. Leaving it unset ties where
 ; the thinning finishes to how far the field reaches, so every metre added to

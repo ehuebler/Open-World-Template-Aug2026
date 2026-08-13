@@ -38,6 +38,12 @@ func _ready() -> void:
 
 
 func _exit_tree() -> void:
+	cancel_all()
+
+
+## Immediately stops every live slot without letting a committed ability veto
+## its ordinary button release. Used when the body becomes incapacitated.
+func cancel_all() -> void:
 	for ability in _abilities:
 		if ability != null:
 			ability.cancel()

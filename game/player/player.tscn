@@ -1,9 +1,10 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=8 format=3]
 
 [ext_resource type="Script" path="res://game/player/player.gd" id="1_player"]
 [ext_resource type="PackedScene" path="res://assets/runtime/characters/player_character.glb" id="2_character"]
 [ext_resource type="Script" path="res://game/player/reticle.gd" id="3_reticle"]
 [ext_resource type="Theme" path="res://ui/themes/main_theme.tres" id="4_theme"]
+[ext_resource type="Script" path="res://game/player/player_dust.gd" id="5_dust"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape_player"]
 resource_local_to_scene = true
@@ -33,6 +34,10 @@ position = Vector3(0, 0.2, 0)
 target_position = Vector3(0, 1.3, 0)
 collision_mask = 1
 collide_with_areas = false
+
+[node name="Dust" type="Node3D" parent="."]
+physics_interpolation_mode = 2
+script = ExtResource("5_dust")
 
 [node name="Character" parent="." instance=ExtResource("2_character")]
 ; The player root is physics-interpolated. Local animation/lean is authored on
@@ -108,14 +113,14 @@ mouse_filter = 2
 ; like: 20/15 here reads as 14/9 around the text.
 [node name="Padding" type="MarginContainer" parent="HUD/Prompts/TargetPlate/Panel"]
 layout_mode = 2
-theme_override_constants/margin_left = 20
-theme_override_constants/margin_top = 15
-theme_override_constants/margin_right = 20
-theme_override_constants/margin_bottom = 15
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 7
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 7
 
 [node name="TargetName" type="Label" parent="HUD/Prompts/TargetPlate/Panel/Padding"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 23
+theme_override_font_sizes/font_size = 14
 horizontal_alignment = 1
 
 [node name="PromptPlate" type="CenterContainer" parent="HUD/Prompts"]
@@ -134,100 +139,12 @@ mouse_filter = 2
 
 [node name="Padding" type="MarginContainer" parent="HUD/Prompts/PromptPlate/Panel"]
 layout_mode = 2
-theme_override_constants/margin_left = 20
-theme_override_constants/margin_top = 15
-theme_override_constants/margin_right = 20
-theme_override_constants/margin_bottom = 15
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 7
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 7
 
 [node name="InteractPrompt" type="Label" parent="HUD/Prompts/PromptPlate/Panel/Padding"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 23
+theme_override_font_sizes/font_size = 14
 horizontal_alignment = 1
-
-[node name="StancePlate" type="HBoxContainer" parent="HUD/Prompts"]
-layout_mode = 1
-anchors_preset = 2
-anchor_top = 1.0
-anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = -60.0
-offset_right = 420.0
-offset_bottom = -20.0
-grow_vertical = 0
-mouse_filter = 2
-
-[node name="Panel" type="PanelContainer" parent="HUD/Prompts/StancePlate"]
-layout_mode = 2
-size_flags_vertical = 4
-mouse_filter = 2
-
-[node name="Padding" type="MarginContainer" parent="HUD/Prompts/StancePlate/Panel"]
-layout_mode = 2
-theme_override_constants/margin_left = 17
-theme_override_constants/margin_top = 13
-theme_override_constants/margin_right = 17
-theme_override_constants/margin_bottom = 13
-
-[node name="Stance" type="Label" parent="HUD/Prompts/StancePlate/Panel/Padding"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-vertical_alignment = 1
-
-; Flight is the one thing in the game with controls that exist nowhere else, so
-; it carries its own card, sitting directly above the stance line and shown only
-; while the feet are off the ground. The box reaches well above the plate and the
-; panel shrinks to the bottom of it, so the card grows upwards as lines are added
-; rather than pushing the stance line off the screen.
-[node name="FlightPlate" type="HBoxContainer" parent="HUD/Prompts"]
-visible = false
-layout_mode = 1
-anchors_preset = 2
-anchor_top = 1.0
-anchor_bottom = 1.0
-offset_left = 20.0
-offset_top = -280.0
-offset_right = 420.0
-offset_bottom = -66.0
-grow_vertical = 0
-mouse_filter = 2
-
-[node name="Panel" type="PanelContainer" parent="HUD/Prompts/FlightPlate"]
-layout_mode = 2
-size_flags_horizontal = 0
-size_flags_vertical = 8
-mouse_filter = 2
-
-[node name="Padding" type="MarginContainer" parent="HUD/Prompts/FlightPlate/Panel"]
-layout_mode = 2
-theme_override_constants/margin_left = 17
-theme_override_constants/margin_top = 13
-theme_override_constants/margin_right = 17
-theme_override_constants/margin_bottom = 13
-
-[node name="Lines" type="VBoxContainer" parent="HUD/Prompts/FlightPlate/Panel/Padding"]
-layout_mode = 2
-theme_override_constants/separation = 7
-
-[node name="Speed" type="Label" parent="HUD/Prompts/FlightPlate/Panel/Padding/Lines"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 17
-
-[node name="Rise" type="Label" parent="HUD/Prompts/FlightPlate/Panel/Padding/Lines"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = "SPACE  rise"
-
-[node name="Boost" type="Label" parent="HUD/Prompts/FlightPlate/Panel/Padding/Lines"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = "SHIFT  boost"
-
-[node name="Slow" type="Label" parent="HUD/Prompts/FlightPlate/Panel/Padding/Lines"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = "WASD   steer, release to slow"
-
-[node name="Steer" type="Label" parent="HUD/Prompts/FlightPlate/Panel/Padding/Lines"]
-layout_mode = 2
-theme_override_font_sizes/font_size = 12
-text = "X      land"

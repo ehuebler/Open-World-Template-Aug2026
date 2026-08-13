@@ -217,7 +217,8 @@ func _send_ready_packets(flush: bool) -> void:
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func _voice_packet(payload: PackedByteArray) -> void:
 	var sender := multiplayer.get_remote_sender_id()
-	if sender > 0:
+	if NetworkManager.state == NetworkManager.SessionState.IN_GAME \
+			and NetworkManager.is_peer_registered(sender):
 		receive(sender, payload)
 
 

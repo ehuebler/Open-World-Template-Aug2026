@@ -24,6 +24,7 @@ extends Node
 ##     -- --split=F     chunk widths of viewer distance before a chunk subdivides
 ##     -- --regions     walk the colour wheel at ground level, measuring the sky
 ##     -- --night       pin the sun over the pole and photograph both sides of it
+##     -- --air         the same frames with atmospheric scattering on and off
 ##     -- --noclouds    leave the cloud deck off
 ##     -- --nosea       leave the sea off, baring the sea bed
 ##     -- --noair       leave the atmosphere shell off
@@ -83,7 +84,7 @@ var _to_sun := Vector3.UP
 func _ready() -> void:
 	_options = _arguments()
 	_touring = _options.has("tour") or _options.has("regions") or _options.has("night") \
-		or _options.has("at")
+		or _options.has("at") or _options.has("air")
 
 	_shape = PlanetShape.new()
 	if _options.has("seed"):
@@ -122,6 +123,8 @@ func _ready() -> void:
 	if _touring:
 		if _options.has("regions"):
 			await _region_shots()
+		elif _options.has("air"):
+			await _air()
 		elif _options.has("night"):
 			await _night()
 		elif _options.has("at"):
@@ -533,6 +536,120 @@ func _region_shots() -> void:
 		print("planet_test: %-12s longitude %3d deg  ground %5.0f m  sky %.2f %.2f %.2f" % [
 			name, roundi(rad_to_deg(angle)), _shape.elevation(direction),
 			sky.r, sky.g, sky.b])
+
+
+# --- Atmospheric scattering -------------------------------------------------
+
+## Photographs the same six views with the wavelength model on and off.
+##
+## The sun is pinned the way [method _night] pins it rather than swung to face
+## each shot, and for the same reason: everything the scattering does depends on
+## the angle between the view and the sun and on how much air the sunlight
+## crossed to get here, so a light that follows the camera would hold both of
+## those constant and the mode would photograph nothing.
+##
+## Read the numbers beside the pictures. Each pair is one frame twice, so the two
+## rows differ by exactly the effect: `air_dusk` should warm sharply, `air_noon_up`
+## should barely move because straight up is the shortest path through the air, and
+## the `off` rows should match what the game looked like before any of this. The
+## region walk at the end is the other half — three places under the same sun,
+## which have to come back as three different hues or the planet's colour wheel has
+## stopped reaching its sky.
+func _air() -> void:
+	# Same reasoning as --night: every figure below is a mean colour, and a pale
+	# HUD plate is brighter than the sky at dusk.
+	_hud.hide()
+	_sun.global_position = Vector3.RIGHT * _shape.radius * 4.0
+	_sun.look_at(Vector3.ZERO, Vector3.UP)
+	_to_sun = _sun.global_basis.z
+	var noon := _land_near(Vector3.RIGHT)
+	var dusk := _land_near(Vector3.BACK)
+	print("planet_test: sun pinned toward (%.2f, %.2f, %.2f)" % [
+		_to_sun.x, _to_sun.y, _to_sun.z])
+
+	for lit: bool in [true, false]:
+		# The same global the player's toggle writes. Set here rather than
+		# through GameSettingsManager so the harness does not save a setting into
+		# the player's own settings.cfg on its way past.
+		RenderingServer.global_shader_parameter_set(&"air_chroma", 1.0 if lit else 0.0)
+		var tag := "on" if lit else "off"
+		# Into the sun sitting on the horizon: the sunset band, and the one view
+		# where the sunlight's own trip through the air is longest.
+		_stand(dusk, 1.7, 0.08, Vector3.RIGHT)
+		await _air_shot("air_dusk_" + tag)
+		# The other way, which is where the blue that is left over shows.
+		_stand(dusk, 1.7, 0.08, Vector3.LEFT)
+		await _air_shot("air_dusk_away_" + tag)
+		# Straight up at noon: the shortest path through the air, and therefore
+		# the control. A large change here means the model is being applied as a
+		# flat tint rather than as a path length.
+		_stand(noon, 1.7, 1.2, Vector3.UP)
+		await _air_shot("air_noon_up_" + tag)
+		# Gameplay distance, which is the range this is actually seen at: a few
+		# hundred metres up with the horizon across the middle of the frame.
+		_camera.global_position = _planet.standing_position(dusk, 400.0)
+		_camera.look_at(_planet.standing_position(
+			_slide(dusk, Vector3.RIGHT, 3000.0)), dusk.normalized())
+		await _air_shot("air_flight_" + tag)
+		# The limb from outside the air, with the terminator across it. This is
+		# where the shell rather than the sky is doing the work.
+		_camera.global_position = (Vector3.RIGHT + Vector3.BACK).normalized() \
+			* _shape.radius * 2.0
+		_camera.look_at(Vector3.ZERO, Vector3.UP)
+		await _air_shot("air_limb_" + tag)
+		# And from just outside the shell's fade-in altitude, where the sky and
+		# the shell have to agree with each other or a band appears.
+		_camera.global_position = _planet.standing_position(dusk, 2600.0)
+		_camera.look_at(_planet.standing_position(
+			_slide(dusk, Vector3.RIGHT, 20000.0)), dusk.normalized())
+		await _air_shot("air_shell_edge_" + tag)
+
+	RenderingServer.global_shader_parameter_set(&"air_chroma", 1.0)
+	# Three places a third of a turn apart around the colour wheel, under the
+	# harness's usual 35-degree sun so each is lit the same way as the others.
+	var declared: Dictionary = ProjectSettings.get_setting(
+		"shader_globals/region_axis", {})
+	var axis: Vector3 = declared.get("value", Vector3(0.0, 1.0, 0.0))
+	axis = axis.normalized()
+	var side := axis.cross(Vector3.UP if absf(axis.y) < 0.9 else Vector3.RIGHT).normalized()
+	var front := axis.cross(side)
+	for step in 3:
+		var angle := TAU * float(step) / 3.0
+		# On land, which `--regions` does not bother with and should: two thirds
+		# of this planet is sea, and a camera 1.7 m over a sea bed is under
+		# water. The sky then comes back through several metres of it, which is
+		# black in red and reads as the scattering having failed.
+		var direction := _land_near(
+			(side * cos(angle) + front * sin(angle)).normalized())
+		_face_sun(direction)
+		_place(direction, 1.7, 4000.0)
+		await _air_shot("air_region_%d" % roundi(rad_to_deg(angle)))
+
+
+## A point [param metres] along the surface from [param direction], in the
+## direction of [param toward]. Used to aim a camera at the ground ahead of it
+## when the sun is pinned and [method _place] cannot be used.
+func _slide(direction: Vector3, toward: Vector3, metres: float) -> Vector3:
+	var up := direction.normalized()
+	var heading := toward - up * up.dot(toward)
+	if heading.length_squared() < 1.0e-6:
+		heading = up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD)
+	var angle := metres / _shape.radius
+	return (up * cos(angle) + heading.normalized() * sin(angle)).normalized()
+
+
+## One scattering shot, with the sky's own colour reported beside it.
+##
+## Hue is printed as well as the three channels because that is the thing being
+## judged: two skies of the same brightness and different hue is the whole effect,
+## and comparing three pairs of decimals by eye is exactly how a change of hue gets
+## missed. Saturation goes with it so a warm sky can be told from a pale one.
+func _air_shot(shot_name: String) -> void:
+	await _settle()
+	await _shot(shot_name)
+	var sky := await _sky_color()
+	print("planet_test: %-22s sky %.3f %.3f %.3f   hue %3.0f deg  sat %.2f  luma %.3f" % [
+		shot_name, sky.r, sky.g, sky.b, sky.h * 360.0, sky.s, sky.get_luminance()])
 
 
 # --- Night ------------------------------------------------------------------

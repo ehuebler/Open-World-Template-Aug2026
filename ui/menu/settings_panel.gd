@@ -9,8 +9,8 @@ extends VBoxContainer
 ## would be a second place for the rows, the write-through and the rebind capture
 ## to drift, and the pair would disagree about defaults the first time one of them
 ## gained a row. Both entrances share the same sharp red/green presentation and
-## section layout. Only the outer frame and final action differ: home draws its
-## own card and offers BACK, while GameMenu supplies the frame and offers LEAVE.
+## section layout. Only the outer navigation differs: home draws its own card and
+## offers BACK, while GameMenu supplies the frame and session actions beneath it.
 ##
 ## Sections are four buttons over one content area rather than a [TabContainer].
 ## A tab container brings its own tab strip, and inside [GameMenu] that would be a
@@ -20,10 +20,6 @@ extends VBoxContainer
 ## with no edit in this file.
 
 signal closed
-## In-game only: the player asked to leave the session. Raised rather than acted
-## on, because what leaving means — drop the peer, reload the world, go back to the
-## home screen — belongs to whoever opened this.
-signal leave_requested
 
 const SettingsManagerScript := preload("res://core/settings_manager.gd")
 
@@ -52,8 +48,8 @@ var _section_row: HBoxContainer
 var _content: MarginContainer
 
 
-## Called before the panel enters the tree. In game it drops its own card and
-## heading — the tab is the card — and swaps BACK for LEAVE GAME.
+## Called before the panel enters the tree. In game it drops its own card,
+## heading, and BACK action because GameMenu already supplies all three.
 func configure(in_game: bool) -> void:
 	_in_game = in_game
 
@@ -104,11 +100,11 @@ func _build() -> void:
 		card.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		card.add_theme_stylebox_override(
 			&"panel",
-			_style(BLACK_68, Color(RED_BRIGHT, 0.94), 2, 16.0,
+			_style(Color(0.0, 0.0, 0.0, 0.42), Color(RED_BRIGHT, 0.94), 2, 16.0,
 				Color(RED, 0.20), 8)
 		)
 		var glow := RedGlowPanel.add_to(card)
-		glow.fill_color = BLACK_42
+		glow.fill_color = Color(0.0, 0.0, 0.0, 0.16)
 		glow.border_color = Color(RED_BRIGHT, 0.96)
 		glow.border_width = 2.0
 		glow.glow_intensity = 1.35
@@ -199,13 +195,6 @@ func _footer() -> Control:
 	actions.add_child(spacer)
 
 	if _in_game:
-		var leave := _settings_button("LEAVE GAME", false, true)
-		leave.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		leave.pressed.connect(func() -> void:
-			_settings.save_settings()
-			leave_requested.emit()
-		)
-		actions.add_child(leave)
 		return actions
 
 	var back := _settings_button("BACK", true)
@@ -301,6 +290,20 @@ func _display_section() -> VBoxContainer:
 		float(_settings.get_setting(&"graphics", &"flora_range", 2.0)),
 		func(value: float) -> void: _write(&"graphics", &"flora_range", value),
 		"x"
+	))
+	# The two atmosphere effects. Both land the moment they are switched — the
+	# scattering through a shader global and the rays by enabling the compositor
+	# effect — so this page can be left open while they are compared.
+	tab.add_child(_toggle_row(
+		"Atmospheric scattering",
+		bool(_settings.get_setting(&"graphics", &"atmospheric_scattering", true)),
+		func(value: bool) -> void:
+			_write(&"graphics", &"atmospheric_scattering", value)
+	))
+	tab.add_child(_toggle_row(
+		"God rays",
+		bool(_settings.get_setting(&"graphics", &"god_rays", true)),
+		func(value: bool) -> void: _write(&"graphics", &"god_rays", value)
 	))
 	return tab
 
@@ -536,7 +539,12 @@ func _row_panel(content: Control) -> PanelContainer:
 	panel.mouse_filter = Control.MOUSE_FILTER_PASS
 	panel.add_theme_stylebox_override(
 		&"panel",
-		_style(BLACK_68, Color(RED, 0.72), 1, 9.0)
+		_style(
+			BLACK_68 if _in_game else Color(0.0, 0.0, 0.0, 0.50),
+			Color(RED, 0.72),
+			1,
+			9.0
+		)
 	)
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	panel.add_child(content)

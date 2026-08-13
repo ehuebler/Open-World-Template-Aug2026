@@ -514,6 +514,13 @@ func apply_damage(hit: DamageHit) -> float:
 	# line that runs.
 	if not hit.reaches(to_world * _bound_centre, _bound_radius):
 		return 0.0
+	# A volume that spares the canopy spares a colony of sixteen-metre trees
+	# outright, and knowing that costs one comparison against the shortest tree
+	# the colony can hold.
+	if hit.max_plant_height > 0.0 and minimum_height > hit.max_plant_height:
+		return 0.0
+	if maximum_height < hit.min_plant_height:
+		return 0.0
 	var absorbed := 0.0
 	var centre := _host.global_position if _host != null else Vector3.ZERO
 	# The volume's axis taken apart, and the furthest a trunk may be rooted from
@@ -541,6 +548,11 @@ func apply_damage(hit: DamageHit) -> float:
 		if closest.length_squared() >= reach_squared:
 			continue
 		var visual_height := _trees[index].basis.y.length() * _authored_height
+		if hit.max_plant_height > 0.0 \
+				and visual_height > hit.max_plant_height:
+			continue
+		if visual_height < hit.min_plant_height:
+			continue
 		# Also measured at the crown. A beam level with the flowers is over the
 		# root by the whole height of the trunk, and testing the root alone made
 		# a sixteen-metre tree immune to anything not aimed at its feet.
@@ -558,7 +570,8 @@ func apply_damage(hit: DamageHit) -> float:
 			_tree_damage[index] = carried
 			continue
 		_tree_damage.erase(index)
-		_fell(index, middle, hit.amount * share, visual_height)
+		_fell(index, middle, hit.amount * share, visual_height,
+			hit.plant_break_effects)
 	return absorbed
 
 
@@ -584,8 +597,12 @@ func _damage_taken(raw: float) -> float:
 ## The one place a tree comes down, whichever spent its health. Keeping both
 ## routes here is what stops a laser-felled tree from leaving its collider
 ## standing while a rammed one does not.
+## A colony holds tens of trees rather than the tens of thousands of blades a
+## ground cover does, so [param bursts] is never here for what it saves — it is
+## here so that one hit cannot be answered with fragments by one field and
+## silently by the other.
 func _fell(index: int, at: Vector3, strength: float,
-		visual_height: float) -> void:
+		visual_height: float, bursts := true) -> void:
 	_broken_trees[index] = true
 	_new_breaks.append(index)
 	if _trunk_stand != null:
@@ -597,6 +614,8 @@ func _fell(index: int, at: Vector3, strength: float,
 	for shape: CollisionShape3D in _tree_colliders[index]:
 		shape.set_meta(IMPACT_BROKEN_META, true)
 		shape.set_deferred(&"disabled", true)
+	if not bursts:
+		return
 	var root := to_global(_trees[index].origin)
 	var up := (root - _host.global_position).normalized() \
 		if _host != null else global_basis.y
@@ -632,6 +651,45 @@ func apply_broken_keys(keys: PackedInt32Array) -> void:
 		_tree_damage.erase(index)
 		var visual_height := _trees[index].basis.y.length() * _authored_height
 		_fell(index, Vector3.INF, 0.0, visual_height)
+
+
+## Stands every tree this colony lost inside a sphere back up, and reports how
+## many came back. The colony's layout is placed once and kept, so a felled tree
+## is restored to the transform it was scattered with rather than regrown
+## somewhere new. See [method GroundCover.restore_within].
+func restore_within(centre: Vector3, radius: float) -> int:
+	if _broken_trees.is_empty() or radius <= 0.0 or not centre.is_finite():
+		return 0
+	var to_world := global_transform
+	var restored := 0
+	var restored_indices := {}
+	for index_key: Variant in _broken_trees.keys():
+		var index := int(index_key)
+		if index < 0 or index >= _trees.size():
+			continue
+		if (to_world * _trees[index].origin).distance_to(centre) > radius:
+			continue
+		_broken_trees.erase(index)
+		_tree_damage.erase(index)
+		if _trunk_stand != null:
+			_trunk_stand.multimesh.set_instance_transform(index, _trees[index])
+		if _head_stand != null:
+			_head_stand.multimesh.set_instance_transform(index, _heads[index])
+		for shape: CollisionShape3D in _tree_colliders[index]:
+			shape.set_meta(IMPACT_BROKEN_META, false)
+			shape.set_deferred(&"disabled", false)
+		restored_indices[index] = true
+		restored += 1
+	if restored > 0 and not _new_breaks.is_empty():
+		# Do not let the world's next reconciliation broadcast fellings that
+		# happened just before this reset. Those keys describe an older encounter
+		# and would immediately knock the restored trees back down on clients.
+		var pending := PackedInt32Array()
+		for index in _new_breaks:
+			if not restored_indices.has(index):
+				pending.append(index)
+		_new_breaks = pending
+	return restored
 
 
 func _hidden(stood: Transform3D) -> Transform3D:

@@ -21,3 +21,9 @@ shader_parameter/glow_falloff = 4.0
 shader_parameter/region_tint = 0.55
 shader_parameter/sun_side = 0.8
 shader_parameter/shell_height = 2400.0
+; Scattering. Stronger and thinner than the sky's pair on purpose: from outside,
+; the limb is where the wavelength model has the most to say, and a grazing ray's
+; honest thickness would pale the sunlit rim to white. See the uniforms in
+; vivid_atmosphere.gdshader.
+shader_parameter/scatter_strength = 0.9
+shader_parameter/scatter_density = 0.5

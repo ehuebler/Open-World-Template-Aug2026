@@ -1,0 +1,36 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/enemies/bigfoot/bigfoot.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://assets/runtime/characters/bigfoot.glb" id="2_model"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape_bigfoot"]
+resource_local_to_scene = true
+radius = 0.72
+height = 3.16
+
+[node name="Bigfoot" type="CharacterBody3D" groups=["bigfoot_boss"]]
+floor_snap_length = 0.35
+safe_margin = 0.04
+max_slides = 6
+script = ExtResource("1_script")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 1.58, 0)
+shape = SubResource("CapsuleShape_bigfoot")
+
+; The GLB is authored grounded, Godot -Z forward, and exactly 3.2 m tall.
+; Identity here is the real-world scale and facing, not a corrective transform.
+[node name="Model" parent="." instance=ExtResource("2_model")]
+
+; Rest-space anchors updated each frame from animated Head/Hand bones.
+[node name="Mouth" type="Marker3D" parent="."]
+position = Vector3(0, 2.72, -0.43)
+
+[node name="RightFist" type="Marker3D" parent="."]
+position = Vector3(0.994, 1.561, -0.265)
+
+[node name="LeftFist" type="Marker3D" parent="."]
+position = Vector3(-0.892, 1.667, -0.236)
+
+[node name="GrabSocket" type="Marker3D" parent="."]
+position = Vector3(0.72, 1.55, -0.72)

@@ -78,11 +78,19 @@ func _check_selection_and_holster() -> void:
 	var press := InputEventKey.new()
 	press.physical_keycode = KEY_F
 	press.pressed = true
-	_expect(press.is_action_pressed("holster"), "physical F maps to holster")
+	_expect(press.is_action_pressed("parry")
+		and not press.is_action_pressed("holster"), "physical F maps only to parry")
 	_player._unhandled_input(press)
 	await get_tree().process_frame
+	_expect(_player.held_item() == "sword" and not _player.is_holstered(),
+		"parry leaves the drawn item alone")
+	var interact := InputEventKey.new()
+	interact.physical_keycode = KEY_E
+	interact.pressed = true
+	_player._unhandled_input(interact)
+	await get_tree().process_frame
 	_expect(_player.held_item().is_empty() and _player.is_holstered(),
-		"F empties the hands")
+		"E over empty space enters ability mode")
 	_expect(not _player.activate_ability(0), "empty LMB ability safely no-ops")
 	_player.activate_primary()
 	_expect(_player.held_item().is_empty(), "holstered LMB does not attack a weapon")

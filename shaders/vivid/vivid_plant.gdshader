@@ -98,6 +98,21 @@ uniform float region_sheen : hint_range(0.0, 2.0) = 0.35;
 uniform float region_rim : hint_range(0.0, 1.0) = 0.4;
 group_uniforms;
 
+group_uniforms Camera_Rim;
+uniform vec3 camera_rim_color : source_color = vec3(0.20, 1.0, 0.58);
+// Thin grass and leaves can be edge-on across their whole visible area. Keep
+// their emission below a character's so a field gains outlines, not a white
+// emissive carpet.
+uniform float camera_rim_energy : hint_range(0.0, 8.0) = 0.35;
+uniform float camera_rim_dark : hint_range(0.0, 1.0) = 0.68;
+uniform float camera_rim_light : hint_range(0.0, 1.0) = 0.84;
+// Optional specular-style filtering for sub-pixel growth. Ordinary flora keeps
+// the rim at every range; dense grass overrides this so its edge energy is
+// folded away before individual blades turn into one-pixel sparkles.
+uniform float camera_rim_fade_from = 10000.0;
+uniform float camera_rim_fade_to = 10001.0;
+group_uniforms;
+
 group_uniforms Shape;
 // Height of the mesh as it was authored, in metres, base at the origin and
 // growing up +Y. GroundCover writes it from the mesh's own bounds, so a new
@@ -185,6 +200,12 @@ uniform bool custom_z_is_glow = false;
 // a flower on a clifftop is above water and below the line of sight to it.
 uniform bool underwater = false;
 uniform float glow_strength : hint_range(0.0, 8.0) = 0.0;
+// Like specular filtering in foliage shaders: once a blade is too small to
+// resolve, stop asking its individual emissive pixels to carry the patch. The
+// pooled low-frequency ground light remains. Defaults leave ordinary species
+// unchanged; dense glowing grass opts in.
+uniform float glow_fade_from = 10000.0;
+uniform float glow_fade_to = 10001.0;
 group_uniforms;
 
 group_uniforms NightEmission;
@@ -437,6 +458,13 @@ void fragment() {
 
 	vec3 view = normalize(CAMERA_POSITION_WORLD - v_world_position);
 	float fresnel = pow(1.0 - clamp(dot(normalize(v_world_normal), view), 0.0, 1.0), 4.0);
+	float camera_rim = vivid_camera_rim(
+		v_world_normal, view, camera_rim_dark, camera_rim_light);
+	if (camera_rim_fade_from < 9999.0) {
+		camera_rim *= 1.0 - smoothstep(camera_rim_fade_from,
+			max(camera_rim_fade_to, camera_rim_fade_from + 0.01),
+			distance(CAMERA_POSITION_WORLD, v_world_position));
+	}
 
 	// The plant's own colour, taken before the water gets at it. What a coral
 	// glows by is what a coral is, and the veil below pulls albedo towards the
@@ -509,10 +537,17 @@ void fragment() {
 	}
 	vec3 day_emission = day_emission_color * day_emission_energy
 		* paint_emission * mix(vec3(1.0), own_color, day_emission_albedo);
+	float glow_visibility = 1.0;
+	if (glow_fade_from < 9999.0) {
+		glow_visibility = 1.0 - smoothstep(glow_fade_from,
+			max(glow_fade_to, glow_fade_from + 0.01),
+			distance(CAMERA_POSITION_WORLD, v_world_position));
+	}
 	// A burned lantern mushroom stops glowing. Emission is what makes a
 	// scorched instance still read as healthy at night, so it goes out with the
 	// albedo rather than after it.
 	EMISSION = (region_color * fresnel * region_sheen * region.y * 0.5
-		+ albedo * v_glow * glow_strength
+		+ camera_rim_color * camera_rim_energy * camera_rim
+		+ albedo * v_glow * glow_strength * glow_visibility
 		+ day_emission + night_emission) * lit * (1.0 - v_char);
 }

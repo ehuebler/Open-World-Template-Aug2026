@@ -18,8 +18,14 @@ shader_parameter/specular = 0.2
 ; hands the blade back to its own albedo.
 shader_parameter/translucency = 0.0
 shader_parameter/region_albedo = 0.68
-shader_parameter/region_sheen = 0.34
-shader_parameter/region_rim = 0.42
+shader_parameter/region_sheen = 0.24
+shader_parameter/region_rim = 0.32
+; A blade becomes all silhouette once it is thinner than a pixel. Keep a subtle
+; close rim, then filter that emissive edge out before the middle-distance lawn
+; turns into bright temporal/static noise.
+shader_parameter/camera_rim_energy = 0.09
+shader_parameter/camera_rim_fade_from = 8.0
+shader_parameter/camera_rim_fade_to = 30.0
 shader_parameter/rigidity = 1.5
 ; Where the blades stop being animated, brought right in from the shader's 18
 ; and 55.
@@ -54,4 +60,9 @@ shader_parameter/push_sway = 57.0
 shader_parameter/max_bend = 66.0
 shader_parameter/purple_shift = 0.18
 shader_parameter/custom_z_is_glow = true
-shader_parameter/glow_strength = 3.8
+; Emission only identifies the broad glowing patches. Elevated pooled lights
+; carry their energy onto the terrain, so the blades do not need to burn
+; white-green to make a patch readable.
+shader_parameter/glow_strength = 0.9
+shader_parameter/glow_fade_from = 10.0
+shader_parameter/glow_fade_to = 34.0

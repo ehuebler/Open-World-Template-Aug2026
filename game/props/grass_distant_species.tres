@@ -8,14 +8,14 @@
 ; A lightweight horizon around the dense grass field.
 ;
 ; This is deliberately a separate GroundCover species and node. Extending the
-; dense field itself from 48 m to the tree horizon would make it hold the full eighteen
-; tufts per square metre in every streamed tile even after distance thinning
-; stopped most of them from drawing. This layer stores only 1.4 eight-blade
+; dense field itself from 48 m to the tree horizon would make it hold the full
+; near density in every streamed tile even after distance thinning stopped most
+; of them from drawing. This layer stores only one lightweight
 ; tufts per square metre, so the visible radius is much larger without
 ; turning the hidden MultiMesh buffers into the dominant memory cost.
 ;
 ; It overlaps the near field rather than ending at an inner ring. At one
-; thirteenth of the near density that overlap is invisible as a separate layer,
+; twentieth of the near density that overlap is invisible as a separate layer,
 ; avoids a circular seam at 48 m, and makes the lawn underfoot slightly fuller.
 
 [resource]
@@ -42,7 +42,7 @@ terrain_tint = true
 glowing_patches = 0.3
 glow_patch_size = 26.0
 glow_seed = 20260818
-per_square_metre = 1.4
+per_square_metre = 1.0
 clump_count = 4
 clump_radius = 1.3
 bare_share = 0.0
@@ -55,7 +55,8 @@ random_seed = 20260817
 draw_within = 321.5
 ; Later thinning, and deliberately not one blade more.
 ;
-; The density here is left where it was, having been tried higher and put back.
+; The density remains deliberately sparse, and was reduced in step with the
+; near lawn so its sub-pixel silhouettes do not reintroduce the same noise.
 ; This layer is held in full across the whole 321 m circle whether it is drawn or
 ; not — that is the cost the two-field split exists to avoid — so blades bought
 ; here are mostly paid for out at the tree line where nobody asked for any. At

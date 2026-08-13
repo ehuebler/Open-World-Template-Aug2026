@@ -121,6 +121,7 @@ var _touch_index := -1
 var _holding := false
 var _latched_until_release := false
 var _elapsed := 0.0
+var _last_tick_usec := 0
 var _progress := 0.0
 var _hovered := false
 
@@ -183,7 +184,14 @@ func _process(delta: float) -> void:
 		_cancel_hold()
 		return
 
-	_elapsed += delta
+	var now := Time.get_ticks_usec()
+	var unscaled_delta := maxf(
+		float(now - _last_tick_usec) / 1_000_000.0, 0.0)
+	_last_tick_usec = now
+	# Engine.time_scale is zero during a complete single-player pause, which
+	# deliberately freezes shader TIME too. Menu holds still use wall time; the
+	# supplied delta remains useful to deterministic harnesses and normal play.
+	_elapsed += delta if delta > 0.0 else unscaled_delta
 	_set_progress(_elapsed / hold_duration)
 	if _elapsed >= hold_duration:
 		_complete_hold()
@@ -455,6 +463,7 @@ func _begin_hold(source: HoldSource) -> void:
 	_source = source
 	_holding = true
 	_elapsed = 0.0
+	_last_tick_usec = Time.get_ticks_usec()
 	_set_progress(0.0)
 	hold_started.emit()
 	queue_redraw()

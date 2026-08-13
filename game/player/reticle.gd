@@ -8,9 +8,10 @@ extends Control
 @export var spread_gap := 7.0
 @export var tick_length := 7.0
 @export var thickness := 2.0
-## Jet Black over Dust Grey, the same pencil and paper as the menus.
-@export var ink := Color(0.078, 0.212, 0.259, 0.92)
-@export var halo := Color(0.855, 0.824, 0.847, 0.75)
+## Red over black, matching the square gameplay plates without losing the
+## reticle against either snow or space.
+@export var ink := Color(0.937, 0.082, 0.122, 0.96)
+@export var halo := Color(0.008, 0.008, 0.010, 0.82)
 
 var _spread := 0.0
 

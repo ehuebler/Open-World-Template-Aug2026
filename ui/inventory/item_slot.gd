@@ -45,6 +45,13 @@ var placeholder := ""
 var badge := ""
 ## Marks the weapon bar's current slot, which is drawn heavier and in accent ink.
 var selected := false
+## Gameplay hotbar only: square black tile, red rim, and a black-on-accent key
+## badge. Inventory and editor tiles keep their existing tactile presentation.
+var hud_style := false:
+	set(value):
+		hud_style = value
+		_outline.clear()
+		queue_redraw()
 
 var _hovered := false
 var _drop_target := false
@@ -169,20 +176,29 @@ func _drag_preview() -> Control:
 
 func _draw() -> void:
 	var rect := Rect2(Vector2.ZERO, size)
+	var corner := 0.0 if hud_style else CORNER
 	if _outline.is_empty():
-		_outline = _rounded(rect.grow(-1.0), CORNER)
+		_outline = _rounded(rect.grow(-1.0), corner)
 	draw_colored_polygon(_outline, _fill_color())
 	# A tile is a well cut into the pane, so its rim has to read against the pane
 	# rather than against the tile.
-	var ink: Color = PALETTE.accent if (_drop_target or selected) else PALETTE.text_muted
+	var ink: Color = (
+		RedHudTheme.GREEN if selected else RedHudTheme.RED
+	) if hud_style else (
+		PALETTE.accent if (_drop_target or selected) else PALETTE.text_muted
+	)
 	var weight := 2.4 if (_drop_target or _hovered or selected) else 1.4
 	draw_polyline(_outline, Color(ink, 0.9), weight, true)
 	if selected or _drop_target:
 		# The box that says this item is on the body. Two rings rather than one
 		# heavier ring: a grid of tiles is read at a glance and a doubled edge is
 		# the only weight difference that survives being 44 px across.
-		draw_polyline(_rounded(rect.grow(-RING_INSET), CORNER - 2.0),
-			Color(PALETTE.accent, 0.55), 1.6, true)
+		draw_polyline(
+			_rounded(rect.grow(-RING_INSET), maxf(corner - 2.0, 0.0)),
+			Color(RedHudTheme.GREEN if hud_style else PALETTE.accent, 0.62),
+			1.6,
+			true
+		)
 	_draw_badge()
 
 	var id := item_id()
@@ -200,6 +216,8 @@ func _draw() -> void:
 
 
 func _fill_color() -> Color:
+	if hud_style:
+		return Color(RedHudTheme.BLACK, 0.88)
 	if not interactive:
 		# These sit over the world rather than over a card, so they keep enough
 		# of the plate to be read against grass, sky or a lit prop. Any thinner
@@ -222,6 +240,28 @@ func _draw_badge() -> void:
 	var font := get_theme_default_font()
 	if font == null:
 		return
+	if hud_style:
+		var font_size := 10
+		var text_size := font.get_string_size(
+			badge, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size
+		)
+		var badge_rect := Rect2(
+			Vector2(3.0, 3.0),
+			Vector2(maxf(text_size.x + 7.0, 17.0), 15.0)
+		)
+		var badge_fill := RedHudTheme.GREEN if selected else RedHudTheme.RED
+		draw_rect(badge_rect, badge_fill, true)
+		draw_rect(badge_rect, RedHudTheme.BLACK, false, 1.0)
+		draw_string(
+			font,
+			Vector2(6.0, 14.0),
+			badge,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			font_size,
+			RedHudTheme.INK
+		)
+		return
 	# Full-strength rather than muted: the number is the one thing on a HUD tile
 	# that has to be read at a glance, and it is the smallest type in the game.
 	var color: Color = PALETTE.accent if selected else PALETTE.text_primary
@@ -237,7 +277,9 @@ func _draw_placeholder() -> void:
 	var font_size := 12
 	var baseline := (size.y + float(font_size)) * 0.5 - 1.0
 	draw_string(font, Vector2(0.0, baseline), placeholder, HORIZONTAL_ALIGNMENT_CENTER,
-		size.x, font_size, Color(PALETTE.text_muted, 0.85))
+		size.x, font_size, (
+			RedHudTheme.INK if hud_style else Color(PALETTE.text_muted, 0.85)
+		))
 
 
 ## A closed rounded rectangle, corners first. Returned as a path rather than

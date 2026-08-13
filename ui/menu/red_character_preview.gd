@@ -23,6 +23,12 @@ var _camera: Camera3D
 var _worn: Dictionary = {}
 var _spin := -0.42
 var _dragging := false
+## Portraits in roster cards use the same renderer in a shorter frame.
+var view_size := VIEW_SIZE
+## Orthographic room around the body, expressed as a share of body height.
+## Roster portraits lower this so the player fills the available viewer while
+## the full Hero preview keeps its wider breathing room.
+var camera_height_scale := 1.35
 
 
 func configure(equipment: ItemContainer, body_id: String, skin_id: String,
@@ -34,7 +40,7 @@ func configure(equipment: ItemContainer, body_id: String, skin_id: String,
 
 
 func _ready() -> void:
-	custom_minimum_size = VIEW_SIZE
+	custom_minimum_size = view_size
 	expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	mouse_filter = Control.MOUSE_FILTER_STOP
@@ -57,7 +63,9 @@ func _gui_input(event: InputEvent) -> void:
 		return
 	var motion := event as InputEventMouseMotion
 	if motion != null and _dragging:
-		_spin -= motion.relative.x * SPIN_PER_PIXEL
+		# Hero and online portraits use direct manipulation: drag right and the
+		# character turns right with the pointer.
+		_spin += motion.relative.x * SPIN_PER_PIXEL
 		if is_instance_valid(_pivot):
 			_pivot.basis = Basis(Vector3.UP, _spin)
 		accept_event()
@@ -80,7 +88,7 @@ func refresh() -> void:
 		var garment := Wardrobe.equip(_character, body_slot,
 			ItemDB.scene_path(id))
 		if garment != null:
-			SurfaceSkin.paint(garment)
+			SurfaceSkin.paint(garment, {}, true)
 	if repaint:
 		_paint()
 
@@ -92,7 +100,7 @@ func set_tints(tints: Dictionary) -> void:
 
 func _build() -> void:
 	_viewport = SubViewport.new()
-	_viewport.size = Vector2i(VIEW_SIZE * SUPERSAMPLE)
+	_viewport.size = Vector2i(view_size * SUPERSAMPLE)
 	_viewport.transparent_bg = true
 	_viewport.own_world_3d = true
 	_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
@@ -110,14 +118,14 @@ func _build() -> void:
 	var packed := CharacterDB.scene(_body_id)
 	_character = packed.instantiate() as Node3D if packed != null else Node3D.new()
 	_pivot.add_child(_character)
-	SurfaceSkin.apply(_character)
+	SurfaceSkin.apply(_character, true)
 	SurfaceSkin.set_body_texture(_character,
 		CharacterDB.skin_texture(_body_id, _skin_id))
 	_play_float()
 
 	_camera = Camera3D.new()
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	_camera.size = CharacterDB.height(_body_id) * 1.35
+	_camera.size = CharacterDB.height(_body_id) * camera_height_scale
 	var height := CharacterDB.height(_body_id)
 	var eye := Vector3(-0.48, height * 0.55, -2.1)
 	var target := Vector3(0.0, height * 0.52, 0.0)
@@ -153,7 +161,7 @@ func _paint() -> void:
 	for target: String in groups:
 		var derived: Dictionary = {}
 		for mesh: MeshInstance3D in groups[target]:
-			SurfaceSkin.paint(mesh, derived)
+			SurfaceSkin.paint(mesh, derived, true)
 			if target == "body":
 				SurfaceSkin.set_texture(mesh,
 					CharacterDB.skin_texture(_body_id, _skin_id))

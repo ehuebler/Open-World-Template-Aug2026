@@ -1,6 +1,6 @@
 # Godot Co-op Template
 
-A reusable Godot 4.7 starter for offline play and player-hosted online co-op. It includes a responsive colored-pencil menu, persistent settings, LAN lobby discovery, direct-IP joining, a networked test world, an animated first/third person character controller, inventory-based apparel and weapons, and text and push-to-talk voice chat.
+A reusable Godot 4.7 starter for offline play and Steam player-hosted online co-op. It includes a responsive colored-pencil menu, persistent settings, Steam lobby discovery and friend invites, relay-backed multiplayer, a networked test world, an animated first/third person character controller, inventory-based apparel and weapons, and text and push-to-talk voice chat.
 
 This file explains how each system works and why. Asset provenance, regeneration commands and runtime contracts are documented in `assets/README.md`.
 
@@ -9,8 +9,8 @@ This file explains how each system works and why. Asset provenance, regeneration
 Open `project.godot` in Godot 4.7 and press **F6/F5**.
 
 - **Start Game** launches the world with an offline multiplayer peer.
-- **Online > Create Lobby** creates a public lobby or a code-protected private lobby.
-- **Online > Find Lobby** lists available sessions; select one or use Direct Connect.
+- **Online > Create Lobby** creates a public, friends-only, or password-protected Steam lobby, then opens its waiting room.
+- **Online > Join Lobby** searches Steam sessions by name and game mode. Steam friend invites enter through the same screen; no IP address is exposed.
 - Press **Escape** in the world to resume or leave.
 
 Controls:
@@ -38,17 +38,21 @@ While flying, the mouse is the steering: hold forward and you go wherever you ar
 
 Sensitivity, invert-Y, and FOV can be changed under **Settings > Gameplay** and are saved in `user://settings.cfg`. Ledges up to about shin height are stepped over automatically; see `step_height` in `game/player/player.gd`.
 
-## Test with two local instances
+## Test Steam multiplayer
 
-1. Run one instance and select **Online > Create Lobby**.
-2. Run a second instance and select **Online > Find Lobby > Refresh**.
-3. If local broadcast discovery is blocked, use **Direct Connect** with `127.0.0.1` and port `7777`.
+The project includes GodotSteam 4.21 GDExtension for Windows x64. Steam must be running and the testing accounts must have access to **My Strange Planet Playtest (5098060)**.
 
-When testing exported builds, run the executable twice. The editor can also run the project while one exported copy acts as the other peer.
+1. Sign into two different Steam accounts on separate machines or VMs.
+2. Start a Playtest build on both.
+3. Create a lobby on one machine, then either find it under **Join Lobby** or press **Invite Steam Friends**.
+4. For a private lobby, the joining player is admitted to the game roster only after the host verifies the password.
+5. The host presses **Start** after the roster is ready.
 
-Windows Firewall may prompt for network access. Allow private-network UDP traffic for the game port (default `7777`) and discovery port `45454`.
+Steam supplies discovery, NAT traversal, and relay routing; one player's game remains the authoritative host. Valve is not running the world simulation as a dedicated server.
 
-## Optional local headless host
+Development selects the Playtest ID with `steam/initialization/app_data/app_type=2` in `project.godot`. Change that App Type to `0` for the full store application **5098010**. Export with the normal Godot Windows templates; the GDExtension package carries the Steam runtime DLL.
+
+## Optional local headless transport test
 
 Godot can start a local host without navigating the menus:
 
@@ -56,9 +60,9 @@ Godot can start a local host without navigating the menus:
 godot --headless --path . -- --server --port=7777 --max-players=8 --lobby-name="Local Test"
 ```
 
-Replace `godot` with the full path to your Godot 4.7 executable if it is not on `PATH`. Stop the server with Ctrl+C. This is a testing convenience; the intended Steam topology remains player-hosted.
+Replace `godot` with the full path to your Godot 4.7 executable if it is not on `PATH`. Stop the server with Ctrl+C. This hidden ENet path exists only for automated two-process chat checks. It is not used by the Online menu.
 
-Add `--private --lobby-code=YOURCODE` to host a private headless lobby. Lobby codes are never included in discovery metadata and are checked by the host before a player is registered.
+Add `--private --lobby-code=YOURCODE` to exercise host-side admission in that local harness. Steam lobby passwords likewise stay out of lobby metadata and are checked by the host before a player is registered.
 
 ## Customize the template
 
@@ -520,6 +524,8 @@ The hole then scales with the speed it was dug at, `sqrt` of the ratio to the qu
 
 Landing in the hole took two more things than having cut it, and both were the same mistake in different places: something describing ground that no longer existed. The height field drops the moment the scar is registered, but the **collider** is generated from the mesh and was only replaced when the rebuild landed a few frames later, so the body spent those frames standing on the surface it had just removed and then fell the crater's depth when the new collider arrived. Marking a chunk stale now retires its collider immediately; a mesh may lag the field by a frame without anyone noticing, but the thing bodies stand on may not, and the height-field guard is a floor in the meantime. The other half is that nothing pulled the body *down*. `_catch_ground` only ever pushes a body out of ground it has ended up inside, and for ordinary terrain that is right — ground falling away from under you is just falling. A crater is the one case where the ground moving is the point, so a landed punch watches for its own hole and plants the feet on it, over a window rather than in one go, because a host cuts the hole on the frame it asks and a client is granted it a round trip later.
 
+**The boss digs craters too, and got caught in his own by the far end of that same disagreement.** A chunk's collider is a triangulation of the height field, so the two never quite agree, and the sag of one chord across a curve is the size of the error: inside a crater bowl — the sharpest thing anything cuts at the metre and a half chunks are built at — the flat chords stand a quarter of a metre *above* the curve they cross. Bigfoot carries no weight of his own, every state he has sets a velocity along the surface, and `_snap_to_ground` used to keep him on the ground by setting his distance from the planet's middle to the field's answer once a tick. On open ground that is invisible. Inside his own crater it planted him a quarter of a metre inside the wall on every tick, and the solver spent each following frame pushing him back out along a normal that points up and inward — against the direction he was leaving in, and worth most of a stride at a run. He would climb to about seven metres from the middle of a hole ten metres across, at a full sprint, and run there until the fight ended. The way down is a swept `move_and_collide` now, so it stops on the ground that is there rather than on the ground the field describes; the way up is still a teleport, because a body that has gone through the world has nothing left to sweep against, but it waits for a gap deeper than a chord can explain. Four of six craters held him before that and none do after. The runtime suite walks him out of a real one, and the headless suite stands him on a plate above the field, which is the same claim without needing a chunk to have built.
+
 The pose is `MeteorFly` in `assets/source/blender/build_animations.py`, authored upright like the other two flight clips so that the game's own forward lean is what turns a raised arm into a punch. It leans and cross-fades far faster than a flight does: fifty metres are gone in under a second, and the flight's own easing would spend most of that standing the body back up in mid-air.
 
 Ahead of the fist is the shock — `game/abilities/meteor_shock.gd` and `shaders/vivid/vivid_shock.gdshader`, a red bow wave standing off the punch the way a vapour cone stands off a plane going through the sound barrier. **Its radius is the fist's damage radius**, taken from the same constant, so what the player sees coming is exactly what the punch is about to cut and there is no second number to keep in step. The surface is a paraboloid built in code rather than a `SphereMesh`, because the shader places its travelling bands and both end fades by how far along the shell a fragment is and that has to be a number this side decides — and because a paraboloid is the right shape anyway, rounder at the nose than a cone and flatter at the skirt than a sphere. How far it is drawn out along the travel direction comes from the speed, so the shape itself reads as acceleration over the third of the reach the punch spends getting up to two hundred metres a second.
@@ -567,7 +573,11 @@ Both abilities now run at the idle frame cost, with one spike left at the moment
 
 **A mark only invalidates ground fine enough to draw it.** Every scar already fades out at vertex spacings too coarse to resolve it, which is what stops a two-metre burn aliasing into a spike. But `mark_region_stale` was marking every chunk whose footprint contained the burn — including the ancestors, up to root patches tens of thousands of vertices across — and `needs_script_build` was then routing each of those onto the per-vertex GDScript path to compute, slowly, the exact terrain it already had. One 2 m laser burn cost **550 ms of worker time** and a 64 ms frame, four times a second while the beam was held. Both now take the chunk's spacing into account, so a burn costs the one or two chunks that can show it. Average chunk build time across a session went from 6.9 ms to 1.6 ms.
 
-**Plant roots are cached where the damage sweep can read them.** `MultiMesh.buffer` hands out a copy through the rendering server — tens of microseconds a call, whatever the size — and the volume walk was fetching one per stand just to ask whether anything was in range, which for almost every stand it was not. `Tile.roots` keeps the origins alongside the existing `glow_points` cache, and the buffer is only fetched once a plant has actually been hit. Nothing moves a standing plant, so the cache holds until the tile is re-sown.
+**Plant roots are cached where the damage sweep can read them.** `MultiMesh.buffer` hands out a copy through the rendering server, and the volume walk was fetching one per stand just to ask whether anything was in range, which for almost every stand it was not. `Tile.roots` keeps the origins alongside the existing `glow_points` cache, so the question is answered without asking the server at all. Nothing moves a standing plant, so the cache holds until the tile is re-sown.
+
+**And the buffer itself is never read back.** The paragraph above used to end by saying the buffer was fetched once a plant had actually been hit, which sounded like the cheap half of the problem and was in fact the expensive one. That getter is not a copy — it is a **round trip**: it has to catch up with the render thread before it can answer, and the wait is roughly the same whether the stand holds nine plants or nine thousand. Measured against this world it is about half a millisecond a call, and a volume dragged along the ground overlaps tens of stands: one tick of a meteor charge spent **16 ms doing nothing but waiting**, and the worst offenders were the fields holding the *fewest* plants, since a colony of three trees per tile pays the same half millisecond as a tile of five thousand blades of grass. `Tile.rows` now keeps what was uploaded, on this side of the server, and `_rows_of` is the only way in. The setter has no such cost — it queues the upload and returns — so writes are unchanged. A charge tick went from 16 ms to 7 ms, a trample stride from 9 ms to 0.5 ms, and a meteor landing over standing jungle from 38 ms to 14 ms. It costs about 38 MB of the 495 MB the session holds, nearly all of it the two grass fields, which is the price of not asking a question whose answer we already knew.
+
+**None of which was visible headless, and that is the part worth remembering.** Headless streams a few hundred plants where a real session carries hundreds of thousands, and it has no render thread to wait for. Between them those two facts understated everything above by roughly fifty times, and the flora budgets in `dev/_bigfoot_perf_test.tscn` were being met for months by a run that was not touching a jungle at all. Run that suite both ways and believe the graphical one for anything involving cover.
 
 **The rejection tests are arithmetic.** A volume is offered to seventeen fields holding three thousand streamed tiles between them, and cuts a dozen plants, so what matters is the cost of turning things away rather than the cost of the ones that stay. Tiles are rejected against the volume's bounding sphere before the capsule maths, plants against a squared distance that needs neither their height nor their up vector, and the whole flower-tree colony against one sphere. A beam volume went from 4.8 ms to 1.6 ms and a fist volume from 3.7 ms to 0.7 ms.
 
@@ -614,18 +624,10 @@ It joins, waits for the announcement of its own arrival, says something, and che
 
 ## Multiplayer architecture
 
-`NetworkManager` owns session state, ENet setup, player metadata, scene changes, and the host-owned roster. `LanDiscovery` only handles local UDP advertisement and browsing. `ChatManager` and `VoiceChat` are session-scoped in the same way, and follow `NetworkManager`'s signals rather than the scene tree. Gameplay code talks to `NetworkManager`, not directly to the menu.
+`SteamLobby` initializes GodotSteam, owns Steam lobby discovery/metadata, accepts friend-invite callbacks, and exposes the overlay invite dialog. `NetworkManager` owns the `SteamMultiplayerPeer`, admission, session state, scene changes, and the host-owned roster. `ChatManager` and `VoiceChat` are session-scoped in the same way and reject packets from peers that have not passed admission. Gameplay code talks to `NetworkManager`, not directly to the menu.
 
 The host owns player spawning and validates/relays client movement snapshots. This starter is suitable for cooperative prototyping, but competitive games should replace snapshot validation with fully server-simulated input.
 
-## Steam migration
+Hosting and starting are separate. Creating a Steam lobby opens a waiting room; connecting clients submit their profile and, for passworded lobbies, the password over Steam's encrypted transport. The host validates Steam membership and the password before adding that peer to the roster. Only the host can broadcast Start, which closes the lobby to late joins and opens the world for every admitted peer.
 
-Steam does not supply dedicated game servers automatically. The selected target is player-hosted Steam P2P/Relay:
-
-1. Add GodotSteam and initialize Steam before entering the online menu.
-2. Replace LAN lobby creation/browsing with Steam Lobby APIs.
-3. Replace the ENet peer creation inside `NetworkManager` with a Steam MultiplayerPeer/Networking Sockets peer.
-4. Keep the existing menu calls, roster, world spawning, and gameplay RPCs unchanged.
-5. Map Steam persona names and lobby metadata into the existing player/lobby dictionaries.
-
-Keeping discovery and transport behind the two autoload managers is the seam that makes this migration possible.
+Public and passworded lobbies are discoverable in Steam's browser; friends-only lobbies are visible through Steam's relationship rules. Passwords are never lobby metadata. `+connect_lobby` launch arguments and in-game `join_requested` callbacks both return to the same Join UI, where a private invite asks for its password before connecting.

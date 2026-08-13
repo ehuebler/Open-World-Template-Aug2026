@@ -43,6 +43,22 @@ shader_parameter/detail_near = 40.0
 shader_parameter/detail_far = 300.0
 shader_parameter/macro_near = 1500.0
 shader_parameter/macro_far = 9000.0
+; Broad, faint land emission that only wakes on each point's local night side.
+; Three-dimensional domain-warped noise keeps the lobes seamless around the
+; sphere; a wide threshold ramp makes their borders dissolve into the ground.
+shader_parameter/night_ground_glow_color_a = Color(0.12, 0.78, 0.36, 1)
+shader_parameter/night_ground_glow_color_b = Color(0.18, 0.56, 1, 1)
+shader_parameter/night_ground_glow_color_c = Color(0.78, 0.24, 1, 1)
+shader_parameter/night_ground_glow_energy = 0.16
+shader_parameter/night_ground_glow_scale = 0.0038
+shader_parameter/night_ground_glow_threshold = 0.53
+shader_parameter/night_ground_glow_softness = 0.16
+shader_parameter/night_ground_glow_speed = 0.018
+shader_parameter/night_ground_glow_flow = 1.15
+shader_parameter/night_ground_glow_palette_shift = 0.0
+shader_parameter/night_ground_glow_time = 0.0
+shader_parameter/night_ground_glow_near = 3500.0
+shader_parameter/night_ground_glow_far = 11000.0
 shader_parameter/ground_albedo = ExtResource("2_albedo")
 shader_parameter/ground_surface = ExtResource("3_surface")
 shader_parameter/texture_scale = 0.6

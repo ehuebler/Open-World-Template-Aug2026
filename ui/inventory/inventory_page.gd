@@ -906,7 +906,7 @@ func _on_preview_input(event: InputEvent) -> void:
 func _new_model() -> Node3D:
 	var packed := CharacterDB.scene(_body_id)
 	var model: Node3D = packed.instantiate() if packed != null else Node3D.new()
-	SurfaceSkin.apply(model)
+	SurfaceSkin.apply(model, true)
 	SurfaceSkin.set_body_texture(model, CharacterDB.skin_texture(_body_id, _skin_id))
 	_play_idle(model)
 	return model
@@ -1047,7 +1047,7 @@ func _refresh_preview() -> void:
 			continue
 		var garment := Wardrobe.equip(_preview_character, body_slot, ItemDB.scene_path(id))
 		if garment != null:
-			SurfaceSkin.paint(garment)
+			SurfaceSkin.paint(garment, {}, true)
 	if dressing_changed and not _tints.is_empty():
 		_paint_model()
 
@@ -1072,7 +1072,7 @@ func _paint_model() -> void:
 	for target: String in groups:
 		var derived: Dictionary = {}
 		for mesh_instance: MeshInstance3D in groups[target]:
-			SurfaceSkin.paint(mesh_instance, derived)
+			SurfaceSkin.paint(mesh_instance, derived, true)
 		if target == TINT_BODY:
 			var texture := CharacterDB.skin_texture(_body_id, _skin_id)
 			for mesh_instance: MeshInstance3D in groups[target]:

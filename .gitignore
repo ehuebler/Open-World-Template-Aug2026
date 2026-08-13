@@ -33,3 +33,6 @@ __pycache__/
 /bin/*.exp
 /bin/*.lib
 /bin/~*.TMP
+
+# Godot hot-reload copies of the checked-in GodotSteam runtime
+/addons/godotsteam/win64/~*.dll*

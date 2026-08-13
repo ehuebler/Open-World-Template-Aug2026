@@ -177,6 +177,13 @@ func swing_striking() -> bool:
 	return _swing_elapsed >= float(SWING[0]["time"]) and _swing_elapsed < float(SWING[1]["time"])
 
 
+## Drops transient attack motion while preserving the item held in both hands.
+func interrupt_attack() -> void:
+	_swing_elapsed = -1.0
+	_kick = 0.0
+	_aim_target = 0.0
+
+
 func kick() -> void:
 	_kick = 1.0
 

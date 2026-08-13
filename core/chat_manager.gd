@@ -136,7 +136,8 @@ func _offer_line(text: String) -> void:
 	if not multiplayer.is_server():
 		return
 	var sender := multiplayer.get_remote_sender_id()
-	if sender <= 1 or not NetworkManager.players.has(sender):
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
 		return
 	_take_line(sender, str(text).strip_edges().substr(0, MAX_LENGTH))
 

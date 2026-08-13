@@ -115,10 +115,10 @@ func _selection() -> void:
 		"physical 3 selects hotbar slot 3")
 	_key(KEY_1)
 	await _wait(10)
-	_key(KEY_F)
+	_key(KEY_E)
 	await _wait(10)
 	_expect(_player.held_item().is_empty() and _player.is_holstered(),
-		"physical F holsters")
+		"physical E over empty space holsters")
 
 
 ## Empty ability slots are safe, populated slots own LMB/RMB only while the

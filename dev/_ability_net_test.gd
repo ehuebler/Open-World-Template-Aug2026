@@ -18,6 +18,7 @@ extends Node
 
 const PLAYER: PackedScene = preload("res://game/player/player.tscn")
 const TEST_CYCLE := preload("res://dev/_multiplayer_test_cycle.gd")
+const SETTINGS_PATH := "user://settings.cfg"
 const CONNECT_FRAMES := 360
 const RPC_FRAMES := 240
 
@@ -50,11 +51,18 @@ var _owner_player: OnlinePlayer
 var _owner_id := 0
 ## The volume the client sent, as the far end should find it.
 var _expected_hit: DamageHit
+var _server_enemy: TestEnemy
+var _server_boss: BigfootBoss
+var _owner_boss: BigfootBoss
+var _late_boss: BigfootBoss
+var _expected_boss_health := 0.0
 
 var _saved_players: Dictionary
 var _saved_state: int
 var _saved_single_player := false
 var _saved_host := false
+var _settings_existed := false
+var _settings_bytes := PackedByteArray()
 
 
 ## A damageable field with nothing growing in it: a ledger of what it was asked
@@ -107,8 +115,33 @@ class TestCover extends Node3D:
 		return false
 
 
+class TestEnemy extends Node3D:
+	var reflected := 0.0
+	var reflected_by := 0
+
+	func _ready() -> void:
+		add_to_group(DamageHit.COMBATANT_GROUP)
+
+	func combat_faction() -> int:
+		return DamageHit.Faction.ENEMY
+
+	func combat_position() -> Vector3:
+		return global_position
+
+	func combat_radius() -> float:
+		return 0.5
+
+	func apply_damage(hit: DamageHit) -> float:
+		return hit.amount
+
+	func receive_reflected_damage(amount: float, source_peer: int) -> void:
+		reflected += amount
+		reflected_by = source_peer
+
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_snapshot_settings()
 	_saved_players = NetworkManager.players.duplicate(true)
 	_saved_state = int(NetworkManager.state)
 	_saved_single_player = NetworkManager.is_single_player
@@ -131,6 +164,9 @@ func _ready() -> void:
 
 	await _check_scars()
 	await _check_damage_volume()
+	await _check_combat_authority()
+	await _check_boss_replication()
+	await _check_impact_cloud()
 	await _check_break_confirmation()
 	await _check_late_join()
 	await _finish()
@@ -176,6 +212,178 @@ func _check_damage_volume() -> void:
 		"and the client applied the same volume to its own flora")
 
 
+func _check_combat_authority() -> void:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	if not _expect(server_player != null,
+			"the host has a combat copy of the client player"):
+		return
+
+	# Enemy-authored fields on a hero packet never survive the host boundary.
+	var before_packets := _cover(_server_world).absorbed.size()
+	var forged := DamageHit.impact(Vector3(7.0, 1.0, 0.0), 1.0, 3.0)
+	forged.reaction = DamageHit.Reaction.RAGDOLL
+	forged.world_impulse = Vector3(100.0, 0.0, 0.0)
+	forged.status = CombatStatuses.FLIGHTLESS
+	forged.status_duration = 30.0
+	forged.parryable = true
+	forged.reflection = 40.0
+	_owner_player.deal_damage(forged)
+	var sanitized := await _wait_until(
+		_server_received_packet_after.bind(before_packets),
+		RPC_FRAMES)
+	_expect(sanitized, "a forged hero packet reaches host sanitization")
+	if sanitized:
+		var seen := _cover(_server_world).absorbed.back() as DamageHit
+		_expect(seen.faction == DamageHit.Faction.PLAYER
+			and seen.reaction == DamageHit.Reaction.NONE
+			and seen.world_impulse == Vector3.ZERO
+			and seen.status.is_empty() and not seen.parryable
+			and is_zero_approx(seen.reflection),
+			"host strips forged status, reaction, impulse and reflection")
+
+	# Sending the same reliable request twice applies exactly once.
+	var duplicate := DamageHit.impact(Vector3(8.0, 1.0, 0.0), 1.0, 2.0)
+	var duplicate_wire := duplicate.to_wire()
+	var request_sequence := _owner_player._combat_event_sequence + 1
+	before_packets = _cover(_server_world).absorbed.size()
+	_owner_player._request_hero_combat_hit.rpc_id(
+		1, request_sequence, duplicate_wire)
+	_owner_player._request_hero_combat_hit.rpc_id(
+		1, request_sequence, duplicate_wire)
+	# These requests deliberately bypass deal_damage, so keep the owner's next
+	# real sequence beyond the packet we just authored by hand.
+	_owner_player._combat_event_sequence = request_sequence
+	var one_arrived := await _wait_until(
+		_server_received_packet_after.bind(before_packets),
+		RPC_FRAMES)
+	await _network_frames(6)
+	_expect(one_arrived
+		and _cover(_server_world).absorbed.size() == before_packets + 1,
+		"combat request sequence deduplicates retransmission")
+
+	_server_enemy = TestEnemy.new()
+	_server_enemy.name = "Enemy"
+	_server_world.add_child(_server_enemy)
+	_server_enemy.global_position = server_player.combat_position()
+	_expect(_owner_player.request_parry(),
+		"client sends a parry request")
+	var parry_shared := await _wait_until(_parry_state_shared, RPC_FRAMES)
+	_expect(parry_shared, "host validates and broadcasts the parry window")
+	if not parry_shared:
+		return
+
+	var health_before := server_player.health()
+	var roar := DamageHit.impact(server_player.combat_position(), 2.0, 0.0)
+	roar.faction = DamageHit.Faction.ENEMY
+	roar.target_peer = _owner_id
+	roar.set_source(_server_enemy)
+	roar.status = CombatStatuses.FLIGHTLESS
+	roar.status_duration = 8.0
+	roar.reaction = DamageHit.Reaction.RAGDOLL
+	roar.parryable = true
+	roar.reflection = 6.0
+	DamageHit.apply_to_world(_server_enemy, roar)
+	await _network_frames(6)
+	_expect(is_equal_approx(server_player.health(), health_before)
+		and is_equal_approx(_owner_player.health(), health_before)
+		and not server_player.has_status(CombatStatuses.FLIGHTLESS)
+		and not _owner_player.has_status(CombatStatuses.FLIGHTLESS),
+		"host parry blocks Roar damage, status and reaction on both peers")
+	_expect(is_equal_approx(_server_enemy.reflected, 6.0)
+		and _server_enemy.reflected_by == _owner_id,
+		"perfect network parry reflects through the source hook")
+
+	server_player._tick_combat(0.4)
+	_owner_player._tick_combat(0.4)
+	var event_before := server_player._parry_event_sequence
+	_owner_player.request_parry()
+	await _network_frames(6)
+	_expect(server_player._parry_event_sequence == event_before,
+		"host rejects parry during authoritative cooldown")
+
+	var hit := DamageHit.impact(server_player.combat_position(), 2.0, 10.0)
+	hit.faction = DamageHit.Faction.ENEMY
+	hit.target_peer = _owner_id
+	hit.set_source(_server_enemy)
+	hit.status = CombatStatuses.FLIGHTLESS
+	hit.status_duration = 5.0
+	DamageHit.apply_to_world(_server_enemy, hit)
+	var state_shared := await _wait_until(
+		_owner_combat_state_matches.bind(health_before - 10.0),
+		RPC_FRAMES)
+	_expect(state_shared,
+		"host health and Flightless replicate to the owning client")
+
+	var host_stance := server_player.stance()
+	_owner_player._submit_state.rpc_id(
+		1, _owner_player.global_transform, Vector3.ZERO, 0.0,
+		OnlinePlayer.Stance.FLY)
+	await _network_frames(6)
+	_expect(server_player.stance() == host_stance
+		and server_player.stance() != OnlinePlayer.Stance.FLY,
+		"host rejects a Flightless client claiming FLY")
+
+
+## Meteor is simulated only by its owner, so its broad cosmetic cloud has one
+## small RPC of its own. Both ends must play it once.
+func _check_impact_cloud() -> void:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	if not _expect(server_player != null, "the host mirrors the client's player"):
+		return
+	var owner_before := _owner_player.dust.impact_count
+	var server_before := server_player.dust.impact_count
+	_owner_player.play_meteor_impact_dust(
+		Vector3(8.0, 1.0, 2.0), Vector3.UP, 6.0, 1.0)
+	_expect(_owner_player.dust.impact_count == owner_before + 1,
+		"the Meteor owner plays its impact dust once")
+	var arrived := await _wait_until(
+		_server_dust_count_is.bind(server_before + 1),
+		RPC_FRAMES)
+	_expect(arrived, "Meteor impact dust reaches the other peer")
+
+
+func _check_boss_replication() -> void:
+	if not _expect(_server_boss != null and _owner_boss != null,
+			"both live peers contain the deterministic Bigfoot node"):
+		return
+	_server_boss.set("_health", 731.0)
+	_server_boss.set("_engaged", true)
+	_server_boss.set("_clip", "Roar")
+	_server_boss.set("_attack", &"roar")
+	_server_boss.set("_attack_left", 1.1)
+	_server_boss.set("_roar_elapsed", 0.7)
+	_server_boss.set("_roar_radius", 51.0)
+	_server_boss.set("_meteor_along", Vector3(0.2, 0.0, -0.98).normalized())
+	_server_boss.set("_cooldowns", {&"meteor": 4.5, &"grab": 2.0})
+	_expected_boss_health = 731.0
+	_server_boss.call(&"_publish_sync", true)
+	var state_arrived := await _wait_until(_owner_boss_synced, RPC_FRAMES)
+	_expect(state_arrived,
+		"reliable boss state reaches the client through the real ENet RPC path")
+	if state_arrived:
+		var owner_snapshot := _owner_boss.boss_snapshot()
+		_expect(String(owner_snapshot.get("attack", "")) == "roar"
+			and float((owner_snapshot.get("cooldowns", {}) as Dictionary).get(
+				&"meteor", 0.0)) > 4.0,
+			"boss attack phase and cooldowns survive replication")
+
+	var hit := DamageHit.impact(
+		_owner_boss.combat_position(), _owner_boss.combat_radius() + 0.5, 31.0)
+	hit.ability_id = "laser_eyes"
+	_owner_player.deal_damage(hit)
+	_expected_boss_health = 700.0
+	var host_damaged := await _wait_until(_host_boss_health_matches, RPC_FRAMES)
+	_expect(host_damaged,
+		"client-authored hero damage is applied to Bigfoot only by the host")
+	if not host_damaged:
+		return
+	_server_boss.call(&"_publish_sync", true)
+	_expect(await _wait_until(_owner_boss_synced, RPC_FRAMES),
+		"authoritative Bigfoot health returns to the attacking client")
+
+
 ## What actually broke is a correction, sent by the host a few times a second.
 ## Driven by hand here: every world in this process shares one scene tree and so
 ## one damage-field group, and a client left to its own timer would drain the
@@ -208,6 +416,10 @@ func _check_late_join() -> void:
 		return
 	_expect(_same_keys(_cover(_late_world).broken_keys(), BREAK_KEYS),
 		"and about exactly the plants that are gone")
+	_expect(_late_boss != null
+		and is_equal_approx(_late_boss.health(), _server_boss.health())
+		and _late_boss.engaged() == _server_boss.engaged(),
+		"and receives Bigfoot's health and engagement snapshot")
 
 
 func _client_has_one_scar() -> bool:
@@ -220,6 +432,29 @@ func _client_has_two_scars() -> bool:
 
 func _host_saw_the_volume() -> bool:
 	return _cover(_server_world).saw(_expected_hit)
+
+
+func _server_received_packet_after(count: int) -> bool:
+	return _cover(_server_world).absorbed.size() > count
+
+
+func _parry_state_shared() -> bool:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	return server_player != null and server_player.parry_active() \
+		and _owner_player != null and _owner_player.parry_active()
+
+
+func _owner_combat_state_matches(expected_health: float) -> bool:
+	return _owner_player != null \
+		and is_equal_approx(_owner_player.health(), expected_health) \
+		and _owner_player.has_status(CombatStatuses.FLIGHTLESS)
+
+
+func _server_dust_count_is(expected: int) -> bool:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	return server_player != null and server_player.dust.impact_count == expected
 
 
 func _owner_connected() -> bool:
@@ -238,7 +473,21 @@ func _client_told_of_breaks() -> bool:
 
 func _late_joiner_caught_up() -> bool:
 	return _scars(_late_world).count() == 2 \
-		and _cover(_late_world).broken_keys().size() == BREAK_KEYS.size()
+		and _cover(_late_world).broken_keys().size() == BREAK_KEYS.size() \
+		and _late_boss != null \
+		and is_equal_approx(_late_boss.health(), _server_boss.health()) \
+		and _late_boss.engaged() == _server_boss.engaged()
+
+
+func _owner_boss_synced() -> bool:
+	return _owner_boss != null \
+		and is_equal_approx(_owner_boss.health(), _expected_boss_health) \
+		and _owner_boss.engaged()
+
+
+func _host_boss_health_matches() -> bool:
+	return _server_boss != null \
+		and is_equal_approx(_server_boss.health(), _expected_boss_health)
 
 
 func _scar(direction: Vector3) -> TerrainScars.Scar:
@@ -292,7 +541,27 @@ func _start_peers() -> bool:
 	if not _expect(connected, "the client connects through ENet"):
 		return false
 	_owner_id = _owner_api.get_unique_id()
+	_register_peer(1)
+	_register_peer(_owner_id)
 	return _expect(_owner_id > 1, "and is given a non-authority peer id")
+
+
+## The host drops requests from peers that are not on its roster, so a harness
+## that never registered anybody would have every client packet rejected for the
+## right reason and fail for the wrong one. A registered roster also means the
+## late joiner is sent player snapshots and spawns bodies for them; those bodies
+## address peers whose cut-down worlds have no matching node, which is where the
+## "Failed to get path from RPC" lines in a passing run come from.
+func _register_peer(peer_id: int) -> void:
+	NetworkManager.players[peer_id] = {
+		"name": "Peer%d" % peer_id,
+		"peer_id": peer_id,
+		"steam_id": 0,
+		"body": CharacterDB.DEFAULT_BODY,
+		"skin": CharacterDB.default_skin(CharacterDB.DEFAULT_BODY),
+		"worn": {},
+		"tints": {},
+	}
 
 
 func _start_late_joiner() -> bool:
@@ -309,8 +578,10 @@ func _start_late_joiner() -> bool:
 	var connected := await _wait_until(_late_connected, CONNECT_FRAMES)
 	if not _expect(connected, "the late joiner connects after the fight"):
 		return false
+	_register_peer(_late_api.get_unique_id())
 	_late_world = _new_world()
 	_late_branch.add_child(_late_world)
+	_late_boss = _boss(_late_world)
 	await _network_frames(4)
 	return true
 
@@ -331,6 +602,8 @@ func _build_worlds() -> void:
 	_owner_world = _new_world()
 	_owner_branch.add_child(_owner_world)
 	await _network_frames(6)
+	_server_boss = _boss(_server_world)
+	_owner_boss = _boss(_owner_world)
 
 	# Identical relative node paths on every peer: the player RPCs and the flora
 	# confirmations are both addressed by path.
@@ -360,6 +633,15 @@ func _new_world() -> GameWorld:
 	planet.has_water = false
 	planet.has_clouds = false
 	world.add_child(planet)
+	var territory := Node3D.new()
+	territory.name = "BigfootTerritory"
+	planet.add_child(territory)
+	var boss := BigfootBoss.new()
+	boss.name = "Bigfoot"
+	boss.process_mode = Node.PROCESS_MODE_DISABLED
+	boss.set_physics_process(false)
+	boss.set_process(false)
+	territory.add_child(boss)
 	var cover := TestCover.new()
 	cover.name = "TestCover"
 	planet.add_child(cover)
@@ -368,6 +650,11 @@ func _new_world() -> GameWorld:
 	# world would drain the others' pending breaks. It is driven by hand instead.
 	world.set_physics_process(false)
 	return world
+
+
+func _boss(world: GameWorld) -> BigfootBoss:
+	return world.get_node_or_null("Planet/BigfootTerritory/Bigfoot") \
+		as BigfootBoss
 
 
 func _add_player(world: GameWorld, peer_id: int) -> OnlinePlayer:
@@ -430,6 +717,7 @@ func _finish() -> void:
 			branch.queue_free()
 	for _frame in 3:
 		await get_tree().process_frame
+	_restore_settings()
 	NetworkManager.players.clear()
 	NetworkManager.players.merge(_saved_players, true)
 	NetworkManager.state = _saved_state as NetworkManager.SessionState
@@ -439,3 +727,28 @@ func _finish() -> void:
 		"all checks passed" if _failures == 0
 		else "%d check(s) failed" % _failures))
 	get_tree().quit(1 if _failures > 0 else 0)
+
+
+## The owner branch is a real local OnlinePlayer and the harness deliberately
+## clears its containers. Preserve the human player's profile around that work:
+## without this, the deferred loadout save turns a networking test into an
+## apparel/ability wipe in user://settings.cfg.
+func _snapshot_settings() -> void:
+	var path := ProjectSettings.globalize_path(SETTINGS_PATH)
+	_settings_existed = FileAccess.file_exists(path)
+	if _settings_existed:
+		_settings_bytes = FileAccess.get_file_as_bytes(path)
+
+
+func _restore_settings() -> void:
+	var path := ProjectSettings.globalize_path(SETTINGS_PATH)
+	if not _settings_existed:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(path)
+		return
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	if file == null:
+		push_error("ability_net_test: could not restore %s" % path)
+		return
+	file.store_buffer(_settings_bytes)
+	file.close()

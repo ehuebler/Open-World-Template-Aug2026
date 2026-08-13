@@ -70,7 +70,7 @@ func is_held() -> bool:
 ## whole question — cooldown, stance and water — so a caller never has to
 ## assemble the rule from pieces and get it subtly different.
 func can_use() -> bool:
-	if player == null or _cooldown_left > 0.0:
+	if player == null or not player.can_attack() or _cooldown_left > 0.0:
 		return false
 	if blocked_underwater and player.submerged_share() > 0.0:
 		return false
@@ -106,6 +106,9 @@ func _press() -> bool:
 func tick(delta: float) -> void:
 	if _cooldown_left > 0.0:
 		_cooldown_left = maxf(_cooldown_left - delta, 0.0)
+	if _held and (player == null or not player.can_attack()):
+		cancel()
+		return
 	if _held:
 		_tick(delta)
 

@@ -10,8 +10,9 @@ extends PanelContainer
 ## planet's own frame, height above sea level, the nearest named thing, and the
 ## surface under the reticle.
 ##
-## The last two lines are for reporting faults rather than for finding your way,
-## which is what this exists for. [member Planet.statistics] knows the depth the
+## Hidden during ordinary play and opened with the tilde navigation overlay. The
+## last two lines are for reporting faults rather than for finding your way.
+## [member Planet.statistics] knows the depth the
 ## ground under the viewer is drawn at and how many chunks near it have a
 ## collider, and those two numbers are what separates "the terrain looks wrong
 ## here" from "the terrain has not finished loading here" — a distinction no
@@ -20,13 +21,12 @@ extends PanelContainer
 ## The unit direction is the line to quote at a harness. Four decimals is 0.8 m
 ## on this planet, which is close enough to stand a camera on the same rock.
 
-## Gap from the top and right edges of the screen, in pixels.
-const MARGIN := 20.0
-const LINE_SIZE := 11
-## [constant AuroraSurface.BLEED] of each of these is spent on the gap between
-## the panel's edge and the drawn plate, so they read as 6 px less than they say.
-const PAD_X := 20
-const PAD_Y := 15
+## Gap from the bottom and right edges of the screen, in pixels.
+const MARGIN := 12.0
+const LINE_SIZE := 8
+const PAD_X := 8
+const PAD_Y := 6
+const ROW_COUNT := 9
 ## Times a second the readout is rewritten. It is a number for a person to read,
 ## and one that changes every frame cannot be read at all — nor written down,
 ## which is the whole point of it. It is also what keeps
@@ -54,6 +54,9 @@ var aim_ray: RayCast3D
 
 var _lines: VBoxContainer
 var _elapsed := 0.0
+var _motion_state := "standing"
+var _motion_pov := "first person"
+var _motion_speed := 0.0
 ## The world's day/night clock, found once. Looked up by type rather than by
 ## name for the same reason the player finds its planet that way: the node is a
 ## sibling of the world's other fixtures and never moves between them.
@@ -62,19 +65,17 @@ var _cycle: CelestialCycle
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	# Anchored to the top right corner and grown leftward and downward from it,
-	# so the plate stays the width of its own text instead of spanning the
-	# screen. A preset would write offsets sized for a full rect.
+	# Bottom-right and content-sized: this is diagnostic context rather than a
+	# primary play control, so it stays out of the skyline and weapon bar.
 	anchor_left = 1.0
 	anchor_right = 1.0
-	anchor_top = 0.0
-	anchor_bottom = 0.0
+	anchor_top = 1.0
+	anchor_bottom = 1.0
 	grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	grow_vertical = Control.GROW_DIRECTION_END
+	grow_vertical = Control.GROW_DIRECTION_BEGIN
 	offset_right = -MARGIN
-	offset_top = MARGIN
-	theme = load("res://ui/themes/main_theme.tres") as Theme
-	AuroraSurface.add_to(self, AuroraSurface.Style.HUD)
+	offset_bottom = -MARGIN
+	RedHudTheme.panel(self)
 
 	var padding := MarginContainer.new()
 	padding.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -86,13 +87,21 @@ func _ready() -> void:
 
 	_lines = VBoxContainer.new()
 	_lines.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_lines.add_theme_constant_override("separation", 4)
+	_lines.add_theme_constant_override("separation", 1)
 	padding.add_child(_lines)
-	for row in 8:
+	for row in ROW_COUNT:
 		var label := Label.new()
 		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		label.add_theme_font_size_override("font_size", LINE_SIZE)
+		RedHudTheme.label(label, LINE_SIZE)
 		_lines.add_child(label)
+
+
+## The two lower-left plates this replaces are sampled into one compact line.
+## Stored every frame but drawn with the location readout's six-hertz cadence.
+func set_motion_info(state: String, pov: String, speed: float) -> void:
+	_motion_state = state
+	_motion_pov = pov
+	_motion_speed = maxf(speed, 0.0)
 
 
 ## Rewrites the readout, at most [constant REFRESH_HZ] times a second.
@@ -101,6 +110,12 @@ func refresh(at: Vector3, planet: Planet, delta: float) -> void:
 	if _elapsed < 1.0 / REFRESH_HZ:
 		return
 	_elapsed = 0.0
+	_write(8, "%s  %d m/s   %s   %d fps" % [
+		_motion_state,
+		roundi(_motion_speed),
+		_motion_pov,
+		Engine.get_frames_per_second(),
+	])
 	if planet == null or planet.shape == null:
 		_write(0, "no planet")
 		return

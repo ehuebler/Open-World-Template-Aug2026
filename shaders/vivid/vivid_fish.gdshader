@@ -21,6 +21,14 @@ uniform float saturation : hint_range(0.0, 3.0) = 1.2;
 uniform float roughness : hint_range(0.0, 1.0) = 0.62;
 uniform float specular : hint_range(0.0, 1.0) = 0.35;
 uniform float sheen : hint_range(0.0, 3.0) = 0.18;
+
+group_uniforms Camera_Rim;
+uniform vec3 camera_rim_color : source_color = vec3(0.20, 1.0, 0.58);
+uniform float camera_rim_energy : hint_range(0.0, 8.0) = 0.75;
+uniform float camera_rim_dark : hint_range(0.0, 1.0) = 0.68;
+uniform float camera_rim_light : hint_range(0.0, 1.0) = 0.84;
+group_uniforms;
+
 // Optional bioluminescence for nocturnal/deep-water variants. The school
 // already supplies stable random custom channels, so colour, phase and speed
 // vary per fish without another buffer or material split.
@@ -63,6 +71,8 @@ void fragment() {
 
 	vec3 view = normalize(CAMERA_POSITION_WORLD - v_world_position);
 	float rim = pow(1.0 - max(dot(normalize(v_world_normal), view), 0.0), 3.0);
+	float camera_rim = vivid_camera_rim(
+		v_world_normal, view, camera_rim_dark, camera_rim_light);
 	ALBEDO = clamp(albedo, vec3(0.0), vec3(1.0));
 	ROUGHNESS = roughness;
 	SPECULAR = specular;
@@ -76,5 +86,7 @@ void fragment() {
 			+ v_phase * TAU);
 	vec3 night_glow = night_emission_color * night_emission_energy * night
 		* pulse * mix(vec3(1.0), own_color, night_emission_albedo);
-	EMISSION = albedo * rim * sheen * daylight + night_glow;
+	EMISSION = albedo * rim * sheen * daylight
+		+ camera_rim_color * camera_rim_energy * camera_rim
+		+ night_glow;
 }

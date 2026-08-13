@@ -1,8 +1,8 @@
 class_name GameMenu
 extends Control
 
-## Full-screen red Tab-menu shell. The world owns pause and session policy; this
-## node owns only presentation, page routing, and the close/leave signals.
+## Inset red Tab/Escape-menu shell. The full-screen root owns input, while the
+## visible menu leaves a clean border of live world around every edge.
 
 signal closed
 signal leave_requested
@@ -34,6 +34,7 @@ const GREEN_TEXT := Color("8ff3a5")
 const BLACK_40 := Color(0.0, 0.0, 0.0, 0.40)
 const BLACK_68 := Color(0.0, 0.0, 0.0, 0.68)
 const BLACK_82 := Color(0.0, 0.0, 0.0, 0.82)
+const EDGE_GAP := 28.0
 
 ## The page consumes the width formerly reserved for the side actions. Navigation
 ## and the circular session actions share the band directly beneath it.
@@ -47,6 +48,7 @@ var _tab: Tab = Tab.ITEMS
 var _data_kind: StringName = JournalDB.QUEST
 var _closing := false
 
+var _shell: Control
 var _page_host: MarginContainer
 var _active_page: Control
 var _selector_buttons: Dictionary = {}
@@ -133,6 +135,16 @@ func _canonical_tab(tab: Tab) -> Tab:
 # --- Shell ------------------------------------------------------------------
 
 func _build_shell() -> void:
+	_shell = Control.new()
+	_shell.name = "InsetMenuShell"
+	_shell.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_shell.offset_left = EDGE_GAP
+	_shell.offset_top = EDGE_GAP
+	_shell.offset_right = -EDGE_GAP
+	_shell.offset_bottom = -EDGE_GAP
+	_shell.clip_contents = true
+	add_child(_shell)
+
 	var background := TextureRect.new()
 	background.name = "MenuBackground"
 	background.texture = MENU_BACKGROUND
@@ -140,7 +152,19 @@ func _build_shell() -> void:
 	background.stretch_mode = TextureRect.STRETCH_SCALE
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(background)
+	_shell.add_child(background)
+
+	var outer_border := RedGlowPanel.new()
+	outer_border.name = "MenuBackgroundBorder"
+	outer_border.fill_color = Color.TRANSPARENT
+	outer_border.border_color = Color(GREEN, 0.98)
+	outer_border.border_width = 2.5
+	outer_border.glow_intensity = 1.25
+	outer_border.glow_spread = 8.0
+	outer_border.glow_layers = 4
+	outer_border.mouse_behavior = RedGlowPanel.MouseBehavior.IGNORE
+	outer_border.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_shell.add_child(outer_border)
 
 	_build_content_frame()
 	_build_bottom_selector()
@@ -159,7 +183,7 @@ func _build_content_frame() -> void:
 	frame.glow_layers = 5
 	frame.mouse_behavior = RedGlowPanel.MouseBehavior.STOP
 	_apply_anchor_rect(frame, CONTENT_RECT)
-	add_child(frame)
+	_shell.add_child(frame)
 
 	_page_host = MarginContainer.new()
 	_page_host.name = "PageHost"
@@ -181,7 +205,7 @@ func _build_bottom_selector() -> void:
 	selector.glow_layers = 5
 	selector.mouse_behavior = RedGlowPanel.MouseBehavior.STOP
 	_apply_anchor_rect(selector, SELECTOR_RECT)
-	add_child(selector)
+	_shell.add_child(selector)
 
 	var inset := MarginContainer.new()
 	inset.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -189,12 +213,12 @@ func _build_bottom_selector() -> void:
 	for side in [&"margin_left", &"margin_right"]:
 		inset.add_theme_constant_override(side, 8)
 	for side in [&"margin_top", &"margin_bottom"]:
-		inset.add_theme_constant_override(side, 10)
+		inset.add_theme_constant_override(side, 8)
 	selector.add_child(inset)
 
 	var stack := VBoxContainer.new()
 	stack.name = "SelectorStack"
-	stack.add_theme_constant_override(&"separation", 3)
+	stack.add_theme_constant_override(&"separation", 2)
 	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	stack.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	inset.add_child(stack)
@@ -229,7 +253,7 @@ func _add_selector_button(
 	button.name = node_name
 	button.text = label_text.to_upper()
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	button.custom_minimum_size.y = 20.0
+	button.custom_minimum_size.y = 18.0
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
@@ -272,7 +296,7 @@ func _build_admin_button() -> void:
 	glow.border_width = 1.5
 	glow.glow_intensity = 1.05
 	glow.glow_spread = 8.0
-	add_child(_admin_button)
+	_shell.add_child(_admin_button)
 
 
 func _build_right_actions() -> void:
@@ -281,7 +305,7 @@ func _build_right_actions() -> void:
 	cluster.alignment = BoxContainer.ALIGNMENT_CENTER
 	cluster.add_theme_constant_override(&"separation", 28)
 	_apply_anchor_rect(cluster, ACTIONS_RECT)
-	add_child(cluster)
+	_shell.add_child(cluster)
 
 	var close_action := _action_button("CloseAction", RedMenuGlyph.Glyph.CLOSE)
 	close_action.tooltip_text = "Close menu"
@@ -414,7 +438,6 @@ func _build_page(tab: Tab) -> Control:
 			var settings := SettingsPanel.new()
 			settings.name = "InGameSettings"
 			settings.configure(true)
-			settings.leave_requested.connect(_on_settings_leave_requested)
 			return settings
 		Tab.ADMIN:
 			var blank := Control.new()
@@ -452,10 +475,6 @@ func _surrounding_world() -> Node:
 			return ancestor
 		ancestor = ancestor.get_parent()
 	return null
-
-
-func _on_settings_leave_requested() -> void:
-	leave_requested.emit()
 
 
 func _on_leave_completed() -> void:
@@ -504,20 +523,20 @@ func _style_selector_button(button: Button, selected: bool) -> void:
 	button.add_theme_constant_override(&"outline_size", 2)
 	button.add_theme_stylebox_override(
 		&"normal",
-		_selector_style(fill, Color(accent, 0.95), 2 if selected else 1, 3.0,
+		_selector_style(fill, Color(accent, 0.95), 2 if selected else 1, 2.0,
 			Color(accent, 0.16), 4)
 	)
 	button.add_theme_stylebox_override(
 		&"hover",
-		_selector_style(BLACK_82, GREEN, 2, 3.0, Color(RED, 0.20), 5)
+		_selector_style(BLACK_82, GREEN, 2, 2.0, Color(RED, 0.20), 5)
 	)
 	button.add_theme_stylebox_override(
 		&"pressed",
-		_selector_style(Color(0.0, 0.19, 0.055, 0.90), GREEN, 2, 3.0)
+		_selector_style(Color(0.0, 0.19, 0.055, 0.90), GREEN, 2, 2.0)
 	)
 	button.add_theme_stylebox_override(
 		&"focus",
-		_selector_style(Color.TRANSPARENT, GREEN, 1, 3.0)
+		_selector_style(Color.TRANSPARENT, GREEN, 1, 2.0)
 	)
 
 

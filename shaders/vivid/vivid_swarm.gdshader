@@ -31,6 +31,13 @@ uniform float translucency : hint_range(0.0, 1.0) = 0.22;
 uniform float alpha_cutoff : hint_range(0.0, 1.0) = 0.0;
 group_uniforms;
 
+group_uniforms Camera_Rim;
+uniform vec3 camera_rim_color : source_color = vec3(0.20, 1.0, 0.58);
+uniform float camera_rim_energy : hint_range(0.0, 8.0) = 0.75;
+uniform float camera_rim_dark : hint_range(0.0, 1.0) = 0.68;
+uniform float camera_rim_light : hint_range(0.0, 1.0) = 0.84;
+group_uniforms;
+
 group_uniforms Cards;
 // Off for an authored 3D insect. Turn on only for a flat/card model.
 uniform bool billboard_enabled = false;
@@ -152,6 +159,8 @@ void fragment() {
 	vec3 normal = normalize(v_world_normal);
 	vec3 view = normalize(CAMERA_POSITION_WORLD - v_world_position);
 	float fresnel = pow(1.0 - clamp(dot(normal, view), 0.0, 1.0), 3.0);
+	float camera_rim = vivid_camera_rim(
+		normal, view, camera_rim_dark, camera_rim_light);
 
 	float twinkle_wave = pow(0.5 + 0.5 * sin(
 		TIME * TAU * twinkle_speed + v_twinkle_phase * TAU),
@@ -177,5 +186,6 @@ void fragment() {
 	RIM_TINT = 0.5;
 	// Thin wings catch light from either side without requiring transparency.
 	BACKLIGHT = albedo * translucency;
-	EMISSION = emission;
+	EMISSION = emission
+		+ camera_rim_color * camera_rim_energy * camera_rim * v_visibility;
 }

@@ -27,8 +27,8 @@ driver/enable_input=true
 [autoload]
 
 SettingsManager="*res://core/settings_manager.gd"
+SteamLobby="*res://core/steam_lobby.gd"
 NetworkManager="*res://core/network_manager.gd"
-LanDiscovery="*res://core/lan_discovery.gd"
 ChatManager="*res://core/chat_manager.gd"
 VoiceChat="*res://core/voice_chat.gd"
 ChatHud="*res://ui/chat/chat_hud.gd"
@@ -109,6 +109,10 @@ interact={
 }
 holster={
 "deadzone": 0.2,
+"events": []
+}
+parry={
+"deadzone": 0.2,
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":16,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":70,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
 ]
 }
@@ -131,11 +135,6 @@ push_to_talk={
 pause={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":16,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194305,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
-]
-}
-coordinates={
-"deadzone": 0.2,
-"events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":16,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194334,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
 ]
 }
 waypoints={
@@ -226,6 +225,10 @@ region_chroma={
 "type": "float",
 "value": 0.85
 }
+air_chroma={
+"type": "float",
+"value": 1.0
+}
 frost_axis={
 "type": "vec3",
 "value": Vector3(0, 1, 0)
@@ -282,3 +285,10 @@ walker_3={
 "type": "vec4",
 "value": Vector4(0, 0, 0, 0)
 }
+
+[steam]
+
+initialization/app_data/app_type=2
+initialization/app_data/app_id=5098010
+initialization/app_data/playtest_id=5098060
+initialization/processes/initialize_on_startup=true

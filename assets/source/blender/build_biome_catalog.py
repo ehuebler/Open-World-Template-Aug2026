@@ -273,6 +273,18 @@ def species(
     }
 
 
+def rock_species(
+    name: str,
+    model_name: str,
+    material_name: str,
+    **properties: object,
+) -> dict[str, object]:
+    # This generator cannot read CharacterDB; 1.6 m is the tallest playable body.
+    properties["ground_sink_share"] = 0.18
+    properties["ground_sink_above"] = 1.6
+    return species(name, model_name, material_name, **properties)
+
+
 # Ground enum: 1 grass, 2 sand, 3 stone, 4 ice.
 # Collision enum: 0 cylinder, 1 sphere, 2 box, 3 convex hull, 4 trimesh.
 # Impact enum: 0 solid, 1 breakable, 2 mushroom bounce, 3 unbreakable.
@@ -546,7 +558,7 @@ SPECIES: list[dict[str, object]] = [
         draw_within=160.0, thin_from=32.0, thin_to=98.0,
         far_density=0.05, shadow_within=0.0, collision_enabled=False),
 
-    species("rock_weathered", "rock_weathered", "rock",
+    rock_species("rock_weathered", "rock_weathered", "rock",
         resource_name="WeatheredRock", height=1.4, height_variation=0.72,
         width_scale=1.35, tilt=18.0, above_water=0.5, below=460.0,
         max_slope=42.0, steady_over=2.0, steady_within=1.8,
@@ -559,7 +571,7 @@ SPECIES: list[dict[str, object]] = [
         collision_primitive=3, impact_mode=1, health=60.0,
         health_per_metre=8.4, toughness=2, break_momentum_keep=0.88,
         break_effect=2, break_effect_color="Color(0.35, 0.32, 0.28, 1)"),
-    species("rock_basalt", "rock_basalt", "rock",
+    rock_species("rock_basalt", "rock_basalt", "rock",
         resource_name="BasaltOutcrop", height=2.8, height_variation=0.68,
         width_scale=1.05, tilt=12.0, above_water=1.0, below=500.0,
         max_slope=38.0, steady_over=2.5, steady_within=2.0,
@@ -586,7 +598,7 @@ SPECIES: list[dict[str, object]] = [
         collision_primitive=3, impact_mode=1, health=84.0,
         health_per_metre=12.0, toughness=3, break_momentum_keep=0.8,
         break_effect=2, break_effect_color="Color(0.35, 0.72, 1, 1)"),
-    species("ice_erratic", "rock_weathered", "rock",
+    rock_species("ice_erratic", "rock_weathered", "rock",
         resource_name="PolarErratic", height=1.8, height_variation=0.78,
         width_scale=1.4, tilt=20.0, above_water=2.0, below=500.0,
         max_slope=28.0, steady_over=2.2, steady_within=1.7,
@@ -601,9 +613,9 @@ SPECIES: list[dict[str, object]] = [
         break_effect_color="Color(0.55, 0.65, 0.72, 1)"),
     # Broad-climate boulders are the baseline geology in every dry biome.
     # Clumps make a field read as a fall/deposit instead of evenly salted props.
-    species("boulder_round", "boulder_round", "rock",
+    rock_species("boulder_round", "boulder_round", "rock",
         resource_name="RoundedBoulder", height=2.5, height_variation=0.35,
-        width_scale=1.2, ground_sink=0.65, tilt=20.0,
+        width_scale=1.2, tilt=20.0,
         above_water=1.0, below=580.0,
         max_slope=42.0, steady_over=5.0, steady_within=3.5,
         maximum_frost=0.0,
@@ -615,7 +627,7 @@ SPECIES: list[dict[str, object]] = [
         health=96.0, health_per_metre=13.2, toughness=2,
         break_momentum_keep=0.8, break_effect=2,
         break_effect_color="Color(0.36, 0.33, 0.28, 1)"),
-    species("boulder_layered", "boulder_layered", "rock",
+    rock_species("boulder_layered", "boulder_layered", "rock",
         resource_name="LayeredBoulder", height=3.4, height_variation=0.4,
         width_scale=1.18, tilt=14.0, above_water=2.0, below=560.0,
         max_slope=34.0, steady_over=8.0, steady_within=5.5,
@@ -628,7 +640,7 @@ SPECIES: list[dict[str, object]] = [
         health=108.0, health_per_metre=14.4, toughness=2,
         break_momentum_keep=0.72, break_effect=2,
         break_effect_color="Color(0.55, 0.38, 0.22, 1)"),
-    species("basalt_hex_field", "basalt_hex_field", "rock",
+    rock_species("basalt_hex_field", "basalt_hex_field", "rock",
         resource_name="HexLavaFormation", height=4.0,
         height_variation=0.25, width_scale=1.12, tilt=5.0,
         above_water=3.0, below=540.0, max_slope=28.0,
@@ -673,7 +685,7 @@ SPECIES: list[dict[str, object]] = [
         health=120.0, health_per_metre=14.4, toughness=3,
         break_momentum_keep=0.66, break_effect=2,
         break_effect_color="Color(0.66, 0.12, 1, 1)"),
-    species("rune_boulder", "rune_boulder", "rune_boulder_glow",
+    rock_species("rune_boulder", "rune_boulder", "rune_boulder_glow",
         resource_name="TattooRuneBoulder", height=3.6,
         height_variation=0.35, width_scale=1.14, tilt=16.0,
         above_water=2.0, below=575.0, max_slope=34.0,
@@ -692,7 +704,7 @@ SPECIES: list[dict[str, object]] = [
 
     # This field remains site-forming, but rock members are capped at ordinary
     # boulder scale. Only the crystal and rune silhouettes remain monumental.
-    species("boulder_colossus", "boulder_colossus", "rock",
+    rock_species("boulder_colossus", "boulder_colossus", "rock",
         resource_name="ColossalBoulderSite", height=3.8,
         height_variation=0.3, width_scale=1.1, tilt=7.0,
         above_water=12.0, below=540.0, max_slope=16.0,
@@ -703,7 +715,7 @@ SPECIES: list[dict[str, object]] = [
         draw_within=2200.0, thin_from=650.0, thin_to=1750.0,
         far_density=0.55, shadow_within=520.0, collision_enabled=True,
         collision_within=420.0, collision_primitive=3, impact_mode=3),
-    species("basalt_citadel", "basalt_citadel", "rock",
+    rock_species("basalt_citadel", "basalt_citadel", "rock",
         resource_name="BasaltCitadel", height=4.0, height_variation=0.25,
         width_scale=1.02, tilt=3.0, above_water=14.0, below=525.0,
         max_slope=14.0, steady_over=36.0, steady_within=24.0,
@@ -728,7 +740,7 @@ SPECIES: list[dict[str, object]] = [
         draw_within=3200.0, thin_from=900.0, thin_to=2650.0,
         far_density=0.65, shadow_within=700.0, collision_enabled=True,
         collision_within=480.0, collision_primitive=3, impact_mode=3),
-    species("rune_monolith", "rune_monolith", "rune_monolith_glow",
+    rock_species("rune_monolith", "rune_monolith", "rune_monolith_glow",
         resource_name="RuneMonolithSite", height=105.0,
         height_variation=0.66, width_scale=1.0, tilt=6.0,
         above_water=9.0, below=560.0, max_slope=18.0,

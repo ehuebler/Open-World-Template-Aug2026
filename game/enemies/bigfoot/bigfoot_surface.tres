@@ -1,0 +1,32 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_surface.gdshader" id="1_surface"]
+
+; Bigfoot's GLB carries the visible coat, skin, claws, mouth, and eyes in
+; COLOR_0. Keep that authored palette untouched and add only the same narrow,
+; camera-following neon rim used by Character 3.
+
+[resource]
+resource_name = "BigfootVividRim"
+shader = ExtResource("1_surface")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/base_uv_scale = Vector2(1, 1)
+shader_parameter/use_vertex_color = true
+shader_parameter/saturation = 1.0
+shader_parameter/brightness = 1.0
+shader_parameter/roughness = 0.9
+shader_parameter/metallic = 0.0
+shader_parameter/specular = 0.5
+shader_parameter/roughness_variation = 0.0
+shader_parameter/texture_relief = 0.0
+shader_parameter/detail_amount = 0.0
+shader_parameter/bump_strength = 0.0
+shader_parameter/macro_amount = 0.0
+shader_parameter/region_albedo = 0.0
+shader_parameter/region_sheen = 0.0
+shader_parameter/region_rim = 0.0
+shader_parameter/camera_rim_color = Color(0.2, 1, 0.58, 1)
+shader_parameter/camera_rim_energy = 1.25
+shader_parameter/camera_rim_dark = 0.68
+shader_parameter/camera_rim_light = 0.84
+shader_parameter/emission_energy = 0.0

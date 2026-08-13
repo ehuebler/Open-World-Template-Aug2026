@@ -125,6 +125,11 @@ static var view_range := 1.0
 ## positive value so their curved underside sits in the soil rather than looking
 ## balanced on top of it. Collision receives the same instance transform.
 @export_range(0.0, 10.0, 0.05, "or_greater") var ground_sink := 0.0
+## A positive share supersedes the fixed sink and scales the burial with each
+## generated instance's actual height. The minimum keeps player-sized stones on
+## their authored base while larger rocks bridge curved terrain underground.
+@export_range(0.0, 1.0, 0.01) var ground_sink_share := 0.0
+@export_range(0.0, 1000.0, 0.05, "or_greater") var ground_sink_above := 0.0
 ## Degrees off vertical the plants are stood at, as a spread. Nothing that grew
 ## out of the ground is plumb, and a field of plumb ones reads as a grid however
 ## well its positions are scattered.
@@ -538,6 +543,15 @@ func _convex_support_points(vertices: PackedVector3Array) \
 ## Scale to apply to the model for a plant of [param metres].
 func scale_for(metres: float) -> float:
 	return maxf(metres, 0.05) / _authored
+
+
+## Metres this particular instance is buried below its sampled terrain point.
+func ground_sink_for(metres: float) -> float:
+	if ground_sink_share <= 0.0:
+		return maxf(ground_sink, 0.0)
+	if metres <= ground_sink_above:
+		return 0.0
+	return maxf(metres, 0.0) * clampf(ground_sink_share, 0.0, 1.0)
 
 
 ## Hit points one generated instance of this species carries.

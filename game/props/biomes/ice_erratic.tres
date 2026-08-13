@@ -44,3 +44,5 @@ toughness = 3
 break_momentum_keep = 0.86
 break_effect = 2
 break_effect_color = Color(0.55, 0.65, 0.72, 1)
+ground_sink_share = 0.18
+ground_sink_above = 1.6

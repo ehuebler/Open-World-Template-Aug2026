@@ -8,11 +8,9 @@ extends Control
 ## Tiles are ordinary inventory tiles with input turned off: they are a readout
 ## here, not somewhere to rummage.
 
-const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
-
 const GAP := 4
 ## Height of the strip the bar is centred in, above the bottom edge.
-const STRIP := 82.0
+const STRIP := 118.0
 const BOTTOM_MARGIN := 16.0
 
 var _abilities: ItemContainer
@@ -21,10 +19,15 @@ var _slots: Array[ItemSlot] = []
 var _ability_slots: Array[ItemSlot] = []
 var _hotbar_slots: Array[ItemSlot] = []
 var _icons: ItemIcons
+var _column: VBoxContainer
 var _cell_plate: PanelContainer
 var _cell_label: Label
 var _selected := 0
 var _holstered := true
+
+
+func _init() -> void:
+	name = "WeaponBar"
 
 
 func _ready() -> void:
@@ -81,6 +84,18 @@ func show_cell(text: String) -> void:
 	_cell_plate.visible = not text.is_empty()
 
 
+## CombatHud adds the shield and health pair here so both bars stay exactly
+## centred beneath the five inventory boxes at every resolution.
+func add_vitals(control: Control) -> void:
+	if _column == null:
+		call_deferred(&"add_vitals", control)
+		return
+	if control.get_parent() != null:
+		control.reparent(_column)
+	else:
+		_column.add_child(control)
+
+
 func refresh() -> void:
 	for slot in _slots:
 		slot.queue_redraw()
@@ -92,19 +107,40 @@ func _build() -> void:
 	centre.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(centre)
 
-	var column := VBoxContainer.new()
-	column.add_theme_constant_override(&"separation", 6)
-	column.alignment = BoxContainer.ALIGNMENT_CENTER
-	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	centre.add_child(column)
+	_column = VBoxContainer.new()
+	_column.name = "HotbarStack"
+	_column.add_theme_constant_override(&"separation", 5)
+	_column.alignment = BoxContainer.ALIGNMENT_CENTER
+	_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	centre.add_child(_column)
+
+	_cell_plate = PanelContainer.new()
+	_cell_plate.visible = false
+	_cell_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cell_plate.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_column.add_child(_cell_plate)
+	RedHudTheme.panel(_cell_plate, 0.0)
+
+	var padding := MarginContainer.new()
+	for side in [&"margin_left", &"margin_right"]:
+		padding.add_theme_constant_override(side, 7)
+	padding.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cell_plate.add_child(padding)
+
+	_cell_label = Label.new()
+	RedHudTheme.label(_cell_label, 9)
+	_cell_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	padding.add_child(_cell_label)
 
 	var row := HBoxContainer.new()
+	row.name = "HotbarSlots"
 	row.add_theme_constant_override(&"separation", GAP)
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	column.add_child(row)
+	_column.add_child(row)
 	for index in OnlinePlayer.ABILITY_SLOTS:
 		var slot := ItemSlot.new()
 		slot.interactive = false
+		slot.hud_style = true
 		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		slot.badge = "LMB" if index == 0 else "RMB"
 		row.add_child(slot)
@@ -113,30 +149,12 @@ func _build() -> void:
 	for index in OnlinePlayer.HOTBAR_SLOTS:
 		var slot := ItemSlot.new()
 		slot.interactive = false
+		slot.hud_style = true
 		slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		slot.badge = str(index + 1)
 		row.add_child(slot)
 		_slots.append(slot)
 		_hotbar_slots.append(slot)
-
-	_cell_plate = PanelContainer.new()
-	_cell_plate.visible = false
-	_cell_plate.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_cell_plate.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	column.add_child(_cell_plate)
-	AuroraSurface.add_to(_cell_plate, AuroraSurface.Style.HUD)
-
-	var padding := MarginContainer.new()
-	for side in [&"margin_left", &"margin_right"]:
-		padding.add_theme_constant_override(side, 8)
-	padding.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_cell_plate.add_child(padding)
-
-	_cell_label = Label.new()
-	_cell_label.add_theme_font_size_override(&"font_size", 13)
-	_cell_label.add_theme_color_override(&"font_color", PALETTE.text_secondary)
-	_cell_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	padding.add_child(_cell_label)
 
 	_icons = ItemIcons.new()
 	add_child(_icons)

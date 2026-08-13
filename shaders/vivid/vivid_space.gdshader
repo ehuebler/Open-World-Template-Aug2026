@@ -57,6 +57,27 @@ uniform float dusk_high : hint_range(0.0, 0.8) = 0.14;
 uniform float night_air : hint_range(0.0, 0.5) = 0.05;
 group_uniforms;
 
+group_uniforms Scattering;
+// How far the wavelength model in `vivid_air_scatter` is allowed to take the
+// sky's hue over from `zenith_color`/`horizon_color`. Multiplied by the
+// `air_chroma` global, so the player's setting scales this rather than replacing
+// it and the tuning here survives being switched off and on.
+//
+// Not 1.0. The authored pair is a good blue and the scattering is better at the
+// horizon and at dusk than it is overhead; leaving a quarter of the original
+// standing keeps the zenith from going the slightly cyan blue the raw
+// inverse-fourth ratio gives.
+uniform float scatter_strength : hint_range(0.0, 1.0) = 0.75;
+// Thickness of the air, as a multiple of the model's own vertical atmosphere.
+// Higher reddens the low sun earlier and pales the horizon further up the sky.
+uniform float scatter_density : hint_range(0.2, 3.0) = 1.0;
+// Share of that density still there once the camera has left the atmosphere.
+// Not zero: the limb of the planet is exactly where the air is thickest, and a
+// sky in orbit that has stopped scattering leaves the shell drawing a coloured
+// rim against a horizon that no longer agrees with it.
+uniform float scatter_vacuum : hint_range(0.0, 1.0) = 0.3;
+group_uniforms;
+
 group_uniforms Sun;
 uniform vec3 sun_color : source_color = vec3(1.0, 0.94, 0.82);
 uniform float sun_size_degrees : hint_range(0.2, 12.0) = 1.6;
@@ -194,8 +215,16 @@ vec3 celestial_direction(vec3 direction) {
 // [param region_color] is the region's hue at full brightness,
 // [param region_strength] is how strongly this one answers the light, and
 // [param daylight] is how much sun there is where the camera is standing.
+//
+// [param region_hue] is the same region's place on the colour wheel, handed
+// separately because the scattering wants the coordinate rather than the colour
+// built from it, and [param density] is how much air the camera is standing in.
+// [param direct_sun] is the authored sun colour after the same air and region
+// have coloured it; sharing it keeps the disc, halo and shafts of forward
+// scattering from disagreeing at sunset.
 vec3 atmosphere(vec3 direction, vec3 up, vec3 to_sun, vec3 region_color,
-		float region_strength, float daylight) {
+		float region_strength, float daylight, float region_hue, float density,
+		vec3 direct_sun, float amount) {
 	float height = dot(direction, up);
 	float lift = pow(clamp(height, 0.0, 1.0), 1.0 / horizon_falloff);
 	vec3 color = mix(horizon_color, zenith_color, lift);
@@ -219,11 +248,25 @@ vec3 atmosphere(vec3 direction, vec3 up, vec3 to_sun, vec3 region_color,
 	vec3 hued = min(region_color * (luma / region_luma), vec3(1.0));
 	color = mix(color, hued,
 		sky_region_tint * region_strength * (1.0 - lift * sky_region_lift));
+
+	// The wavelength model, taking over the hue of everything decided above and
+	// leaving its brightness alone. The two terms below are the sun's own halo,
+	// so they are added afterwards in `direct_sun`: the matching low-sun colour
+	// computed once for the disc, halo and god-ray compositor.
+	color = vivid_air_scatter(color, direction, up, to_sun, region_hue,
+		density * scatter_density, amount);
+
 	// Forward scattering: the sky brightens toward the sun and warms as it does,
 	// which is most of what makes a low sun read as a low sun.
 	float toward_sun = max(dot(direction, to_sun), 0.0);
-	color += sun_color * sun_glow * pow(toward_sun, sun_glow_falloff) * 0.55;
-	color += sun_color * sun_glow * pow(toward_sun, 2.4) * 0.12;
+	color += direct_sun * sun_glow * pow(toward_sun, sun_glow_falloff) * 0.55;
+	// The broad half of that halo is the one thing the scattering duplicates —
+	// its haze lobe is the same wide warm wash, only wavelength-aware — so this
+	// gives way as the model comes in rather than being added on top of it. Left
+	// standing, dusk near the sun ran two forward lobes together and bloomed the
+	// whole western sky into a flat white sheet.
+	color += direct_sun * sun_glow * pow(toward_sun, 2.4) * 0.12
+		* (1.0 - amount * 0.75);
 	// Put out with the sun, glow included. Air is not lit from nowhere, and this
 	// is what turns the daytime dome into a night sky rather than leaving a blue
 	// noon over a hemisphere with no sun in it.
@@ -263,6 +306,16 @@ void sky() {
 	vec2 region = vivid_region(up);
 	vec3 region_color = mix(vec3(1.0), vivid_spectrum(region.x), region_chroma);
 	float region_strength = mix(0.8, 1.0, region.y);
+	// Air thins with the climb, on the same curve the blue fades out on, so a
+	// flight up gets a deeper zenith and a shorter dusk band rather than the
+	// scattering switching off at a boundary.
+	float density = mix(1.0, scatter_vacuum, in_space);
+	float amount = clamp(scatter_strength * air_chroma, 0.0, 1.0);
+	// One answer shared by all three direct-light terms below. Near the horizon
+	// it is the wavelength-filtered local region colour; overhead, or with
+	// scattering switched off, it is `sun_color` exactly.
+	vec3 direct_sun = vivid_sunset_light(sun_color, up, to_sun, region.x,
+		density * scatter_density, amount);
 
 	vec3 color;
 	if (AT_CUBEMAP_PASS) {
@@ -272,13 +325,14 @@ void sky() {
 		// The tint reaching it is deliberate — the light bouncing onto the
 		// ground belongs to the same region the air over it does.
 		color = mix(atmosphere(EYEDIR, up, to_sun, region_color, region_strength,
-			daylight), space_color, vacuum);
+			daylight, region.x, density, direct_sun, amount), space_color, vacuum);
 	} else {
 		vec3 stars_at = celestial_direction(EYEDIR);
 		float band = pow(1.0 - abs(dot(stars_at, normalize(galaxy_axis))), 4.0);
 		band = mix(1.0, band, galaxy_band);
 		color = mix(atmosphere(EYEDIR, up, to_sun, region_color, region_strength,
-			daylight), deep_space(stars_at, band), vacuum);
+			daylight, region.x, density, direct_sun, amount),
+			deep_space(stars_at, band), vacuum);
 	}
 
 	// The disc itself, drawn over both skies. Sized from the uniform rather than
@@ -290,7 +344,8 @@ void sky() {
 	// A halo that survives into space, where there is no air left to scatter it
 	// and the raw brightness of the star is all there is to see.
 	float halo = pow(max(dot(EYEDIR, to_sun), 0.0), 220.0);
-	color += sun_color * (disc * sun_intensity + halo * sun_glow * mix(0.4, 1.4, in_space));
+	color += direct_sun * (
+		disc * sun_intensity + halo * sun_glow * mix(0.4, 1.4, in_space));
 
 	// Seen from under the sea, which the sky has to answer for even though nothing
 	// about the sky is under water. A swimmer's view of it is through however much

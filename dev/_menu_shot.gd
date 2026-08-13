@@ -54,10 +54,20 @@ func _ready() -> void:
 
 	for entry: Dictionary in VIEWS:
 		_home.show_view(entry["view"])
+		if entry["view"] == HomeScreen.View.ONLINE \
+				or entry["view"] == HomeScreen.View.SETTINGS:
+			_report_framed_fade_start(String(entry["name"]))
 		await _wait(HomeScreen.MOVE_TIME + 0.4)
 		await _capture("menu_%s" % entry["name"])
 		if entry["view"] == HomeScreen.View.HOME:
+			_report_home_controls()
+			_report_home_sun()
+			_report_planet_title()
 			_report_preview()
+			await _run_home_new_game_flow()
+		if entry["view"] == HomeScreen.View.ONLINE:
+			_report_online_layout()
+			_report_online_start_cleanup()
 		if entry["view"] == HomeScreen.View.CHARACTER:
 			await _run_character_bodies()
 		if entry["view"] == HomeScreen.View.SETTINGS:
@@ -99,6 +109,219 @@ func _report_preview() -> void:
 		skeleton.get_bone_global_rest(hips).origin.y])
 
 
+func _report_home_controls() -> void:
+	var name_input := _home.find_child("HomeNameInput", true, false) as LineEdit
+	var pencil := _home.find_child("HomeEditCharacter", true, false) as Button
+	if name_input == null or pencil == null:
+		push_error("_menu_shot: compact home identity controls are missing")
+		return
+	var normal := name_input.get_theme_stylebox(&"normal") as StyleBoxFlat
+	var focus := name_input.get_theme_stylebox(&"focus") as StyleBoxFlat
+	var name_centre := name_input.get_global_rect().get_center().x
+	var wanted_centre := get_viewport().get_visible_rect().size.x * 0.328
+	print("_menu_shot: home name rect=%s centre=%.1f/%.1f pencil=%s" % [
+		name_input.get_global_rect(),
+		name_centre,
+		wanted_centre,
+		pencil.size,
+	])
+	var identity_ok := (
+		name_input.max_length == NetworkManager.PLAYER_NAME_MAX_LENGTH
+		and name_input.size.x <= 151.0
+		and name_input.size.y <= 43.0
+		and name_input.alignment == HORIZONTAL_ALIGNMENT_CENTER
+		and absf(name_centre - wanted_centre) <= 2.0
+		and normal != null and normal.bg_color.a <= 0.001
+		and focus != null and focus.bg_color.a <= 0.001
+		and normal.border_width_left == 0
+		and focus.border_width_left == 0
+		and pencil.size.x <= 35.0
+		and pencil.size.y <= name_input.size.y
+		and pencil.get_theme_stylebox(&"normal") is StyleBoxEmpty
+	)
+	if not identity_ok:
+		push_error("_menu_shot: home name bar or unboxed pencil is not compact")
+		return
+
+	for button_name: String in [
+		"HomeNewGame", "HomeOnline", "HomeSettings", "HomeQuit"
+	]:
+		var button := _home.find_child(button_name, true, false) as Button
+		if button == null:
+			push_error("_menu_shot: missing home action %s" % button_name)
+			continue
+		var wanted := (
+			HomeScreen.HOME_RED_BRIGHT
+			if button_name == "HomeQuit"
+			else HomeScreen.HOME_GREEN_TEXT
+		)
+		if button.get_theme_font_size(&"font_size") \
+				< HomeScreen.HOME_ACTION_FONT_SIZE \
+				or not button.get_theme_color(&"font_color").is_equal_approx(wanted):
+			push_error("_menu_shot: %s does not use the larger home action type" % button_name)
+	print("_menu_shot: centred text-only 12-character name and unboxed pencil verified")
+
+
+func _report_home_sun() -> void:
+	var cycle := _world.celestial_cycle
+	var sun := _world.find_child("Sun", true, false) as DirectionalLight3D
+	var ship := _world.find_child("ColonyShip", true, false) as Node3D
+	var planet := _world.planet()
+	if cycle == null or sun == null or ship == null or planet == null:
+		push_error("_menu_shot: home sunset needs the cycle, sun, ship, and planet")
+		return
+	var expected := GameWorld.HOME_SUN_ADVANCE_SECONDS / cycle.period_seconds
+	var up := (ship.global_position - planet.global_position).normalized()
+	var elevation := up.dot(sun.global_basis.z.normalized())
+	var phase := cycle.phase()
+	if phase < expected or phase > expected + 0.02 or absf(elevation) > 0.5:
+		push_error("_menu_shot: home sun did not open near the authored three-minute sunset")
+	print("_menu_shot: home sun phase=%.4f colony elevation=%+.3f" % [
+		phase, elevation])
+
+
+func _report_framed_fade_start(view_name: String) -> void:
+	var background := _home.find_child(
+		"SettingsBackground", true, false) as TextureRect
+	var screen := _home._screen as Control
+	if background == null or screen == null or not background.visible:
+		push_error("_menu_shot: %s frame did not begin its transition" % view_name)
+		return
+	if background.modulate.a > 0.01 or screen.modulate.a > 0.01:
+		push_error("_menu_shot: %s frame appeared before its camera pan" % view_name)
+	else:
+		print("_menu_shot: %s background and menu begin faded together" % view_name)
+
+
+func _report_planet_title() -> void:
+	var title := _home.get_node_or_null("MyStrangePlanetTitle") as MeshInstance3D
+	var planet := _world.planet()
+	if title == null or planet == null or title.mesh == null:
+		push_error("_menu_shot: home screen has no curved planet title")
+		return
+	var material := title.material_override as StandardMaterial3D
+	if material == null or material.albedo_texture != HomeScreen.TITLE_ART:
+		push_error("_menu_shot: planet title is not using the original logo PNG")
+		return
+	var clouds := planet.get_node_or_null("Clouds") as MeshInstance3D
+	var cloud_material := (
+		clouds.material_override as Material
+		if clouds != null else null
+	)
+	if cloud_material == null or material.render_priority >= cloud_material.render_priority:
+		push_error("_menu_shot: planet title is not ordered beneath the cloud deck")
+		return
+
+	var arrays := title.mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var worst_clearance_error := 0.0
+	var stride := maxi(vertices.size() / 16, 1)
+	for index in range(0, vertices.size(), stride):
+		var point := planet.to_local(title.to_global(vertices[index]))
+		var direction := point.normalized()
+		var clearance := point.length() - planet.shape.surface_point(direction).length()
+		worst_clearance_error = maxf(
+			worst_clearance_error,
+			absf(clearance - HomeScreen.PLANET_TITLE_CLEARANCE)
+		)
+	print("_menu_shot: planet title vertices=%d clearance error=%.3fm priorities=%d<%d" % [
+		vertices.size(),
+		worst_clearance_error,
+		material.render_priority,
+		cloud_material.render_priority,
+	])
+	if worst_clearance_error > 0.5:
+		push_error("_menu_shot: planet title does not follow the terrain surface")
+
+
+func _run_home_new_game_flow() -> void:
+	var new_game := _home.find_child("HomeNewGame", true, false) as Button
+	if new_game == null:
+		push_error("_menu_shot: themed New Game button is missing")
+		return
+	new_game.pressed.emit()
+	await _wait(0.25)
+	var panel := _home.find_child("NewGameModePanel", true, false) as Control
+	var cards := _home.find_child("HomeModeCards", true, false) as Control
+	if panel == null or cards == null or not panel.visible:
+		push_error("_menu_shot: New Game did not open the mode-card stage")
+		return
+	_report_mode_card_copy(cards, "home", 18, 15, HomeScreen.HOME_GREEN_TEXT)
+	await _capture("menu_home_modes")
+
+	var story := _home.find_child("HomeMode_story", true, false) as Button
+	if story == null:
+		push_error("_menu_shot: Story mode card is missing")
+		return
+	story.pressed.emit()
+	await _wait(0.25)
+	_report_home_mode_settings("story")
+	await _capture("menu_home_story_settings")
+
+	var back := _home.find_child("NewGameBack", true, false) as Button
+	if back == null:
+		push_error("_menu_shot: mode-settings Back button is missing")
+		return
+	back.pressed.emit()
+	await _wait(0.15)
+	var duels := _home.find_child("HomeMode_duels", true, false) as Button
+	if duels == null:
+		push_error("_menu_shot: Duels mode card is missing")
+		return
+	duels.pressed.emit()
+	await _wait(0.25)
+	_report_home_mode_settings("duels")
+	await _capture("menu_home_duels_settings")
+	_home._pick_mode(false)
+	await _wait(0.1)
+
+
+func _report_home_mode_settings(mode_id: String) -> void:
+	var settings := _home.find_child(
+		"HomeModeSettingControls", true, false) as Control
+	var start := _home.find_child("HomeStartGame", true, false) as Control
+	var selected := _home.find_child("SelectedHomeMode", true, false) as Control
+	if settings == null or start == null or selected == null:
+		push_error("_menu_shot: %s mode settings are incomplete" % mode_id)
+		return
+	var start_is_right := start.get_global_rect().position.x \
+		> settings.get_global_rect().end.x
+	var correct_options := (
+		_home.find_child("HomeDuelsOptions", true, false) != null
+		if mode_id == "duels"
+		else _home.find_child("HomeStandardModeSettings", true, false) != null
+	)
+	print("_menu_shot: home %s settings start_right=%s options=%s" % [
+		mode_id, start_is_right, correct_options
+	])
+
+
+func _report_mode_card_copy(
+		root: Control,
+		where: String,
+		minimum_title_size: int,
+		description_size_wanted: int,
+		green: Color
+	) -> void:
+	var title := root.find_child("ModeTitle", true, false) as Label
+	var description := root.find_child("ModeDescription", true, false) as Label
+	if title == null or description == null:
+		push_error("_menu_shot: %s game-mode copy is missing" % where)
+		return
+	var title_size := title.get_theme_font_size(&"font_size")
+	var description_size := description.get_theme_font_size(&"font_size")
+	var white := description.get_theme_color(&"font_color")
+	var top_aligned := title.get_global_rect().position.y \
+		< description.get_global_rect().position.y
+	if title_size < minimum_title_size \
+			or description_size != description_size_wanted \
+			or title_size <= description_size \
+			or not title.get_theme_color(&"font_color").is_equal_approx(green) \
+			or white.r < 0.94 or white.g < 0.94 or white.b < 0.94 \
+			or not top_aligned:
+		push_error("_menu_shot: %s game-mode typography is not large green/white top copy" % where)
+
+
 func _report_settings_background() -> void:
 	var background := _home.find_child(
 		"SettingsBackground", true, false) as TextureRect
@@ -107,15 +330,110 @@ func _report_settings_background() -> void:
 		return
 	var viewport_rect := get_viewport().get_visible_rect()
 	var background_rect := background.get_global_rect()
-	var fills_viewport := background_rect.position.distance_to(
-		viewport_rect.position) <= 1.0 \
-		and background_rect.size.distance_to(viewport_rect.size) <= 1.0
+	var settings_frame := _home.find_child(
+		"HomeSettingsFrame", true, false) as Control
+	var settings_panel := settings_frame as PanelContainer
+	var settings_style := (
+		settings_panel.get_theme_stylebox(&"panel") as StyleBoxFlat
+		if settings_panel != null else null
+	)
+	var settings_glow := (
+		settings_panel.find_child("RedGlowPanel", false, false) as RedGlowPanel
+		if settings_panel != null else null
+	)
+	var gaps := Vector4(
+		background_rect.position.x - viewport_rect.position.x,
+		background_rect.position.y - viewport_rect.position.y,
+		viewport_rect.end.x - background_rect.end.x,
+		viewport_rect.end.y - background_rect.end.y
+	)
+	var inset := gaps.x > 0.0 and gaps.y > 0.0 and gaps.z > 0.0 and gaps.w > 0.0
+	var fitted := false
+	if settings_frame != null:
+		var frame_rect := settings_frame.get_global_rect()
+		var frame_gaps := Vector4(
+			frame_rect.position.x - background_rect.position.x,
+			frame_rect.position.y - background_rect.position.y,
+			background_rect.end.x - frame_rect.end.x,
+			background_rect.end.y - frame_rect.end.y
+		)
+		fitted = frame_gaps.x >= -1.0 and frame_gaps.y >= -1.0 \
+			and frame_gaps.z >= -1.0 and frame_gaps.w >= -1.0 \
+			and frame_gaps.x <= 36.0 and frame_gaps.y <= 36.0 \
+			and frame_gaps.z <= 36.0 and frame_gaps.w <= 36.0
 	if background.texture != HomeScreen.SETTINGS_BACKGROUND \
 			or background.stretch_mode != TextureRect.STRETCH_SCALE \
-			or not fills_viewport:
-		push_error("_menu_shot: home Settings background is not full-screen ui_background2")
+			or background.modulate.a < 0.99 or not inset or not fitted \
+			or settings_style == null or settings_style.bg_color.a > 0.43 \
+			or settings_glow == null or settings_glow.fill_color.a > 0.17:
+		push_error("_menu_shot: home Settings background is not fitted inset ui_background2")
 		return
-	print("_menu_shot: home Settings uses full-screen ui_background2")
+	print("_menu_shot: home Settings ui_background2 gaps L%.0f T%.0f R%.0f B%.0f" % [
+		gaps.x, gaps.y, gaps.z, gaps.w
+	])
+
+
+func _report_online_layout() -> void:
+	var lobby := _home.find_child("SteamLobbyPanel", true, false) as LobbyPanel
+	var frame := _home.find_child("OnlineFrame", true, false) as Control
+	if lobby == null or frame == null:
+		push_error("_menu_shot: online lobby frame is missing")
+		return
+	var frame_panel := frame as PanelContainer
+	var frame_style := (
+		frame_panel.get_theme_stylebox(&"panel") as StyleBoxFlat
+		if frame_panel != null else null
+	)
+	var frame_glow := frame.find_child(
+		"RedGlowPanel", false, false) as RedGlowPanel
+	if frame_style == null or frame_glow == null \
+			or frame_style.bg_color.a > 0.43 or frame_glow.fill_color.a > 0.17:
+		push_error("_menu_shot: online shell is too opaque to reveal UI Background 2")
+	var viewport_rect := get_viewport().get_visible_rect()
+	var frame_rect := frame.get_global_rect()
+	var gaps := Vector4(
+		frame_rect.position.x - viewport_rect.position.x,
+		frame_rect.position.y - viewport_rect.position.y,
+		viewport_rect.end.x - frame_rect.end.x,
+		viewport_rect.end.y - frame_rect.end.y
+	)
+	print("_menu_shot: online frame gaps L%.0f T%.0f R%.0f B%.0f" % [
+		gaps.x, gaps.y, gaps.z, gaps.w
+	])
+	for node_name: String in [
+		"LobbyTabs", "CreateLobbyUpper", "GameModes", "HostLobby"
+	]:
+		var control := lobby.find_child(node_name, true, false) as Control
+		if control == null:
+			push_error("_menu_shot: online control %s is missing" % node_name)
+			continue
+		var control_rect := control.get_global_rect()
+		print("_menu_shot: online %-16s %s%s" % [
+			node_name,
+			control_rect,
+			"" if frame_rect.encloses(control_rect) else " CLIPPED",
+		])
+	var modes := lobby.find_child("GameModes", true, false) as Control
+	if modes != null:
+		_report_mode_card_copy(modes, "online", 17, 12, LobbyPanel.MODE_GREEN)
+	var host := lobby.find_child("HostLobby", true, false) as Button
+	var page_scroll := lobby.find_child(
+		"OnlinePageScroll", true, false) as ScrollContainer
+	var page_fits := page_scroll != null and host != null \
+		and page_scroll.vertical_scroll_mode == ScrollContainer.SCROLL_MODE_DISABLED \
+		and page_scroll.get_global_rect().encloses(host.get_global_rect())
+	if host == null or host.size.y > 35.0 or not page_fits:
+		push_error("_menu_shot: thinner Host Lobby action did not eliminate Online scrolling")
+
+
+func _report_online_start_cleanup() -> void:
+	var background := _home.find_child(
+		"SettingsBackground", true, false) as TextureRect
+	_home._dismiss_overlay()
+	if background == null or background.visible or background.modulate.a > 0.01:
+		push_error("_menu_shot: Online ui_background2 survives session start")
+		return
+	print("_menu_shot: Online ui_background2 clears with its lobby panel")
 
 
 ## New Game should never cut: the camera leaves the home pose and arrives behind
@@ -127,6 +445,11 @@ func _run_handover() -> void:
 	# sweep from whichever pose the camera happened to still be travelling through.
 	_home.show_view(HomeScreen.View.HOME)
 	await _wait(HomeScreen.MOVE_TIME + 0.4)
+	var title := _home.get_node_or_null("MyStrangePlanetTitle") as MeshInstance3D
+	var title_material := (
+		title.material_override as StandardMaterial3D
+		if title != null else null
+	)
 	_home.start_new_game()
 	for step in 3:
 		await _wait(HomeScreen.HANDOVER_TIME / 4.0)
@@ -140,6 +463,10 @@ func _run_handover() -> void:
 		"on" if player != null and player.controls_enabled else "OFF",
 		"gone" if not is_instance_valid(_home) else "STILL UP",
 	])
+	if title_material == null or title_material.albedo_color.a > 0.05:
+		push_error("_menu_shot: planet title did not fade out during game start")
+	else:
+		print("_menu_shot: planet title faded out with the game start")
 	# The body the editor chose has to be the body that spawns, garments, weapons
 	# and all. It is the one thing about the handover that no frame of the sweep
 	# shows, since the preview and the player are meant to look identical by then
@@ -168,6 +495,9 @@ func _run_ingame_red() -> void:
 	if player == null:
 		push_error("_menu_shot: --ingame-red did not spawn a local player")
 		return
+	if _world.celestial_cycle == null \
+			or _world.celestial_cycle.phase() > 0.01:
+		push_error("_menu_shot: New Game did not reset the sunset menu to full daylight")
 	player._open_game_menu(GameMenu.Tab.HERO)
 	await _wait(0.25)
 	var menu := _game_menu(player)
@@ -225,12 +555,12 @@ func _report_red_bounds(menu: GameMenu, page_name: String) -> void:
 ## astronaut back on means putting the loop back — the containers already handle a
 ## body change; see `_on_tint_picked` in `home_screen.gd`.
 func _run_character_bodies() -> void:
-	var pages := _world.find_children("*", "InventoryPage", true, false)
-	if pages.is_empty():
+	var page := _world.find_child(
+		"PlayerDesignerPanel", true, false) as PlayerDesignerPanel
+	if page == null:
 		push_error("_menu_shot: the character view came up with no editor")
 		return
-	var page := pages[0] as InventoryPage
-	_report_fit(page, "undressed")
+	_report_designer_fit(page)
 	var saved := CharacterDB.load_look()
 	var body_id := CharacterDB.sanitize_body(saved["body"])
 	if _press("Integrated Robotic"):
@@ -240,22 +570,20 @@ func _run_character_bodies() -> void:
 	if _press("Clean Robotic"):
 		await _wait(0.35)
 		await _capture("menu_character_clean_robotic")
-	await _run_character_pockets(body_id)
-	if not _press("Hero Design"):
-		return
+	await _run_character_apparel(page, body_id)
+	page.show_tab(PlayerDesignerPanel.Tab.HERO)
 	await _wait(0.35)
-	_report_fit(page, "dressed")
 	await _capture("menu_character_%s" % body_id)
 	print("_menu_shot: %s wearing %s" % [body_id, page.worn_slots().items()])
 	# Twice over on one target, because a tint multiplies what it lands on and the
 	# failure is not a wrong colour but a colour that keeps getting darker.
 	for colour: Color in [Color(0.86, 0.24, 0.20), Color(0.24, 0.46, 0.74)]:
-		page.tint_picked.emit(InventoryPage.TINT_BODY, colour)
+		page.tint_picked.emit(PlayerDesignerPanel.TINT_BODY, colour)
 		await _wait(0.2)
 	page.tint_picked.emit("long_sleeve", Color(0.94, 0.68, 0.22))
 	await _wait(0.35)
 	await _capture("menu_character_tinted")
-	page.tint_cleared.emit(InventoryPage.TINT_BODY)
+	page.tint_cleared.emit(PlayerDesignerPanel.TINT_BODY)
 	page.tint_cleared.emit("long_sleeve")
 	await _wait(0.35)
 	await _capture("menu_character_no_tint")
@@ -268,41 +596,56 @@ func _run_character_bodies() -> void:
 		await _wait(0.35)
 
 
-## The editor's second tab is a finite view of the saved character's ownership.
-## It may contain apparel, weapons, both, or neither; the screenshot harness must
-## never manufacture ItemDB entries simply to make the grid look populated.
-func _run_character_pockets(body_id: String) -> void:
-	if not _press("Inventory"):
-		push_error("_menu_shot: the editor came up with no Inventory tab")
-		return
+## The second tab is apparel only. Toggle one real owned garment through the same
+## code a completed tile hold uses, then put it back before taking the screenshot.
+func _run_character_apparel(
+		page: PlayerDesignerPanel,
+		body_id: String
+	) -> void:
+	page.show_tab(PlayerDesignerPanel.Tab.APPAREL)
 	await _wait(0.35)
-	var page := _page(InventoryPage.Section.POCKETS)
-	if page == null:
-		push_error("_menu_shot: the Inventory tab came up with no page")
-		return
-	var owned := _finite_owned_ids(page)
-	print("_menu_shot: finite catalogue count=%d ids=%s %s" % [
-		owned.size(), owned, _catalogue_state(page)])
+	var owned := page.apparel_ids()
+	var weapon_tiles := page.find_children("DesignerApparel_*", "DesignerApparelTile",
+		true, false).filter(func(node: Node) -> bool:
+			return ItemDB.is_weapon((node as DesignerApparelTile).item_id())
+	)
+	print("_menu_shot: apparel catalogue count=%d ids=%s weapon_tiles=%d" % [
+		owned.size(), owned, weapon_tiles.size()])
 
-	# Toggle one garment only when this save really owns one. A second click puts
-	# its worn state back, leaving the capture run lossless even before cleanup.
 	var garment := ""
 	for item_id: String in owned:
-		if ItemDB.is_apparel(item_id) and CharacterDB.apparel_fits(body_id, item_id):
+		if CharacterDB.apparel_fits(body_id, item_id):
 			garment = item_id
 			break
 	if not garment.is_empty():
-		var before := _catalogue_state(page)
-		await _click(page, garment)
-		await _click(page, garment)
-		print("_menu_shot: finite apparel round trip %s -> %s" % [
-			before, _catalogue_state(page)])
+		var before := page.worn_slots().items()
+		page.toggle_apparel(garment)
+		page.toggle_apparel(garment)
+		print("_menu_shot: hold apparel round trip %s -> %s" % [
+			before, page.worn_slots().items()])
 	else:
 		print("_menu_shot: finite catalogue has no owned apparel to toggle")
+	await _capture("menu_character_apparel")
 
-	await _arm_owned_weapon(page, owned)
-	_report_fit(page, "pockets")
-	await _capture("menu_character_pockets")
+
+func _report_designer_fit(page: PlayerDesignerPanel) -> void:
+	var viewport_rect := get_viewport().get_visible_rect()
+	var panel_rect := page.get_global_rect()
+	var background := page.find_child(
+		"RotatedUIBackground2", true, false) as TextureRect
+	var no_stats := page.find_child("StatsFrame", true, false) == null
+	var no_hotbar := page.find_child("HotbarSlots", true, false) == null
+	var compressed_right := panel_rect.position.x \
+		>= viewport_rect.size.x * (1.0 - HomeScreen.EDITOR_CARD_SHARE) - 1.0
+	print("_menu_shot: designer rect=%s inside=%s rotated_background=%s no_stats=%s no_hotbar=%s" % [
+		panel_rect,
+		viewport_rect.encloses(panel_rect),
+		background != null and is_equal_approx(background.rotation, PI * 0.5),
+		no_stats,
+		no_hotbar,
+	])
+	if not viewport_rect.encloses(panel_rect) or not compressed_right:
+		push_error("_menu_shot: designer card is not compressed to the right of the figure")
 
 
 ## If the finite save owns a weapon, show that its tile can arm one of exactly
@@ -390,7 +733,7 @@ func _tile(page: InventoryPage, item_id: String) -> ItemSlot:
 func _press(label: String) -> bool:
 	for node in _world.find_children("*", "Button", true, false):
 		var button := node as Button
-		if button.text == label:
+		if button.text.to_lower() == label.to_lower():
 			button.pressed.emit()
 			return true
 	return false

@@ -30,6 +30,17 @@ const DEFAULTS := {
 		## so that flying at a few hundred metres still passes over a populated
 		## planet rather than bare terrain.
 		"flora_range": 2.0,
+		## Wavelength-based colour in the sky and the atmosphere shell. Applied
+		## by `_apply_setting` through the `air_chroma` shader global, so it
+		## lands with or without a world loaded and needs nothing to be found.
+		## Off restores the flat blue atmosphere and costs the two shaders a
+		## branch they take uniformly.
+		"atmospheric_scattering": true,
+		## Depth-marched sunbeams. Applied by [CelestialCycle] rather than here,
+		## for the same reason `render_distance` is applied by the planet: the
+		## compositor arrives with the map and there is nothing to switch off
+		## until it does.
+		"god_rays": true,
 	},
 	"audio": {
 		"master_volume": 0.8,
@@ -245,6 +256,15 @@ func _apply_setting(section: StringName, key: StringName, value: Variant) -> voi
 				&"graphics", &"vsync", DEFAULTS["graphics"]["vsync"])) else int(value)
 		"graphics/render_scale":
 			get_tree().root.scaling_3d_scale = float(value)
+		"graphics/atmospheric_scattering":
+			# A global shader parameter rather than a uniform on each material,
+			# because the sky and the atmosphere shell draw two halves of one
+			# sight and cross-fade into each other at a fixed altitude — see
+			# `air_chroma` in vivid_lib.gdshaderinc. Written only when the
+			# setting changes; the sky's radiance cubemap is rebuilt on a global
+			# write, so this must never be driven per frame.
+			RenderingServer.global_shader_parameter_set(&"air_chroma",
+				1.0 if bool(value) else 0.0)
 		"graphics/quality":
 			match int(value):
 				0:
@@ -286,6 +306,7 @@ func _save_input_bindings() -> void:
 func _load_input_bindings() -> void:
 	if not _config.has_section("controls"):
 		return
+	var has_saved_parry := _config.has_section_key("controls", "parry")
 	for action_key: String in _config.get_section_keys("controls"):
 		var action := StringName(action_key)
 		if not InputMap.has_action(action):
@@ -297,6 +318,14 @@ func _load_input_bindings() -> void:
 				var event := _deserialize_event(event_data)
 				if event != null:
 					InputMap.action_add_event(action, event)
+	# Settings written before parry existed commonly restore F onto holster after
+	# project.godot has already put it on parry. Migrate only that legacy F event;
+	# deliberate custom holster bindings on other keys remain untouched.
+	if not has_saved_parry:
+		for event: InputEvent in InputMap.action_get_events(&"holster"):
+			if event is InputEventKey and (
+					event.physical_keycode == KEY_F or event.keycode == KEY_F):
+				InputMap.action_erase_event(&"holster", event)
 
 
 func _serialize_event(event: InputEvent) -> Dictionary:

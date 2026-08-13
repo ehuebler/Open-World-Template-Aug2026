@@ -31,6 +31,14 @@ const SWEEP_LENGTH := 20.0
 const SWEEP_RADIUS := 8.0
 const BLAST_RADIUS := 34.0
 
+## Ground the regrow check winds back — wider than anything the test destroyed —
+## and how long the streamer is given to sow it again.
+const REGROW_RADIUS := 94.0
+const REGROW_FRAMES := 200
+## Above the undergrowth and below every authored tree. Matches what the boss
+## tramples with; the point of the check is that the two agree.
+const CANOPY_CAP := 4.0
+
 var _failures := 0
 var _planet: Planet
 
@@ -74,6 +82,10 @@ func _ready() -> void:
 	else:
 		_check_cover_damage(target, _planet.up_at(target))
 	_check_break_keys()
+	if target != Vector3.INF:
+		await _check_regrow(target)
+		# On the ground that just grew back, which is also what proves it did.
+		_check_capped_damage(target)
 
 	print("flora_damage_test: %s" % (
 		"all checks passed" if _failures == 0 else "%d check(s) failed" % _failures))
@@ -85,6 +97,8 @@ func _ready() -> void:
 ## somewhere a body could plausibly reach.
 func _check_species_resources() -> void:
 	var seen := 0
+	var buried_rocks := 0
+	var sink_math_holds := true
 	for path in _species_paths():
 		var plant := load(path) as PlantSpecies
 		if plant == null:
@@ -115,7 +129,16 @@ func _check_species_resources() -> void:
 		_expect(plant.health_for(2.0) > plant.health_for(0.0)
 			or is_zero_approx(plant.health_per_metre),
 			"%s is tougher when it is bigger, or says it is not" % name)
+		if plant.ground_sink_share > 0.0:
+			buried_rocks += 1
+			var large := plant.ground_sink_above + 1.0
+			sink_math_holds = sink_math_holds \
+				and is_zero_approx(plant.ground_sink_for(plant.ground_sink_above)) \
+				and is_equal_approx(plant.ground_sink_for(large),
+					large * plant.ground_sink_share)
 	_expect(seen >= 40, "the whole species catalogue was read (%d)" % seen)
+	_expect(buried_rocks >= 10, "all rock species opt into scaled burial (%d)" % buried_rocks)
+	_expect(sink_math_holds, "rock burial begins above the player and scales with height")
 
 
 func _check_toughness() -> void:
@@ -204,6 +227,84 @@ func _check_cover_damage(at: Vector3, up: Vector3) -> void:
 	var again := _apply_everywhere(blast)
 	_expect(again < absorbed * 0.05,
 		"a second blast over the same ground finds almost nothing standing")
+
+
+## Winding a patch of ground back to how it grew.
+##
+## Damage is permanent for the rest of the session everywhere else — that is the
+## whole point of the ledger surviving streaming — so this is the one path that
+## undoes it, for an encounter that resets the ground it was fought over.
+func _check_regrow(at: Vector3) -> void:
+	var world := _planet.get_parent() as GameWorld
+	if world == null:
+		return
+	var broken := _broken_total()
+	var flattened := _standing_total()
+	_expect(broken > 0, "there is destruction to undo (%d keys)" % broken)
+	var restored := world.regrow_flora(at, REGROW_RADIUS)
+	_expect(restored > 0,
+		"the regrow reports what it stood back up (%d)" % restored)
+	_expect(_broken_total() == 0,
+		"and the world no longer calls anything there broken")
+	_expect(_pending_break_total() == 0,
+		"and no pre-reset break is still queued to knock restored flora down again")
+	# The plants themselves come back through the streamer, on its own clock.
+	await _wait(REGROW_FRAMES)
+	var standing := _standing_total()
+	_expect(standing > flattened,
+		"the cover grew back where it was cut (%d, was %d)" % [
+			standing, flattened])
+
+
+## A volume that spares the canopy. This cap is the only thing keeping something
+## that flattens its way around an arena from levelling the trees it lives under,
+## and a plain reduction in damage would not do it: the ledger accumulates, so
+## anything left standing on one pass falls on the twentieth.
+func _check_capped_damage(at: Vector3) -> void:
+	for field in get_tree().get_nodes_in_group(DamageHit.FIELD_GROUP):
+		field.call(&"drain_new_breaks")
+	var blast := DamageHit.area(at, BLAST_RADIUS, 100000.0, 0.0)
+	blast.max_plant_height = CANOPY_CAP
+	_apply_everywhere(blast)
+	var short_broken := 0
+	var tall_broken := 0
+	for field in get_tree().get_nodes_in_group(DamageHit.FIELD_GROUP):
+		var keys: PackedInt32Array = field.call(&"drain_new_breaks")
+		if keys.is_empty():
+			continue
+		var cover := field as GroundCover
+		if cover == null:
+			# A tree colony's keys are tree indices, and every tree in one
+			# stands well above the cap.
+			tall_broken += keys.size()
+			continue
+		var entry := 3
+		while entry < keys.size():
+			var plant := cover.species[keys[entry]] as PlantSpecies
+			if plant != null and plant.height > CANOPY_CAP:
+				tall_broken += 1
+			else:
+				short_broken += 1
+			entry += 5
+	_expect(short_broken > 0,
+		"a capped volume still flattens undergrowth (%d)" % short_broken)
+	_expect(tall_broken == 0,
+		"and leaves everything above the cap standing (%d felled)" % tall_broken)
+
+
+## Plants every field currently calls broken.
+func _broken_total() -> int:
+	var keys := 0
+	for field in get_tree().get_nodes_in_group(DamageHit.FIELD_GROUP):
+		keys += (field.call(&"broken_keys") as PackedInt32Array).size()
+	return keys
+
+
+func _pending_break_total() -> int:
+	var keys := 0
+	for field in get_tree().get_nodes_in_group(DamageHit.FIELD_GROUP):
+		keys += (field.call(&"drain_new_breaks") as PackedInt32Array).size()
+	return keys
 
 
 func _apply_everywhere(hit: DamageHit) -> float:

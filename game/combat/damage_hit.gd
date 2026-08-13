@@ -1,7 +1,7 @@
 class_name DamageHit
 extends RefCounted
 
-## One volume of damage, handed to everything standing inside it.
+## One combat/effect volume, handed to everything standing inside it.
 ##
 ## Abilities do not know what they are hitting. They describe a shape, an amount
 ## and how the amount falls off across it, and every damageable field works out
@@ -9,10 +9,8 @@ extends RefCounted
 ## tick damage grass, a tree and the ground with the same object, and what keeps
 ## the ability files free of any knowledge of MultiMesh buffers or tile cells.
 ##
-## The shape is always a capsule. A point impact is a capsule of zero length, so
-## there is one distance function rather than three, and a beam that sweeps
-## between two ticks is the segment between where it was and where it is —
-## which is what stops a fast sweep from stitching its damage into dots.
+## Capsules remain the default used by beams and point impacts. A flat-ended
+## cylinder is also available for authored waves such as a roar.
 ##
 ## Nothing here is per-target state. A hit is built, offered around, and dropped;
 ## the accumulated damage lives with whatever absorbed it.
@@ -21,6 +19,43 @@ extends RefCounted
 ## their targets through this rather than through node paths, the same way
 ## [ImpactBreakEffects] is found.
 const FIELD_GROUP := &"flora_damage_fields"
+## Nodes that answer `combat_faction`, `combat_position`, and `apply_damage`.
+const COMBATANT_GROUP := &"combatants"
+## Player-facing names for authored attacks. Internal IDs survive the network
+## with the hit, but exposing those IDs on a death screen would turn
+## `bigfoot_rock` into implementation detail instead of useful information.
+const ABILITY_DISPLAY_NAMES := {
+	"bigfoot_rock": "Rock Throw",
+	"bigfoot_meteor": "Meteor Punch",
+	"bigfoot_punch": "Punch",
+	"bigfoot_grab": "Grab",
+	"bigfoot_throw": "Grab Throw",
+	"bigfoot_roar": "Roar",
+	"bigfoot_trample": "Trample",
+	"laser_eyes": "Laser Eyes",
+	"meteor_punch": "Meteor Punch",
+	"parry_reflect": "Parry Reflection",
+}
+
+enum Shape {
+	CAPSULE,
+	CYLINDER,
+}
+
+enum Faction {
+	NEUTRAL,
+	PLAYER,
+	ENEMY,
+}
+
+enum Reaction {
+	NONE,
+	STAGGER,
+	KNOCKBACK,
+	RAGDOLL,
+}
+
+const REACTION_FULL_RAGDOLL := Reaction.RAGDOLL
 
 enum Kind {
 	## A sustained cutting line, such as the laser. Damages along its length.
@@ -42,14 +77,70 @@ var toward := Vector3.ZERO
 ## Radius of the capsule in metres.
 var radius := 1.0
 var kind := Kind.IMPACT
+var shape := Shape.CAPSULE
 ## How much of the damage survives to the edge of the radius. 0 keeps the full
 ## amount everywhere inside (a clean cut), 1 falls linearly to nothing (the
 ## dissipating spread of a landing).
 var falloff := 0.0
+## The band of species this volume touches, by authored height in metres. Zero
+## at either end, the default, means no bound at that end.
+##
+## Something walking through undergrowth flattens the undergrowth; it does not
+## level the canopy it is walking under, and it does not mow the lawn either.
+## Expressed as species heights rather than as a smaller damage number because a
+## ledger accumulates: a volume weak enough to leave a tree standing on one pass
+## fells it on the twentieth.
+##
+## The floor is also what makes a volume like that affordable. Ground cover is
+## most of the plants on the planet — a third of a million blades of grass stand
+## within sight of a jungle floor — and a volume that cannot break any of them
+## can be turned away by a whole field at a time instead of being offered every
+## blade.
+var min_plant_height := 0.0
+var max_plant_height := 0.0
+## Whether deterministic flora fields are offered this volume.
+##
+## Actor and terrain footprints often differ. Keeping this explicit avoids
+## scanning a wide knockback blast through every blade only to follow it with
+## the smaller, categorical uproot that owns the crater.
+var affects_flora := true
+## Whether actors are offered this volume after flora has taken it.
+##
+## Most hits affect both. A terrain-cutting impact is the exception: the blast
+## players feel dissipates toward its edge, while every root over the ground
+## that was physically removed has to be uprooted at full strength. Keeping the
+## second volume flora-only lets those two truths coexist without turning the
+## visual crater radius into a lethal actor hit.
+var affects_combatants := true
+## Whether each plant this uproots throws its own burst of fragments.
+##
+## On for everything a player can watch happen: one shrub coming apart is the
+## whole feedback that it came apart. Off for volumes wide enough that nobody is
+## looking at any single plant in them — a meteor landing takes seventeen
+## thousand instances in one frame, and asking the pooled effect for seventeen
+## thousand bursts inside its own explosion costs twenty-five milliseconds and
+## puts nothing on screen that the explosion was not already covering.
+var plant_break_effects := true
 ## Who caused it, so a host can attribute a break, and the ability that did, so
 ## a field can pick a matching break effect.
 var source_peer := 0
 var ability_id := ""
+## Path under the containing GameWorld. Relative paths cannot address a
+## combatant in another world branch.
+var source_path := NodePath()
+## Optional direct player target. Zero means every eligible combatant in shape.
+var target_peer := 0
+var faction := Faction.NEUTRAL
+var reaction := Reaction.NONE
+## World-space velocity/impulse authored by the attack.
+var world_impulse := Vector3.ZERO
+var status := &""
+var status_duration := 0.0
+var parryable := false
+## Damage dealt back to the source by a perfect parry. Zero falls back to amount.
+var reflection := 0.0
+## Reliable combat event sequence. Networking code owns assignment.
+var sequence := 0
 
 
 ## A cutting line between two points.
@@ -57,6 +148,7 @@ static func beam(from: Vector3, to: Vector3, beam_radius: float,
 		damage: float) -> DamageHit:
 	var hit := DamageHit.new()
 	hit.kind = Kind.BEAM
+	hit.shape = Shape.CAPSULE
 	hit.origin = from
 	hit.toward = to
 	hit.radius = maxf(beam_radius, 0.01)
@@ -69,6 +161,7 @@ static func impact(at: Vector3, impact_radius: float,
 		damage: float) -> DamageHit:
 	var hit := DamageHit.new()
 	hit.kind = Kind.IMPACT
+	hit.shape = Shape.CAPSULE
 	hit.origin = at
 	hit.toward = at
 	hit.radius = maxf(impact_radius, 0.01)
@@ -81,6 +174,7 @@ static func area(at: Vector3, area_radius: float, damage: float,
 		edge_falloff := 1.0) -> DamageHit:
 	var hit := DamageHit.new()
 	hit.kind = Kind.AREA
+	hit.shape = Shape.CAPSULE
 	hit.origin = at
 	hit.toward = at
 	hit.radius = maxf(area_radius, 0.01)
@@ -89,22 +183,183 @@ static func area(at: Vector3, area_radius: float, damage: float,
 	return hit
 
 
+## A flat-ended volume running from [param from] to [param to].
+static func cylinder(from: Vector3, to: Vector3, cylinder_radius: float,
+		damage: float, edge_falloff := 0.0) -> DamageHit:
+	var hit := DamageHit.new()
+	hit.kind = Kind.AREA
+	hit.shape = Shape.CYLINDER
+	hit.origin = from
+	hit.toward = to
+	hit.radius = maxf(cylinder_radius, 0.01)
+	hit.amount = damage
+	hit.falloff = clampf(edge_falloff, 0.0, 1.0)
+	return hit
+
+
+func set_source(source: Node, peer := -1) -> DamageHit:
+	if source == null:
+		return self
+	var world := game_world_of(source)
+	if world != null:
+		source_path = world.get_path_to(source)
+	if peer >= 0:
+		source_peer = peer
+	elif source.has_method(&"combat_peer_id"):
+		source_peer = int(source.call(&"combat_peer_id"))
+	return self
+
+
+func with_status(id: StringName, duration: float) -> DamageHit:
+	status = id
+	status_duration = maxf(duration, 0.0)
+	return self
+
+
 ## Middle of the volume, which is what a field measures its tiles against.
-## Offers a hit to every damageable field in the scene and returns how much of
-## it was absorbed.
+## Offers a hit to every in-world flora field and, on the host, every eligible
+## combatant. Returns how much was absorbed.
 ##
 ## [param anywhere] is any node already in the tree; only its tree is used. The
-## group is the whole of the addressing here — an ability never holds a path to
-## a flora field, and a field that is added or removed mid-session is picked up
-## or dropped without anything being told.
+## Groups are the addressing; filtering by the containing GameWorld prevents
+## sibling ENet test worlds from hearing each other's events.
 static func apply_to_world(anywhere: Node, hit: DamageHit) -> float:
+	if hit == null:
+		return 0.0
+	var absorbed := apply_to_fields(anywhere, hit) if hit.affects_flora else 0.0
+	# Flora is deterministic and therefore applied by every peer. Actors are
+	# canonical only on the host.
+	if not hit.affects_combatants:
+		return absorbed
+	return absorbed + apply_to_combatants(anywhere, hit)
+
+
+## The flora half on its own.
+##
+## Split out because what a blast does to a jungle and what it does to the people
+## standing in it are not always the same size. Flattening scales with the ground
+## it covers — every plant inside is tested, charred or broken, and each break is
+## its own effect — so a wide push that also uprooted everything it pushed was a
+## quarter of a second in one frame.
+static func apply_to_fields(anywhere: Node, hit: DamageHit) -> float:
 	if anywhere == null or hit == null or not anywhere.is_inside_tree():
+		return 0.0
+	if game_world_of(anywhere) == null:
 		return 0.0
 	var absorbed := 0.0
 	for field in anywhere.get_tree().get_nodes_in_group(FIELD_GROUP):
-		if field.has_method(&"apply_damage"):
+		if field is Node and in_same_world(anywhere, field) \
+				and field.has_method(&"apply_damage"):
 			absorbed += float(field.call(&"apply_damage", hit))
 	return absorbed
+
+
+## The actor half on its own. Host authority, as every hit on a body is.
+static func apply_to_combatants(anywhere: Node, hit: DamageHit) -> float:
+	if anywhere == null or hit == null or not anywhere.is_inside_tree():
+		return 0.0
+	if game_world_of(anywhere) == null or not _is_host(anywhere):
+		return 0.0
+	var absorbed := 0.0
+	var source := hit.source_node(anywhere)
+	for combatant_variant: Variant in anywhere.get_tree().get_nodes_in_group(
+			COMBATANT_GROUP):
+		var combatant := combatant_variant as Node
+		if combatant == null or not in_same_world(anywhere, combatant) \
+				or combatant == source or not hit.affects_combatant(combatant):
+			continue
+		# Resolve radial falloff against the target's body bounds before handing
+		# over the immutable event. Flora already calls damage_at per instance;
+		# combatants need the same dissipating-area contract.
+		var delivered := hit if hit.falloff <= 0.0 \
+			else hit.resolved_for(combatant)
+		var result: Variant = combatant.call(&"apply_damage", delivered)
+		var dealt := float(result) if result is float or result is int else 0.0
+		absorbed += maxf(dealt, 0.0)
+		if dealt > 0.0 and source != null \
+				and source.has_method(&"combat_damage_dealt"):
+			source.call(&"combat_damage_dealt", combatant, dealt, delivered)
+	return absorbed
+
+
+static func game_world_of(node: Node) -> GameWorld:
+	var walk := node
+	while walk != null:
+		if walk is GameWorld:
+			return walk as GameWorld
+		walk = walk.get_parent()
+	return null
+
+
+static func in_same_world(a: Node, b: Node) -> bool:
+	var a_world := game_world_of(a)
+	return a_world != null and a_world == game_world_of(b)
+
+
+static func _is_host(anywhere: Node) -> bool:
+	return not anywhere.multiplayer.has_multiplayer_peer() \
+		or anywhere.multiplayer.is_server()
+
+
+## What to call whoever authored this hit, for a death notice or a kill feed.
+## Empty when the attacker cannot be named — a fall, a hazard, or a source that
+## has already left the tree — which reads better as "You died" than as a guess.
+func attacker_name(anywhere: Node) -> String:
+	var source := source_node(anywhere)
+	if source != null and source.has_method(&"combat_display_name"):
+		var named := String(source.call(&"combat_display_name"))
+		if not named.is_empty():
+			return named
+	if source_peer > 0:
+		return String(NetworkManager.get_player_metadata(source_peer).get(
+			"name", "Player"))
+	return ""
+
+
+## Human-readable attack carried by this hit, or empty for a generic strike.
+func ability_display_name() -> String:
+	return String(ABILITY_DISPLAY_NAMES.get(ability_id, ""))
+
+
+func source_node(anywhere: Node) -> Node:
+	var world := game_world_of(anywhere)
+	if world == null or source_path.is_empty() or source_path.is_absolute():
+		return null
+	for index in source_path.get_name_count():
+		if source_path.get_name(index) == &"..":
+			return null
+	return world.get_node_or_null(source_path)
+
+
+func affects_combatant(combatant: Node) -> bool:
+	if combatant == null or not combatant.has_method(&"apply_damage") \
+			or not combatant.has_method(&"combat_faction"):
+		return false
+	var target_faction := int(combatant.call(&"combat_faction"))
+	match faction:
+		Faction.PLAYER:
+			if target_faction != Faction.ENEMY:
+				return false
+		Faction.ENEMY:
+			if target_faction != Faction.PLAYER:
+				return false
+	if target_peer > 0:
+		if not combatant.has_method(&"combat_peer_id") \
+				or int(combatant.call(&"combat_peer_id")) != target_peer:
+			return false
+	var point := Vector3.ZERO
+	if combatant.has_method(&"combat_position"):
+		point = combatant.call(&"combat_position") as Vector3
+	elif combatant is Node3D:
+		point = (combatant as Node3D).global_position
+	else:
+		return false
+	if not point.is_finite():
+		return false
+	var bounds := 0.0
+	if combatant.has_method(&"combat_radius"):
+		bounds = maxf(float(combatant.call(&"combat_radius")), 0.0)
+	return reaches(point, bounds)
 
 
 func centre() -> Vector3:
@@ -123,7 +378,10 @@ func distance_to(point: Vector3) -> float:
 	var length_squared := along.length_squared()
 	if length_squared < 0.000001:
 		return point.distance_to(origin)
-	var share := clampf((point - origin).dot(along) / length_squared, 0.0, 1.0)
+	var raw_share := (point - origin).dot(along) / length_squared
+	if shape == Shape.CYLINDER and (raw_share < 0.0 or raw_share > 1.0):
+		return INF
+	var share := clampf(raw_share, 0.0, 1.0)
 	return point.distance_to(origin + along * share)
 
 
@@ -142,11 +400,116 @@ func damage_at(point: Vector3) -> float:
 	return amount * share_at(point)
 
 
+## A per-combatant copy whose amount includes radial falloff at the nearest
+## point on the target's spherical combat bounds. The authored hit remains
+## untouched and can still be offered to every other target and flora field.
+func resolved_for(combatant: Node) -> DamageHit:
+	var delivered := _copy()
+	var point := _combatant_position(combatant)
+	if not point.is_finite():
+		delivered.amount = 0.0
+		return delivered
+	var bounds := _combatant_radius(combatant)
+	var away := 0.0
+	if shape == Shape.CYLINDER:
+		if _cylinder_solid_distance(point) > bounds:
+			delivered.amount = 0.0
+			return delivered
+		away = maxf(_radial_axis_distance(point) - bounds, 0.0)
+	else:
+		away = maxf(distance_to(point) - bounds, 0.0)
+	delivered.amount = amount * _share_for_distance(away)
+	return delivered
+
+
 ## Whether a sphere of [param bounds] around [param at] can touch this volume at
 ## all. Deliberately generous: it is the cheap test that lets a field skip a
 ## tile without decoding a single instance transform.
 func reaches(at: Vector3, bounds: float) -> bool:
+	if shape == Shape.CYLINDER:
+		return _cylinder_solid_distance(at) <= maxf(bounds, 0.0)
 	return distance_to(at) <= radius + maxf(bounds, 0.0)
+
+
+func _radial_axis_distance(point: Vector3) -> float:
+	var along := toward - origin
+	var length_squared := along.length_squared()
+	if length_squared < 0.000001:
+		return point.distance_to(origin)
+	var share := (point - origin).dot(along) / length_squared
+	return point.distance_to(origin + along * share)
+
+
+## Shortest distance from a point to the solid finite cylinder. This keeps
+## spherical combat bounds generous at a flat cap without turning the authored
+## cylinder into a capsule around its corners.
+func _cylinder_solid_distance(point: Vector3) -> float:
+	var along := toward - origin
+	var length := along.length()
+	if length < 0.000001:
+		return maxf(point.distance_to(origin) - radius, 0.0)
+	var axis := along / length
+	var relative := point - origin
+	var axial := relative.dot(axis)
+	var radial := (relative - axis * axial).length()
+	var axial_gap := maxf(maxf(-axial, axial - length), 0.0)
+	var radial_gap := maxf(radial - radius, 0.0)
+	return Vector2(axial_gap, radial_gap).length()
+
+
+func _share_for_distance(away: float) -> float:
+	if not is_finite(away) or away >= radius:
+		return 0.0
+	if falloff <= 0.0:
+		return 1.0
+	return lerpf(1.0, 1.0 - falloff, away / radius)
+
+
+func _combatant_position(combatant: Node) -> Vector3:
+	if combatant == null:
+		return Vector3(INF, INF, INF)
+	if combatant.has_method(&"combat_position"):
+		var value: Variant = combatant.call(&"combat_position")
+		if value is Vector3:
+			return value
+	if combatant is Node3D:
+		return (combatant as Node3D).global_position
+	return Vector3(INF, INF, INF)
+
+
+func _combatant_radius(combatant: Node) -> float:
+	if combatant != null and combatant.has_method(&"combat_radius"):
+		return maxf(float(combatant.call(&"combat_radius")), 0.0)
+	return 0.0
+
+
+func _copy() -> DamageHit:
+	var copy := DamageHit.new()
+	copy.amount = amount
+	copy.origin = origin
+	copy.toward = toward
+	copy.radius = radius
+	copy.kind = kind
+	copy.shape = shape
+	copy.falloff = falloff
+	copy.min_plant_height = min_plant_height
+	copy.max_plant_height = max_plant_height
+	copy.affects_flora = affects_flora
+	copy.affects_combatants = affects_combatants
+	copy.plant_break_effects = plant_break_effects
+	copy.source_peer = source_peer
+	copy.ability_id = ability_id
+	copy.source_path = source_path
+	copy.target_peer = target_peer
+	copy.faction = faction
+	copy.reaction = reaction
+	copy.world_impulse = world_impulse
+	copy.status = status
+	copy.status_duration = status_duration
+	copy.parryable = parryable
+	copy.reflection = reflection
+	copy.sequence = sequence
+	return copy
 
 
 ## The wire form. Effect volumes replicate rather than per-instance damage, so
@@ -158,20 +521,95 @@ func to_wire() -> Dictionary:
 		"toward": toward,
 		"radius": radius,
 		"kind": int(kind),
+		"shape": int(shape),
 		"falloff": falloff,
+		"min_plant_height": min_plant_height,
+		"max_plant_height": max_plant_height,
+		"affects_flora": affects_flora,
+		"affects_combatants": affects_combatants,
+		"plant_break_effects": plant_break_effects,
 		"source_peer": source_peer,
 		"ability_id": ability_id,
+		"source_path": String(source_path),
+		"target_peer": target_peer,
+		"faction": int(faction),
+		"reaction": int(reaction),
+		"world_impulse": world_impulse,
+		"status": String(status),
+		"status_duration": status_duration,
+		"parryable": parryable,
+		"reflection": reflection,
+		"sequence": sequence,
 	}
 
 
 static func from_wire(wire: Dictionary) -> DamageHit:
 	var hit := DamageHit.new()
-	hit.amount = float(wire.get("amount", 0.0))
-	hit.origin = wire.get("origin", Vector3.ZERO)
-	hit.toward = wire.get("toward", hit.origin)
-	hit.radius = maxf(float(wire.get("radius", 1.0)), 0.01)
-	hit.kind = int(wire.get("kind", Kind.IMPACT)) as Kind
-	hit.falloff = clampf(float(wire.get("falloff", 0.0)), 0.0, 1.0)
-	hit.source_peer = int(wire.get("source_peer", 0))
+	var amount_value := float(wire.get("amount", 0.0))
+	hit.amount = maxf(amount_value, 0.0) if is_finite(amount_value) else 0.0
+	hit.origin = _finite_vector(wire.get("origin", Vector3.ZERO))
+	hit.toward = _finite_vector(wire.get("toward", hit.origin), hit.origin)
+	var radius_value := float(wire.get("radius", 1.0))
+	hit.radius = maxf(radius_value, 0.01) if is_finite(radius_value) else 1.0
+	hit.kind = clampi(int(wire.get("kind", Kind.IMPACT)), 0, Kind.size() - 1) \
+		as Kind
+	hit.shape = clampi(int(wire.get("shape", Shape.CAPSULE)), 0,
+		Shape.size() - 1) as Shape
+	var falloff_value := float(wire.get("falloff", 0.0))
+	hit.falloff = clampf(falloff_value, 0.0, 1.0) \
+		if is_finite(falloff_value) else 0.0
+	var shortest_value := float(wire.get("min_plant_height", 0.0))
+	hit.min_plant_height = maxf(shortest_value, 0.0) \
+		if is_finite(shortest_value) else 0.0
+	var tallest_value := float(wire.get("max_plant_height", 0.0))
+	hit.max_plant_height = maxf(tallest_value, 0.0) \
+		if is_finite(tallest_value) else 0.0
+	hit.affects_flora = bool(wire.get("affects_flora", true))
+	hit.affects_combatants = bool(wire.get("affects_combatants", true))
+	hit.plant_break_effects = bool(wire.get("plant_break_effects", true))
+	hit.source_peer = maxi(int(wire.get("source_peer", 0)), 0)
 	hit.ability_id = String(wire.get("ability_id", ""))
+	hit.source_path = NodePath(String(wire.get("source_path", "")))
+	hit.target_peer = maxi(int(wire.get("target_peer", 0)), 0)
+	hit.faction = clampi(int(wire.get("faction", Faction.NEUTRAL)), 0,
+		Faction.size() - 1) as Faction
+	hit.reaction = clampi(int(wire.get("reaction", Reaction.NONE)), 0,
+		Reaction.size() - 1) as Reaction
+	hit.world_impulse = _finite_vector(wire.get("world_impulse", Vector3.ZERO))
+	hit.status = StringName(String(wire.get("status", "")))
+	var duration_value := float(wire.get("status_duration", 0.0))
+	hit.status_duration = clampf(
+		duration_value, 0.0, CombatStatuses.MAX_DURATION) \
+		if is_finite(duration_value) else 0.0
+	hit.parryable = bool(wire.get("parryable", false))
+	var reflection_value := float(wire.get("reflection", 0.0))
+	hit.reflection = maxf(reflection_value, 0.0) \
+		if is_finite(reflection_value) else 0.0
+	hit.sequence = maxi(int(wire.get("sequence", 0)), 0)
 	return hit
+
+
+## Removes every enemy-authored consequence from a client hero packet.
+static func sanitize_player_packet(wire: Dictionary, sender: int,
+		source: Node) -> DamageHit:
+	var hit := from_wire(wire)
+	hit.source_peer = maxi(sender, 0)
+	hit.faction = Faction.PLAYER
+	hit.target_peer = 0
+	hit.reaction = Reaction.NONE
+	hit.world_impulse = Vector3.ZERO
+	hit.status = &""
+	hit.status_duration = 0.0
+	hit.parryable = false
+	hit.reflection = 0.0
+	hit.amount = clampf(hit.amount, 0.0, 100000.0)
+	hit.source_path = NodePath()
+	hit.set_source(source, sender)
+	return hit
+
+
+static func _finite_vector(value: Variant,
+		fallback := Vector3.ZERO) -> Vector3:
+	if value is Vector3 and (value as Vector3).is_finite():
+		return value as Vector3
+	return fallback

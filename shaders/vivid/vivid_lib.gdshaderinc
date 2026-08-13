@@ -37,6 +37,19 @@ global uniform float region_warp;
 // Chroma of the wheel: 0 leaves the world its own colour, 1 is full spectrum.
 global uniform float region_chroma;
 
+// Master switch on the chromatic air below, 0..1. Zero is the flat blue
+// atmosphere this planet shipped with; one hands the sky and the limb over to
+// the wavelength model in `vivid_air_scatter`.
+//
+// A global rather than a uniform on each material because the sky and the
+// atmosphere shell draw two halves of one sight and cross-fade into each other
+// at a fixed altitude: the two disagreeing about how coloured the air is would
+// show as a band of sky changing hue at 2400 m. Written by GameSettingsManager
+// when the player changes the setting, and by nothing else — this is not a
+// per-frame value, and writing globals every frame costs the sky's radiance
+// cubemap.
+global uniform float air_chroma;
+
 // The polar cap. `frost_axis` is north in world space; the two cosines are the
 // cap's outer and inner edges, written by Planet out of PlanetShape so the CPU
 // and the GPU cannot disagree about where the arctic starts. Do not set these by
@@ -83,6 +96,22 @@ global uniform vec3 murk_color;
 global uniform float murk_visibility;
 global uniform vec3 murk_channels;
 global uniform float murk_daylight;
+
+
+// Camera-following Layer Weight/Color Ramp equivalent shared by characters,
+// flora and fauna. A high threshold confines the emission to the silhouette,
+// while the small smooth band keeps that outline stable as geometry moves.
+float vivid_camera_rim(
+		vec3 world_normal,
+		vec3 view_direction,
+		float dark_edge,
+		float light_edge
+	) {
+	float facing = 1.0 - clamp(dot(
+		normalize(world_normal), normalize(view_direction)), 0.0, 1.0);
+	return smoothstep(
+		dark_edge, max(light_edge, dark_edge + 0.001), facing);
+}
 
 
 // --- Hashes and noise -------------------------------------------------------
@@ -361,6 +390,164 @@ vec3 vivid_region_light(vec3 unit) {
 // Takes a unit radial, as vivid_region does — pass it vivid_up(position).
 float vivid_frost(vec3 unit) {
 	return smoothstep(frost_edge, frost_full, dot(unit, normalize(frost_axis)));
+}
+
+
+// --- Air --------------------------------------------------------------------
+//
+// The colour of the atmosphere, as one function shared by the sky seen from
+// inside it and the shell seen from outside it. Both were flat blue with a warm
+// halo painted around the sun; this is where the blue and the warmth stop being
+// two authored colours and start being the same calculation seen from two
+// places.
+//
+// It is not a scattering integral and does not march anything. A raymarched sky
+// wants two nested loops per pixel, and this sky is also the scene's ambient
+// light source — it is rendered again into a radiance cubemap — so the loop
+// would be paid for twice. What is kept from the physics is the part the eye
+// actually reads: that scattering is far stronger at the blue end, and that the
+// sunlight doing the scattering has already crossed the air itself and lost its
+// own blue on the way in. Those two facts alone produce a blue zenith, a pale
+// horizon, a red sun at dusk and a warm band around the terminator, out of
+// arithmetic rather than out of a palette.
+
+// Relative Rayleigh strength per channel, normalised so blue is one.
+//
+// Scattering goes as the inverse fourth power of wavelength, so over the
+// 680/550/440 nm the three channels stand for, red scatters about a fifth as
+// much as blue. That single ratio is the whole reason the sky is blue and the
+// low sun is red, and it is why these numbers are not a colour to be tuned:
+// they are the exponent, evaluated.
+const vec3 VIVID_RAYLEIGH = vec3(0.19, 0.43, 1.0);
+// Aerosol haze, which is nearly wavelength-blind and faintly warm. This is the
+// dust and water in the air rather than the air, and it is what makes the band
+// along a horizon pale instead of deep blue.
+const vec3 VIVID_MIE = vec3(1.0, 0.94, 0.86);
+// How much air the sunlight is charged for on its own way in, in vertical
+// atmospheres. Sets how early in the evening the light starts to warm: lower
+// keeps the sun white until it is nearly down, higher gives a long orange
+// afternoon.
+const float VIVID_AIR_DEPTH = 0.62;
+// How far the planet's own colour wheel is allowed into its air, as a share of
+// `region_chroma`. Deliberately small. The wheel is what makes one part of this
+// planet green and another violet, and the air over each takes a suggestion of
+// it — but air whose hue is mostly its region has stopped reading as air.
+const float VIVID_AIR_REGION = 0.4;
+// How far the local region is allowed to steer the low sun itself. Stronger
+// than the tint in the surrounding air: the glow occupies only a few degrees
+// and needs to remain visibly different as the player crosses a region, while
+// the whole sky would look painted if it carried this much.
+const float VIVID_SUNSET_REGION = 0.55;
+
+// How many vertical atmospheres a ray leaving at cosine [param mu] from the
+// local up has to cross.
+//
+// The real airmass runs to about 38 at the horizon and is a Chapman function;
+// this is the standard cheap reciprocal, and the constant in the denominator is
+// what keeps a horizontal ray finite. It tops out near seven, which is well
+// short of the truth and deliberately so: the honest figure extinguishes a
+// horizontal view to black long before the sun has set, because a real horizon
+// is not being looked at through a uniform slab.
+float vivid_air_mass(float mu) {
+	return 1.0 / (max(mu, 0.0) + 0.15);
+}
+
+// Sunlight left after entering through the air above [param up].
+//
+// Kept apart from `vivid_air_scatter` because the direct sun glow needs the
+// same answer. Two different transmittance calculations would give a red halo
+// around a still-white disc, which reads as two unrelated effects laid over
+// each other instead of one sunset.
+vec3 vivid_air_sunlight(vec3 up, vec3 to_sun, float density) {
+	return exp(-VIVID_RAYLEIGH * (vivid_air_mass(dot(up, to_sun))
+		* density * VIVID_AIR_DEPTH));
+}
+
+// Colour of the sun and its direct glow at this part of the planet.
+//
+// [param base] is the authored daytime sun. High in the sky it is returned
+// exactly. Within roughly twenty degrees of the horizon, the light that
+// survives the long path through the air becomes the base sunset colour and
+// the local region wheel steers it toward a different alien sunset. Peak
+// brightness is preserved so changing region changes hue, not exposure.
+//
+// [param amount] is the atmospheric-scattering blend. Zero restores the old
+// fixed sun colour along with the rest of that setting.
+vec3 vivid_sunset_light(vec3 base, vec3 up, vec3 to_sun,
+		float region_hue, float density, float amount) {
+	float elevation = dot(up, to_sun);
+	float near_horizon = 1.0 - smoothstep(0.035, 0.34, abs(elevation));
+	float blend = clamp(near_horizon * amount, 0.0, 1.0);
+	if (blend <= 0.0) {
+		return base;
+	}
+
+	vec3 transmitted = vivid_air_sunlight(up, to_sun, density);
+	transmitted /= max(max(transmitted.r, transmitted.g), transmitted.b);
+	vec3 local = mix(transmitted, vivid_spectrum(region_hue),
+		region_chroma * VIVID_SUNSET_REGION);
+	// Retain the authored sun's slight warmth even in strongly coloured
+	// regions, then restore its peak so a blue sunset is not darker merely
+	// because blue contributes less luminance than green.
+	local *= base;
+	float base_peak = max(max(base.r, base.g), base.b);
+	local *= base_peak / max(max(max(local.r, local.g), local.b), 0.0001);
+	return mix(base, local, blend);
+}
+
+// The colour a view through the air comes back as, over whatever colour it had
+// already been given.
+//
+// [param base] is the flat sky or shell colour, and its brightness is kept: the
+// vertical gradient, the night fade and the altitude cross-fade have all already
+// been decided by the caller and must survive, so only hue is taken over here.
+// That is the same trick the region tint uses a few lines further up in the sky
+// shader, and for the same reason — multiplying an authored blue by a hue can
+// only take channels away, so a warm sky arrived at that way comes out as a
+// darker blue instead.
+//
+// [param direction] is the way the ray travels, [param up] is the local
+// vertical, [param to_sun] points at the sun, and [param region_hue] is the
+// planet's own hue coordinate here. [param density] thins the air with
+// altitude: one at sea level, near zero in space.
+vec3 vivid_air_scatter(vec3 base, vec3 direction, vec3 up, vec3 to_sun,
+		float region_hue, float density, float amount) {
+	if (amount <= 0.0) {
+		return base;
+	}
+	float view_mass = vivid_air_mass(dot(direction, up)) * density;
+	// What is left of the sunlight where this air is standing, after its own
+	// trip in. At noon the sun is overhead and this is near white; at dusk it
+	// has crossed seven atmospheres, the blue is gone out of it, and every
+	// scattering term below is therefore lit by orange light. Nothing else in
+	// here knows what time of day it is.
+	vec3 sunlight = vivid_air_sunlight(up, to_sun, density);
+	float cosine = dot(direction, to_sun);
+	// Rayleigh scattering is symmetric front to back — this is the real phase
+	// function, which is cheap enough to use as written.
+	vec3 rayleigh = VIVID_RAYLEIGH * (0.75 * (1.0 + cosine * cosine));
+	// Haze throws light forward, which is what makes the air around a low sun
+	// glow rather than the sun simply being a disc in blue sky.
+	vec3 mie = VIVID_MIE * (pow(max(cosine, 0.0), 8.0) * 0.7 + 0.06);
+	// The longer the view, the more of it is haze rather than clear air. A ray
+	// straight up is nearly all Rayleigh and reads blue; one along the horizon
+	// or across the limb has kilometres of dust in it and goes pale.
+	vec3 air = mix(rayleigh, mie, clamp(view_mass * 0.16, 0.0, 0.85)) * sunlight;
+	air *= mix(vec3(1.0), vivid_spectrum(region_hue),
+		region_chroma * VIVID_AIR_REGION);
+
+	vec3 luma_weights = vec3(0.2126, 0.7152, 0.0722);
+	vec3 chromatic = air * (dot(base, luma_weights)
+		/ max(dot(air, luma_weights), 0.0001));
+	// The one term allowed to add rather than tint. Everything above is a
+	// re-colouring of light the caller had already decided the brightness of,
+	// and a sunset is not only a redder sky — it is a brighter one in the few
+	// degrees around the sun. Kept tight and modest: the mobile colour buffer
+	// tops out near 2.0 and the glow threshold is under 1.0, so a wide term
+	// here would bloom the whole horizon into fog.
+	chromatic += VIVID_MIE * sunlight * (pow(max(cosine, 0.0), 22.0)
+		* clamp(view_mass * 0.12, 0.0, 0.5));
+	return mix(base, chromatic, amount);
 }
 
 

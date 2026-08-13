@@ -95,6 +95,35 @@ uniform float pattern_near = 5000.0;
 uniform float pattern_far = 12000.0;
 group_uniforms;
 
+group_uniforms Night_Ground_Glow;
+// A low, terrain-level luminance. Three colours are blended in broad world-space
+// fields, and NightGroundGlow replaces this palette each planetary day.
+uniform vec3 night_ground_glow_color_a : source_color = vec3(0.12, 0.78, 0.36);
+uniform vec3 night_ground_glow_color_b : source_color = vec3(0.18, 0.56, 1.0);
+uniform vec3 night_ground_glow_color_c : source_color = vec3(0.78, 0.24, 1.0);
+uniform float night_ground_glow_energy : hint_range(0.0, 1.0) = 0.16;
+// One noise cell is about 260 m at this scale. Domain warping joins neighbouring
+// cells into larger lobes, so these read as regions of land rather than spots.
+uniform float night_ground_glow_scale : hint_range(0.0005, 0.02) = 0.0038;
+uniform float night_ground_glow_threshold : hint_range(0.0, 1.0) = 0.53;
+// A broad threshold band is the soft shoreline of each patch. It is intentionally
+// much wider than an anti-aliasing fringe: the glow fades over metres of terrain.
+uniform float night_ground_glow_softness : hint_range(0.01, 0.35) = 0.16;
+// The field orbits through noise space instead of translating in one direction.
+// That makes lobes stretch, split and rejoin like a lava lamp rather than making
+// the planet look as though a texture is sliding over it.
+uniform float night_ground_glow_speed : hint_range(0.0, 0.1) = 0.018;
+uniform float night_ground_glow_flow : hint_range(0.0, 2.0) = 1.15;
+uniform float night_ground_glow_palette_shift = 0.0;
+// Published by NightGroundGlow so the shader field and its pooled real lights
+// sample the same instant and both stop when single-player simulation pauses.
+uniform float night_ground_glow_time = 0.0;
+// The broad field survives ordinary flight, then leaves before its lobes become
+// sub-pixel marks from orbit.
+uniform float night_ground_glow_near = 3500.0;
+uniform float night_ground_glow_far = 11000.0;
+group_uniforms;
+
 group_uniforms Ground_Texture;
 // Four ground materials — grass, sand, stone, ice — as two texture arrays, in
 // the layer order `build_ground_textures.py` stacks them in. The constants below
@@ -691,6 +720,80 @@ vec3 vivid_pattern_colour(vec3 base, float wheel, float amount) {
 	float base_value = max(max(base.r, base.g), base.b);
 	colour *= base_value / max(max(max(colour.r, colour.g), colour.b), 0.001);
 	return mix(base, colour, amount);
+}
+
+
+vec3 vivid_night_ground_palette(float selector) {
+	float band = fract(selector) * 3.0;
+	float blend = smoothstep(0.08, 0.92, fract(band));
+	if (band < 1.0) {
+		return mix(night_ground_glow_color_a, night_ground_glow_color_b, blend);
+	}
+	if (band < 2.0) {
+		return mix(night_ground_glow_color_b, night_ground_glow_color_c, blend);
+	}
+	return mix(night_ground_glow_color_c, night_ground_glow_color_a, blend);
+}
+
+
+// Large, living patches of faint land emission. Three-dimensional world-space
+// noise keeps this continuous over every terrain chunk, cube face and pole.
+vec3 vivid_night_ground_glow(
+		vec3 world_position, vec3 up, float away, float land) {
+	if (night_ground_glow_energy <= 0.0 || land <= 0.0) {
+		return vec3(0.0);
+	}
+	float night = 1.0 - smoothstep(-0.16, 0.12,
+		dot(up, normalize(-sun_direction)));
+	float range_fade = 1.0 - smoothstep(
+		night_ground_glow_near,
+		max(night_ground_glow_far, night_ground_glow_near + 1.0),
+		away);
+	if (night <= 0.0 || range_fade <= 0.0) {
+		return vec3(0.0);
+	}
+
+	vec3 point = vivid_pattern_frame(world_position - planet_center)
+		* night_ground_glow_scale;
+	float phase = night_ground_glow_time * night_ground_glow_speed;
+	// Closed, differently paced orbits make the warp change shape instead of
+	// dragging one rigid texture in a single direction across the ground.
+	vec3 drift_a = vec3(
+		sin(phase * 0.73),
+		cos(phase * 0.61),
+		sin(phase * 0.47 + 1.7)) * 0.78;
+	vec3 drift_b = vec3(
+		cos(phase * 0.53 + 2.4),
+		sin(phase * 0.67 + 0.8),
+		cos(phase * 0.41)) * 0.72;
+	float warp_a = vivid_noise3(point * 0.48 + drift_a + vec3(11.3, 29.1, 5.7));
+	float warp_b = vivid_noise3(
+		point.zxy * 0.43 + drift_b + vec3(37.2, 3.9, 17.6));
+	vec3 warp = vec3(
+		warp_a - 0.5,
+		warp_b - 0.5,
+		warp_a - warp_b) * night_ground_glow_flow;
+
+	float body = vivid_noise3(point + warp + drift_a * 0.24);
+	float companion = vivid_noise3(
+		point.yzx * 0.64 - warp.zxy * 0.38 - drift_b * 0.21
+			+ vec3(23.4, 7.1, 41.8));
+	float field = mix(body, companion, 0.28);
+	float softness = max(night_ground_glow_softness, 0.001);
+	float patch = smoothstep(
+		night_ground_glow_threshold - softness,
+		night_ground_glow_threshold + softness,
+		field);
+
+	// The warp is already a broad field, so it can choose colours without adding
+	// another eight hash reads to every terrain pixel. Its palette shift changes
+	// each night, reassigning even recurring lobes instead of merely recolouring
+	// the whole planet as one flat wash.
+	float colour_field = fract(
+		warp_a * 0.58 + warp_b * 0.42 + night_ground_glow_palette_shift);
+	vec3 colour = vivid_night_ground_palette(colour_field);
+	return colour * night_ground_glow_energy * patch
+		* night * night * range_fade * land;
 }
 
 
@@ -1379,6 +1482,8 @@ void fragment() {
 		+ murk_color * murk * mix(0.06, 1.0, noon) * column
 		+ caustic_light
 		+ volcanic_light
+		+ vivid_night_ground_glow(
+			position, up, range, 1.0 - water) * (1.0 - murk_dim)
 		+ vivid_flora_glow(up, CAMERA_POSITION_WORLD, dry)
 		+ vivid_global_flora_glow(up, CAMERA_POSITION_WORLD, water);
 }
