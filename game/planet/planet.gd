@@ -623,7 +623,10 @@ func finest_spacing() -> float:
 ## tick.
 func add_scar(scar: TerrainScars.Scar) -> TerrainScars.Scar:
 	shape.scars.add(scar)
-	mark_region_stale(scar.direction, scar.radius, scar.depth)
+	# The widest the rim reaches rather than the nominal radius: a warped crater
+	# bulges past its own circle, and rebuilding only the circle would leave the
+	# bulges cut out of stale chunks that still hold the old ground.
+	mark_region_stale(scar.direction, scar.outer, scar.depth)
 	_mark_ground(scar)
 	return scar
 
@@ -639,7 +642,7 @@ func _mark_ground(scar: TerrainScars.Scar) -> void:
 	if scorches == null or scar.char <= 0.0:
 		return
 	var at := global_transform * shape.surface_point(scar.direction)
-	scorches.scorch(at, up_at(at), scar.radius,
+	scorches.scorch(at, up_at(at), scar.outer,
 		clampf(scar.char, 0.0, 1.0), true)
 
 

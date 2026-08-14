@@ -22,6 +22,11 @@ const PICKUP_MAX_DISTANCE := 3.2
 ## damage itself, because this is a correction and not the mechanism: the peers
 ## have already worked it out for themselves.
 const FLORA_CONFIRM_INTERVAL := 0.4
+## How far from the ship the host will still honour a RELEASE SETTLERS press.
+## Generous next to the 2.4 m interaction ray, because the ship is 26 m tall and
+## the panel stays open while the player moves, but still a check that they are
+## at it rather than across the planet from it.
+const SETTLER_RELEASE_MAX_DISTANCE := 40.0
 const RESPAWN_CLEARANCE := 0.35
 ## Outside the ship's roughly twelve-metre footprint, but still visibly at it.
 const RESPAWN_SPACING := 14.0
@@ -40,6 +45,8 @@ var _spawned_players: Dictionary = {}
 var _pickups: Dictionary = {}
 var _pickup_nodes: Dictionary = {}
 var _next_pickup_id := 1
+var _ability_constructs: Dictionary = {}
+var _next_ability_construct_id := 1
 var _locally_paused := false
 var _simulation_frozen := false
 var _time_scale_before_pause := 1.0
@@ -101,6 +108,7 @@ func _exit_tree() -> void:
 		NetworkManager.session_started.disconnect(_begin_session)
 	_pickups.clear()
 	_pickup_nodes.clear()
+	_ability_constructs.clear()
 	_respawn_sequence.clear()
 	_sandbox_spawn_slots.clear()
 
@@ -111,6 +119,116 @@ func local_player() -> OnlinePlayer:
 
 func planet() -> Planet:
 	return get_node_or_null("Planet") as Planet
+
+
+## Stable ids are allocated only by the host and then carried by the caster's
+## approved spawn event to every peer.
+func allocate_ability_construct_id() -> int:
+	if multiplayer.has_multiplayer_peer() and not multiplayer.is_server():
+		return 0
+	var next_id := _next_ability_construct_id
+	_next_ability_construct_id += 1
+	return next_id
+
+
+func spawn_ability_barrier_local(construct_id: int, owner_peer: int,
+		at: Transform3D, size: Vector3, duration: float,
+		fade_duration: float, tint: Color,
+		initial_alpha := 0.52) -> AbilityBarrier:
+	if construct_id <= 0:
+		return null
+	var existing := _ability_constructs.get(construct_id) as AbilityBarrier
+	if is_instance_valid(existing):
+		return existing
+	var barrier := AbilityBarrier.create(
+		self, construct_id, owner_peer, at, size,
+		duration, fade_duration, tint, initial_alpha)
+	if barrier == null:
+		return null
+	_ability_constructs[construct_id] = barrier
+	barrier.expired.connect(_on_ability_construct_expired)
+	barrier.tree_exited.connect(func() -> void:
+		if _ability_constructs.get(construct_id) == barrier:
+			_ability_constructs.erase(construct_id)
+	)
+	return barrier
+
+
+func _on_ability_construct_expired(construct_id: int) -> void:
+	if multiplayer.has_multiplayer_peer():
+		if multiplayer.is_server():
+			_apply_ability_construct_despawn.rpc(construct_id)
+		return
+	_apply_ability_construct_despawn(construct_id)
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_ability_construct_despawn(construct_id: int) -> void:
+	if construct_id <= 0:
+		return
+	var barrier := _ability_constructs.get(construct_id) as AbilityBarrier
+	_ability_constructs.erase(construct_id)
+	if is_instance_valid(barrier):
+		barrier.queue_free()
+
+
+func ability_construct_snapshot() -> Array:
+	var snapshot: Array = []
+	for id_variant: Variant in _ability_constructs:
+		var construct_id := int(id_variant)
+		var barrier := _ability_constructs.get(construct_id) as AbilityBarrier
+		if not is_instance_valid(barrier) or barrier.remaining() <= 0.0:
+			continue
+		snapshot.append({
+			"construct_id": construct_id,
+			"owner_peer": barrier.owner_peer,
+			"transform": barrier.global_transform,
+			"size": barrier.size(),
+			"remaining": barrier.remaining(),
+			"fade_duration": barrier.fade_duration(),
+			"tint": barrier.tint(),
+			"alpha": barrier.current_alpha(),
+		})
+	return snapshot
+
+
+func apply_ability_construct_snapshot(snapshot: Array) -> void:
+	for entry_variant: Variant in snapshot:
+		if not entry_variant is Dictionary:
+			continue
+		var entry := entry_variant as Dictionary
+		spawn_ability_barrier_local(
+			int(entry.get("construct_id", 0)),
+			int(entry.get("owner_peer", 0)),
+			entry.get("transform", Transform3D.IDENTITY),
+			entry.get("size", Vector3(8.0, 4.0, 0.35)),
+			float(entry.get("remaining", 0.0)),
+			float(entry.get("fade_duration", 0.0)),
+			entry.get("tint", Color(0.27, 0.69, 1.0)),
+			float(entry.get("alpha", 0.52)))
+
+
+## Which sites have been settled, for a peer that joined after somebody pressed
+## the button. Only the founding facts travel: the ground a colony was measured
+## against is the same height field on every peer, so the grid, the claim and the
+## wall are rebuilt locally rather than sent.
+func colony_snapshot() -> Array:
+	var colonies := meep_colonies()
+	return colonies.snapshot() if colonies != null else []
+
+
+func apply_colony_snapshot(snapshot: Array) -> void:
+	var colonies := meep_colonies()
+	if colonies != null:
+		colonies.apply_snapshot(snapshot)
+
+
+func active_ability_wall_count() -> int:
+	var count := 0
+	for barrier_variant: Variant in _ability_constructs.values():
+		if is_instance_valid(barrier_variant):
+			count += 1
+	return count
 
 
 ## Asks for a mark to be cut into the ground.
@@ -171,10 +289,11 @@ func apply_scar_snapshot(wire: Array) -> void:
 	# a joining peer has every chunk to build anyway.
 	for entry in wire:
 		if entry is Dictionary:
+			# Read back off a scar rather than out of the wire, so the widest
+			# reach of a warped rim is the thing invalidated here too.
+			var scar := TerrainScars.Scar.from_wire(entry)
 			world_planet.mark_region_stale(
-				(entry.get("direction", Vector3.UP) as Vector3).normalized(),
-				float(entry.get("radius", 1.0)),
-				float(entry.get("depth", 0.0)))
+				scar.direction, scar.outer, scar.depth)
 
 
 ## What every flora field has lost so far, keyed by the field's path under this
@@ -454,6 +573,67 @@ func leave_session() -> void:
 	NetworkManager.leave_game()
 	if NetworkManager.menu_scene_path.is_empty():
 		queue_free()
+
+
+func meep_colonies() -> MeepColonies:
+	return get_node_or_null("Planet/MeepColonies") as MeepColonies
+
+
+## What [CityMenu] reads while it is open, for the colony a given ship controls.
+## Empty rather than null for a site that has not been settled, so the panel has
+## rows to draw before there is anything in them.
+func colony_report(site: StringName) -> Dictionary:
+	var colonies := meep_colonies()
+	return colonies.report(site) if colonies != null else {}
+
+
+## RELEASE SETTLERS. Same shape as [method request_pickup]: a client sends the
+## claim and nothing else, the host derives who asked from the RPC sender, and a
+## local call is accepted only for the caller's own body so this cannot be used
+## to spend another player's ship.
+func request_release_settlers(peer_id: int, site: StringName) -> void:
+	var local_id := multiplayer.get_unique_id()
+	if peer_id != local_id:
+		return
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if not is_instance_valid(player):
+		return
+	if _is_host_authority():
+		_server_release_settlers(local_id, site)
+		return
+	_request_release_settlers_from_client.rpc_id(1, site)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_release_settlers_from_client(site: StringName) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
+		return
+	_server_release_settlers(sender, site)
+
+
+## The host's answer, and the only place a colony is founded. Checked against the
+## ship's own position rather than trusting that the client's interaction ray hit
+## something: the panel can be left open and walked away from.
+func _server_release_settlers(peer_id: int, site: StringName) -> void:
+	if not _is_host_authority():
+		return
+	var colonies := meep_colonies()
+	if colonies == null:
+		return
+	var ship := colonies.ship(site)
+	if ship == null:
+		return
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if not is_instance_valid(player) or player.is_dead():
+		return
+	if player.global_position.distance_to(ship.global_position) \
+			> SETTLER_RELEASE_MAX_DISTANCE:
+		return
+	colonies.release_settlers(site)
 
 
 ## Public red-menu entry point. A client sends only the source claim; the server
@@ -845,7 +1025,8 @@ func _request_world_state() -> void:
 	_receive_world_state.rpc_id(
 		sender, snapshots, celestial_cycle.phase(), pickup_snapshots(),
 		scar_snapshot(), flora_snapshot(), bigfoot_snapshot(),
-		celestial_cycle.day_index())
+		celestial_cycle.day_index(), ability_construct_snapshot(),
+		colony_snapshot())
 
 
 @rpc("authority", "reliable")
@@ -856,7 +1037,9 @@ func _receive_world_state(
 		scar_state: Array = [],
 		flora_state: Dictionary = {},
 		boss_state: Dictionary = {},
-		day_number := 0
+		day_number := 0,
+		ability_construct_state: Array = [],
+		colony_state: Array = []
 	) -> void:
 	if float(day_phase) >= 0.0:
 		celestial_cycle.set_phase(float(day_phase))
@@ -864,6 +1047,8 @@ func _receive_world_state(
 	apply_scar_snapshot(scar_state)
 	apply_flora_snapshot(flora_state)
 	apply_bigfoot_snapshot(boss_state)
+	apply_ability_construct_snapshot(ability_construct_state)
+	apply_colony_snapshot(colony_state)
 	for snapshot_variant in snapshots:
 		if not snapshot_variant is Dictionary:
 			continue

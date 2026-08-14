@@ -26,6 +26,14 @@ extends Landmark
 const MODEL: PackedScene = preload("res://assets/runtime/environment/colony_ship.glb")
 const SURFACE: ShaderMaterial = preload("res://game/props/colony_ship.tres")
 
+## Which colony this ship is the control point for.
+##
+## A name rather than the ship's direction, because it is the key the world files
+## the settlement under and a quantised float is a poor key. A second lander
+## dropped elsewhere on the planet gets its own name here and its own colony
+## without anything else changing.
+@export var colony_site: StringName = &"landing"
+
 
 func _ready() -> void:
 	# Landmark's own ready joins the group and stands the anchor up. The model
@@ -48,3 +56,20 @@ func _raise() -> void:
 		# which is also the only thing that says where its legs meet the ground.
 		mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(model, false, Node.INTERNAL_MODE_BACK)
+
+
+## What the prompt plate offers while the ship is under the crosshair. Half of the
+## interaction contract [method OnlinePlayer._interact_target] looks for; the ray
+## lands on the hull's own collider and walks up to this node to find it.
+func interact_prompt() -> String:
+	return "Open City Control"
+
+
+## Routed through the player rather than opened here, for the same reason the Tab
+## menu is: the panel lives on that player's HUD, and only the peer who pressed
+## the key should see it. A [ColonyShip] is one node shared by everyone in the
+## session.
+func interact(player: OnlinePlayer) -> void:
+	if player == null:
+		return
+	player.open_city_menu(colony_site)

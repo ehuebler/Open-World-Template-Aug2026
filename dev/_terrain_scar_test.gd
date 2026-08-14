@@ -43,6 +43,8 @@ func _ready() -> void:
 	_check_registry()
 	_check_profiles()
 	_check_wire()
+	_check_warped_rim()
+	_check_authored_ability_scars()
 
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	NetworkManager.is_single_player = true
@@ -175,13 +177,111 @@ func _check_wire() -> void:
 	scar.profile = TerrainScars.Profile.CONE
 	scar.char = 0.75
 	scar.tint = Color(0.1, 0.09, 0.08)
+	scar.warp = 0.3
+	scar.seed = 2.75
 	var back := TerrainScars.Scar.from_wire(scar.to_wire())
 	_expect(back.direction.is_equal_approx(scar.direction)
 		and is_equal_approx(back.radius, scar.radius)
 		and is_equal_approx(back.depth, scar.depth)
 		and back.profile == scar.profile
-		and is_equal_approx(back.char, scar.char),
+		and is_equal_approx(back.char, scar.char)
+		and is_equal_approx(back.warp, scar.warp)
+		and is_equal_approx(back.seed, scar.seed),
 		"a scar survives the round trip to the wire")
+
+
+## A blast big enough to throw the ground about does not leave a round hole. What
+## has to hold is that the rim wanders, that it wanders the same way for everybody
+## who received it, and that it still stops somewhere the registry knows about.
+func _check_warped_rim() -> void:
+	var scars := TerrainScars.new()
+	scars.planet_radius = 8000.0
+	var here := Vector3(0.41, 0.82, -0.4).normalized()
+	var scar := TerrainScars.Scar.new()
+	scar.direction = here
+	scar.radius = 60.0
+	scar.depth = 18.0
+	scar.warp = 0.3
+	scar.seed = 1.9
+	scars.add(scar)
+
+	_expect(is_equal_approx(scars.depth_at(here), scar.depth),
+		"a warped crater is still at full depth in its middle")
+
+	# On the nominal rim a round hole cuts nothing anywhere. This one has to be
+	# inside the ground on some bearings and outside it on others.
+	var inside := 0
+	var outside := 0
+	var deepest_beyond := 0.0
+	for step in 32:
+		var turn := TAU * float(step) / 32.0
+		var on_rim := _bearing_from(scar, turn, scar.radius, scars.planet_radius)
+		if scars.depth_at(on_rim) > 0.0:
+			inside += 1
+		else:
+			outside += 1
+		deepest_beyond = maxf(deepest_beyond, scars.depth_at(
+			_bearing_from(scar, turn, scar.outer + 1.0, scars.planet_radius)))
+	_expect(inside > 4 and outside > 4,
+		"its rim crosses its own circle rather than tracing it (%d in, %d out)"
+			% [inside, outside])
+	_expect(is_zero_approx(deepest_beyond),
+		"and stops inside the reach the registry filed it under")
+
+	# The same scar over the wire has to be the same hole, or the crater a client
+	# walks into is not the one the host dug.
+	var copy := TerrainScars.new()
+	copy.planet_radius = scars.planet_radius
+	copy.add(TerrainScars.Scar.from_wire(scar.to_wire()))
+	var agreed := true
+	for step in 32:
+		var turn := TAU * float(step) / 32.0
+		var at := _bearing_from(scar, turn, scar.radius * 0.9, scars.planet_radius)
+		agreed = agreed and is_equal_approx(scars.depth_at(at), copy.depth_at(at))
+	_expect(agreed, "and is the same hole on the peer that received it")
+
+	var round_scar := TerrainScars.Scar.new()
+	round_scar.direction = here
+	round_scar.radius = 60.0
+	round_scar.depth = 18.0
+	var plain := TerrainScars.new()
+	plain.planet_radius = scars.planet_radius
+	plain.add(round_scar)
+	_expect(is_equal_approx(round_scar.outer, round_scar.radius),
+		"a mark authored without warp is left exactly round")
+
+
+func _check_authored_ability_scars() -> void:
+	var scars := TerrainScars.new()
+	scars.planet_radius = 8000.0
+	var direction := Vector3(0.22, 0.91, -0.35).normalized()
+	for profile: Dictionary in [
+		{"id": "nuke", "radius": 72.0, "depth": 20.0, "warp": 0.3},
+		{"id": "nausicaa", "radius": 2.0, "depth": 0.55, "warp": 0.0},
+	]:
+		var definition := ItemDB.ability_definition(String(profile["id"]))
+		var scar := TerrainScars.Scar.new()
+		scar.direction = direction
+		scar.radius = float(definition.stats.get("crater_radius", 0.0))
+		scar.depth = float(definition.stats.get("crater_depth", 0.0))
+		scar.warp = float(definition.stats.get("crater_warp", 0.0))
+		scar.profile = TerrainScars.Profile.BOWL
+		scars.clear()
+		scars.add(scar)
+		_expect(is_equal_approx(scar.radius, float(profile["radius"]))
+			and is_equal_approx(scar.warp, float(profile["warp"]))
+			and is_equal_approx(scars.depth_at(direction), float(profile["depth"])),
+			"%s authors its impact indent in the terrain registry" % (
+				definition.title))
+
+
+## A direction this many metres from a scar's middle on this bearing, measured in
+## the scar's own frame so a test can aim at the part of the rim it means.
+func _bearing_from(scar: TerrainScars.Scar, turn: float, away: float,
+		planet_radius: float) -> Vector3:
+	var step := away / maxf(planet_radius, 1.0)
+	return (scar.direction
+		+ (scar.east * cos(turn) + scar.north * sin(turn)) * step).normalized()
 
 
 ## The claim that matters: a crater cut into the live planet moves the height

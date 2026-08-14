@@ -224,6 +224,29 @@ func _price_scar_lookup() -> void:
 		print("ability_perf: %3d scars  overlaps %.2f us  depth_at %.3f us"
 			% [count, overlap_us, depth_us])
 	scars.clear()
+
+	# A warped rim buys its shape with an arctangent and three sines per scar per
+	# vertex, on the hottest path in the game. Priced against the round mark it
+	# replaces, over a nuke crater wide enough to cover a good many chunks, so a
+	# change that makes the lobes expensive shows up here rather than as a stutter
+	# the first time somebody detonates one.
+	for warp: float in [0.0, 0.3]:
+		var scar := TerrainScars.Scar.new()
+		scar.direction = here
+		scar.radius = 72.0
+		scar.depth = 20.0
+		scar.warp = warp
+		scars.clear()
+		scars.add(scar)
+		var inside := _nearby(here, 1.0)
+		var began := Time.get_ticks_usec()
+		for _pass in 20000:
+			scars.depth_at(inside, 1.5)
+		print("ability_perf: a 72 m crater warped %.1f  depth_at %.3f us"
+			% [warp, float(Time.get_ticks_usec() - began) / 20000.0])
+		print("ability_perf:        filed under %d cells, reaching %.0f m"
+			% [scar.cells.size(), scar.outer])
+	scars.clear()
 	print("ability_perf: (registry had %d scars before this)" % was)
 
 

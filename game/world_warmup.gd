@@ -106,6 +106,21 @@ func _collect(world: Node) -> Array[Dictionary]:
 				_offer(draws, seen, plant.distant_mesh(), plant.far_material(),
 					null)
 			continue
+		var fauna := node as FaunaSpawner
+		if fauna != null:
+			# Creatures are invisible to a walk of the tree for the same reason
+			# stands are: none exist until the streamer places one, and the first
+			# one placed is the one that would otherwise stall the frame.
+			for entry in fauna.species:
+				var creature := entry as FaunaSpecies
+				if creature == null or not creature.enabled \
+						or species_seen.has(creature.get_instance_id()):
+					continue
+				species_seen[creature.get_instance_id()] = true
+				creature.prepare()
+				_offer(draws, seen, creature.template_mesh(),
+					creature.template_material(), null)
+			continue
 		var batch := node as MultiMeshInstance3D
 		if batch != null and batch.multimesh != null:
 			# Rebuilt at one instance rather than borrowed: a reef swarm's own

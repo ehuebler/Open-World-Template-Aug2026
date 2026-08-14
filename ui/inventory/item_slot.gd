@@ -45,6 +45,10 @@ var placeholder := ""
 var badge := ""
 ## Marks the weapon bar's current slot, which is drawn heavier and in accent ink.
 var selected := false
+## HUD ability slots refill from bottom to top while cooling down. One is ready;
+## zero is the instant the cooldown begins. Inventory tiles never set this.
+var cooldown_fill := 1.0
+var cooldown_active := false
 ## Gameplay hotbar only: square black tile, red rim, and a black-on-accent key
 ## badge. Inventory and editor tiles keep their existing tactile presentation.
 var hud_style := false:
@@ -75,6 +79,15 @@ func set_edge(edge: float) -> void:
 func bind(to_container: ItemContainer, at_index: int) -> void:
 	container = to_container
 	index = at_index
+	queue_redraw()
+
+
+func set_cooldown(fill: float, active: bool) -> void:
+	fill = clampf(fill, 0.0, 1.0)
+	if cooldown_active == active and is_equal_approx(cooldown_fill, fill):
+		return
+	cooldown_fill = fill
+	cooldown_active = active
 	queue_redraw()
 
 
@@ -176,10 +189,18 @@ func _drag_preview() -> Control:
 
 func _draw() -> void:
 	var rect := Rect2(Vector2.ZERO, size)
+	var id := item_id()
 	var corner := 0.0 if hud_style else CORNER
 	if _outline.is_empty():
 		_outline = _rounded(rect.grow(-1.0), corner)
 	draw_colored_polygon(_outline, _fill_color())
+	if hud_style and cooldown_active and not id.is_empty():
+		var fill_height := (size.y - 2.0) * cooldown_fill
+		if fill_height > 0.0:
+			draw_rect(Rect2(
+				Vector2(1.0, size.y - 1.0 - fill_height),
+				Vector2(size.x - 2.0, fill_height)
+			), Color(ItemDB.tint(id), 0.22))
 	# A tile is a well cut into the pane, so its rim has to read against the pane
 	# rather than against the tile.
 	var ink: Color = (
@@ -199,20 +220,73 @@ func _draw() -> void:
 			1.6,
 			true
 		)
-	_draw_badge()
 
-	var id := item_id()
 	if id.is_empty():
 		_draw_placeholder()
+		_draw_badge()
 		return
 	var icon := ItemIcons.cached(id)
 	var inner := rect.grow(-ICON_INSET)
 	if icon != null:
-		draw_texture_rect(icon, inner, false)
+		_draw_icon(icon, inner, id)
 	else:
 		# Until the icon has been rendered, the item still reads as something
 		# rather than as an empty slot.
-		draw_rect(inner.grow(-4.0), ItemDB.tint(id))
+		_draw_fallback(inner.grow(-4.0), id)
+	_draw_badge()
+
+
+func _draw_icon(icon: Texture2D, inner: Rect2, id: String) -> void:
+	if not hud_style or not cooldown_active:
+		draw_texture_rect(icon, inner, false)
+		return
+	# Keep the whole symbol barely visible as context, then reveal its full
+	# colour from the bottom up along with the box behind it.
+	draw_texture_rect(icon, inner, false, Color(0.26, 0.26, 0.26, 0.72))
+	var fill := clampf(cooldown_fill, 0.0, 1.0)
+	var texture_size := icon.get_size()
+	if fill > 0.0 and texture_size.x > 0.0 and texture_size.y > 0.0:
+		var reveal_height := inner.size.y * fill
+		var destination := Rect2(
+			Vector2(inner.position.x, inner.end.y - reveal_height),
+			Vector2(inner.size.x, reveal_height)
+		)
+		var source := Rect2(
+			Vector2(0.0, texture_size.y * (1.0 - fill)),
+			Vector2(texture_size.x, texture_size.y * fill)
+		)
+		draw_texture_rect_region(
+			icon, destination, source, Color.WHITE, false, true)
+	_draw_cooldown_edge(inner, id, fill)
+
+
+func _draw_fallback(inner: Rect2, id: String) -> void:
+	var tint := ItemDB.tint(id)
+	if not hud_style or not cooldown_active:
+		draw_rect(inner, tint)
+		return
+	draw_rect(inner, Color(tint.darkened(0.7), 0.72))
+	var fill := clampf(cooldown_fill, 0.0, 1.0)
+	var reveal_height := inner.size.y * fill
+	if reveal_height > 0.0:
+		draw_rect(Rect2(
+			Vector2(inner.position.x, inner.end.y - reveal_height),
+			Vector2(inner.size.x, reveal_height)
+		), tint)
+	_draw_cooldown_edge(inner, id, fill)
+
+
+func _draw_cooldown_edge(inner: Rect2, id: String, fill: float) -> void:
+	if fill <= 0.01 or fill >= 0.99:
+		return
+	var y := inner.end.y - inner.size.y * fill
+	draw_line(
+		Vector2(inner.position.x, y),
+		Vector2(inner.end.x, y),
+		Color(ItemDB.tint(id).lightened(0.28), 0.92),
+		1.8,
+		true
+	)
 
 
 func _fill_color() -> Color:

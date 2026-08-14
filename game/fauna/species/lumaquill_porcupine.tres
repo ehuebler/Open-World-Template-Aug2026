@@ -1,0 +1,91 @@
+[gd_resource type="Resource" script_class="FaunaSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/fauna/fauna_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://assets/runtime/fauna/models/lumaquill_porcupine.glb" id="2_model"]
+[ext_resource type="ShaderMaterial" path="res://game/fauna/materials/lumaquill_porcupine.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://assets/runtime/biomes/paint/lumaquill_porcupine_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+species_id = "lumaquill_porcupine"
+display_name = "Lumaquill Porcupine"
+enabled = true
+disposition = 1
+move_set = 7
+locomotion = 0
+attack_style = 1
+paint_style = "Broad turquoise flank bands, magenta quill chevrons, large yellow eyespots, and mip-safe cyan/magenta night marks"
+height = 0.72
+height_variation = 0.1
+variant_tint_a = Color(0.84, 1.0, 1.0, 1.0)
+variant_tint_b = Color(1.0, 0.76, 0.94, 1.0)
+saturation = 1.38
+brightness = 1.1
+biome_tint_strength = 0.13
+night_emission_color = Color(0.15, 0.94, 1.0, 1.0)
+night_emission_energy = 2.15
+night_emission_albedo = 0.62
+night_pulse_amount = 0.16
+night_pulse_speed = 0.34
+local_light_color = Color(0.12, 0.82, 1.0, 1.0)
+local_light_energy = 1.45
+local_light_range = 7.5
+local_light_height_share = 0.58
+collision_radius_share = 0.42
+collision_height_share = 0.78
+combat_radius_share = 0.47
+ground_layer = 1
+minimum_ground_claim = 0.05
+above_water = 4.0
+below = 380.0
+minimum_arid = 0.0
+maximum_arid = 0.78
+minimum_frost = 0.0
+maximum_frost = 0.82
+max_slope = 27.0
+steady_over = 1.6
+steady_within = 0.82
+global_population = true
+cell_size = 82.0
+spawn_chance = 0.22
+pack_min = 2
+pack_max = 4
+pack_radius = 5.5
+maximum_instances = 10
+spawn_within = 210.0
+despawn_beyond = 278.0
+random_seed = 20268131
+colony_count = 4
+colony_near = 30.0
+colony_far = 62.0
+health = 62.0
+health_per_metre = 12.0
+toughness = 0
+respawn_delay = 16.0
+walk_speed = 1.65
+run_speed = 4.7
+move_acceleration = 18.0
+turn_speed = 8.0
+wander_radius = 17.0
+wander_pause = 2.5
+notice_range = 12.0
+flee_range = 7.5
+physics_within = 45.0
+quadruped_gait = true
+leg_mask_color = Color(0.09, 0.14, 0.23, 1.0)
+leg_mask_tolerance = 0.16
+gait_stride_share = 0.88
+gait_swing_share = 0.14
+gait_lift_share = 0.06
+gait_leg_top_share = 0.43
+body_rock_degrees = 7.5
+body_bob_share = 0.032
+attack_damage = 9.0
+attack_range = 0.08
+attack_radius = 0.52
+attack_windup = 0.0
+attack_cooldown = 0.85
+attack_knockback = 4.0

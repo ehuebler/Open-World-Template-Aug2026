@@ -15,12 +15,6 @@ extends Ability
 ## it checks the punch is allowed, hands the body the numbers out of the
 ## catalogue, and charges the cooldown when the punch is over.
 
-func _configure() -> void:
-	# Not from a swim and not from a crash. Everything else is fair: standing,
-	# walking, running, crouched, sliding, hovering and flying flat out.
-	allowed_stances = [OnlinePlayer.Stance.STAND, OnlinePlayer.Stance.CROUCH,
-		OnlinePlayer.Stance.SLIDE, OnlinePlayer.Stance.FLY]
-
 
 func _press() -> bool:
 	return player.begin_meteor_punch(stats)

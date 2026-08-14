@@ -58,9 +58,121 @@ func _ready() -> void:
 		and _world.celestial_cycle.phase() < 0.01,
 		"gameplay resets the home-screen sunset to full daylight")
 	_player.display_name = "Menu Harness"
+	await _check_ability_test_site()
+	await _check_grapple_at_test_site()
 
 	await _run()
 	await _finish()
+
+
+func _check_ability_test_site() -> void:
+	# Long enough that an unguarded CharacterBody would fall far through terrain
+	# that has not streamed near any player yet.
+	await _wait_frames(90)
+	var ship := _world.get_node_or_null("Planet/ColonyShip") as ColonyShip
+	var site := _world.get_node_or_null(
+		"Planet/AbilityTestingSite") as Landmark
+	var dummies: Array[TrainingDummy] = []
+	if site != null:
+		for child: Node in site.get_children():
+			if child is TrainingDummy:
+				dummies.append(child as TrainingDummy)
+	var span := ship.global_position.distance_to(site.global_position) \
+		if ship != null and site != null else 0.0
+	_expect(ship != null and site != null
+		and span >= 185.0 and span <= 215.0,
+		"the marked Ability Test Site is about 200 m from the colony ship")
+	_expect(site != null and site.waypoint
+		and site.show_beyond <= 12.0 and site.hide_beyond >= 1000.0
+		and site.get_node_or_null("Beacon") != null,
+		"the testing site has both a HUD waypoint and a visible beacon")
+	var placed := dummies.size() == 3
+	for dummy in dummies:
+		placed = placed and dummy.global_position.distance_to(
+			site.global_position) <= 8.0 \
+			and dummy.is_in_group(DamageHit.COMBATANT_GROUP)
+	_expect(placed,
+		"three respawning combat dummies stand together on the testing pad")
+	var flowers := _world.get_node_or_null(
+		"Planet/LandingFlowers") as GroundCover
+	var grass := _world.get_node_or_null("Planet/GlobalGrass") as GroundCover
+	var trees := _world.get_node_or_null(
+		"Planet/LandingFlowerTrees") as FlowerTreeField
+	var site_direction := site.direction.normalized() if site != null \
+		else Vector3.ZERO
+	var vegetation_clear := flowers != null and grass != null and trees != null \
+		and site_direction in flowers._keep_outs \
+		and site_direction in grass._keep_outs
+	if trees != null:
+		for stood in trees._trees:
+			var tree_direction := (
+				trees.transform * stood.origin).normalized()
+			vegetation_clear = vegetation_clear \
+				and tree_direction.angle_to(site_direction) * trees._radius \
+					>= trees.keep_back
+	_expect(vegetation_clear,
+		"the practice pad clears flowers, grass, and giant trees")
+
+
+func _check_grapple_at_test_site() -> void:
+	var planet := _world.get_node_or_null("Planet") as Planet
+	var site := _world.get_node_or_null(
+		"Planet/AbilityTestingSite") as AbilityTestSite
+	var dummy := _world.get_node_or_null(
+		"Planet/AbilityTestingSite/TrainingDummy") as TrainingDummy
+	if not _expect(planet != null and site != null and dummy != null,
+			"the Grapple check finds the marked site's centre dummy"):
+		return
+	var restore_transform := _player.global_transform
+	var restore_pitch := _player._pitch
+	var near := dummy.global_position - site.global_basis.z * 2.0
+	var direction := planet.to_local(near).normalized()
+	var up := (planet.global_basis * direction).normalized()
+	var at := planet.to_global(
+		planet.shape.surface_point(direction, planet.finest_spacing())
+			+ direction * 0.3)
+	var toward := dummy.combat_position() - at
+	var flat := toward - up * toward.dot(up)
+	_player._apply_stance(OnlinePlayer.Stance.STAND)
+	_player.global_transform = Transform3D(
+		Basis.looking_at(flat.normalized(), up), at)
+	_player.velocity = Vector3.ZERO
+	_player._pitch = asin(clampf(
+		(dummy.combat_position() - _player.camera.global_position)
+			.normalized().dot(up), -1.0, 1.0))
+	_player.head.rotation.x = _player._pitch
+	_player.reset_network_state(_player.global_transform)
+	_player.reset_physics_interpolation()
+	_player.abilities.set_item(0, "grapple")
+	await _wait_frames(12)
+
+	var origin := _player.global_position
+	var launch_up := up
+	var dispatched := _player.activate_ability(0)
+	# This is the ordinary click that used to cancel a client before approval.
+	_player.release_ability(0)
+	var started := _player.grapple_active_or_pending()
+	var highest := 0.0
+	var completed := false
+	for _frame in 360:
+		await get_tree().physics_frame
+		highest = maxf(highest,
+			(_player.global_position - origin).dot(launch_up))
+		if started and not _player.grapple_active_or_pending():
+			completed = true
+			break
+	_expect(dispatched and started and completed and highest >= 18.0
+		and dummy.can_be_grappled(),
+		"Grapple quick-click carries the site dummy 20 m and completes its slam")
+	await _wait_frames(60)
+	_player._apply_stance(OnlinePlayer.Stance.STAND)
+	_player.global_transform = restore_transform
+	_player.velocity = Vector3.ZERO
+	_player._pitch = restore_pitch
+	_player.head.rotation.x = restore_pitch
+	_player.reset_network_state(restore_transform)
+	_player.reset_physics_interpolation()
+	await _wait_frames(4)
 
 
 func _run() -> void:
@@ -542,8 +654,20 @@ func _check_items_and_abilities(menu: GameMenu) -> void:
 			and empty_body.text.contains("RMB"),
 			"Abilities presents the polished empty-library state")
 	else:
-		_expect(_owned_slots(page).size() == ItemDB.ability_ids().size(),
-			"empty assignments still present the known ability library")
+		var expected := PackedStringArray([
+			"laser_eyes", "meteor_punch", "starfire", "grapple",
+			"nuke", "lasso", "wall", "nausicaa",
+		])
+		var all_icons := true
+		for id: String in expected:
+			all_icons = all_icons and ItemDB.ability_icon(id) != null
+		_expect(ItemDB.ability_ids() == expected
+			and _owned_slots(page).size() == expected.size()
+			and all_icons,
+			"Abilities presents all eight generated definitions with menu icons")
+		_expect("\n".join(ItemDB.stat_lines("wall")).contains(
+			"Wall Width\t8 m"),
+			"new authored stats use their catalogue labels and units")
 
 
 func _check_data_settings_and_admin(menu: GameMenu) -> void:

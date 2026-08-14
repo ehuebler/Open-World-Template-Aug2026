@@ -2649,9 +2649,24 @@ func _volcano_checks() -> void:
 	var island_direction: Vector3 = volcano.call(
 		"_direction_at", Vector2(shape.volcano_radius * 0.82, 0.0))
 	var island_height := shape.elevation(island_direction, 0.0)
+	var steepest_climb := 0.0
+	var steepest_at := 0.0
+	var climb_inner := shape.volcano_crater_radius * 0.62
+	var climb_outer := shape.volcano_crater_radius * 1.03
+	for sample in 129:
+		var distance := lerpf(climb_inner, climb_outer, float(sample) / 128.0)
+		var offset := Vector2(cos(quiet_angle), sin(quiet_angle)) * distance
+		var direction: Vector3 = volcano.call("_direction_at", offset)
+		var normal := shape.normal_at(direction, _planet.finest_spacing())
+		var slope := rad_to_deg(normal.angle_to(direction))
+		if slope > steepest_climb:
+			steepest_climb = slope
+			steepest_at = distance
 	print("player_test: volcano terrain centre=%.1f rim=%.1f island=%.1f "
 		% [centre_height, rim_height, island_height]
 		+ "weight=%.3f" % float(parts.get("volcano", -1.0)))
+	print("player_test: volcano climb steepest=%.1f deg at %.0f m, walk limit=%.1f deg"
+		% [steepest_climb, steepest_at, rad_to_deg(_player.floor_max_angle)])
 	if centre_height < shape.volcano_crater_lava_height - 20.0 \
 			or centre_height >= shape.volcano_crater_lava_height:
 		push_error("player_test: volcano crater floor does not sit below its lava")
@@ -2661,6 +2676,9 @@ func _volcano_checks() -> void:
 		push_error("player_test: volcano island did not replace south-pole sea")
 	if float(parts.get("volcano", -1.0)) < 0.99:
 		push_error("player_test: native height field did not identify the volcano")
+	if steepest_climb > rad_to_deg(_player.floor_max_angle) + 0.25:
+		push_error("player_test: caldera wall is too steep to run up (%.1f > %.1f deg)"
+			% [steepest_climb, rad_to_deg(_player.floor_max_angle)])
 
 	var liquid_meshes := 0
 	var pool_meshes := {}
@@ -5854,7 +5872,9 @@ func _crash_policy_checks() -> void:
 	var up := _player._up()
 	var across := _player.global_basis.x.normalized()
 	var wall := -across
-	var steep := (up * 0.6 - across * 0.8).normalized()
+	var steep_face := 0.23
+	var steep := (up * steep_face
+		- across * sqrt(1.0 - steep_face * steep_face)).normalized()
 	var cases := [
 		["flight into flat ground", up, -up * 40.0, true, true],
 		["flight into a wall", wall, across * 40.0, true, true],
@@ -6051,8 +6071,8 @@ func _wall_ahead(metres: float) -> StaticBody3D:
 
 
 ## An obstacle just steeper than the controller accepts as floor. Its near-face
-## normal is 0.6 of the way up, below `FLOOR_FACE`'s 0.7 line: too steep to walk,
-## but nowhere near the almost vertical face the old run-break threshold needed.
+## normal is 0.23 of the way up, below `FLOOR_FACE`'s 0.259 line: too steep to
+## walk, but still short of the run-break threshold.
 func _slope_ahead(metres: float) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	var shape := CollisionShape3D.new()
@@ -6061,7 +6081,7 @@ func _slope_ahead(metres: float) -> StaticBody3D:
 	shape.shape = box
 	body.add_child(shape)
 	get_tree().current_scene.add_child(body)
-	var basis := _player.global_basis.rotated(_player.global_basis.x, -asin(0.6))
+	var basis := _player.global_basis.rotated(_player.global_basis.x, -asin(0.23))
 	body.global_transform = Transform3D(basis,
 		_player.global_position - _player.global_basis.z * metres
 			+ _player.global_basis.y * 1.5)

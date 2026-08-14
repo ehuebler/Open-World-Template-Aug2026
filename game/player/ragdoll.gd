@@ -193,6 +193,13 @@ const SPIN := 3.0
 ## limb that moves oddly for a frame instead of a body that leaves the planet.
 ## Both are far above anything a falling body reaches: a crash slides at 11 m/s
 ## and gathers about 17 more over the second and a half it is down.
+##
+## A speed the body was *handed* is the exception, and [method go_limp] raises the
+## linear ceiling to it: a blast that launches its victim at seventy metres a
+## second is an authored motion and not a solver accident, and clamping it here
+## leaves the collider and the camera climbing while the body they belong to
+## crawls up behind them. See [member _ceiling] for how the allowance is given
+## back.
 const MAX_SPEED := 32.0
 const MAX_SPIN := 14.0
 
@@ -270,6 +277,11 @@ var _pull := Vector3.ZERO
 ## guard stands down.
 var _floor_center := Vector3.ZERO
 var _floor_radius := -1.0
+## The linear ceiling in force this tick, at or above [constant MAX_SPEED]. A
+## launch raises it and it is walked back down at the rate gravity is taking the
+## launch away, so the allowance lasts exactly as long as the speed it was granted
+## for and the backstop is whole again by the time the body is merely falling.
+var _ceiling := MAX_SPEED
 
 
 func _ready() -> void:
@@ -336,6 +348,7 @@ func go_limp(carried: Vector3, pull: Vector3) -> void:
 		return
 	_pull = pull
 	_live = _every()
+	_ceiling = maxf(MAX_SPEED, carried.length())
 	active = true
 	influence = 1.0
 	physical_bones_start_simulation()
@@ -375,6 +388,7 @@ func take_hit(at: Vector3, impulse: Vector3, pull: Vector3) -> bool:
 		return false
 	_pull = pull
 	_live = _downstream(struck)
+	_ceiling = MAX_SPEED
 	var names: Array[StringName] = []
 	for index in _live:
 		names.append(_names[index])
@@ -426,6 +440,7 @@ func _release() -> void:
 	active = false
 	influence = 1.0
 	_knock_left = 0.0
+	_ceiling = MAX_SPEED
 	_live = PackedInt32Array()
 	for pair in _excused:
 		_bones[pair.x].remove_collision_exception_with(_bones[pair.y])
@@ -515,6 +530,20 @@ func centre() -> Vector3:
 	return _middle()
 
 
+## How fast the body as a whole is travelling while it is limp, averaged over the
+## simulated bones the same way [method centre] averages their positions. The
+## caller needs this because the collider it is carrying has no business climbing
+## faster than the body it is meant to be following; see
+## [method OnlinePlayer._crash_move].
+func drift() -> Vector3:
+	if _live.is_empty():
+		return Vector3.ZERO
+	var sum := Vector3.ZERO
+	for index in _live:
+		sum += _bones[index].linear_velocity
+	return sum / float(_live.size())
+
+
 ## Where the body is, as the average of its bones. Good enough for a tumble axis
 ## and cheaper than a mass-weighted centre nobody would be able to tell apart.
 func _middle() -> Vector3:
@@ -525,14 +554,17 @@ func _middle() -> Vector3:
 
 
 func _physics_process(delta: float) -> void:
+	# Gravity is the only thing that took speed off the launch this tick, so it is
+	# the rate the allowance above MAX_SPEED is handed back at.
+	_ceiling = move_toward(_ceiling, MAX_SPEED, _pull.length() * delta)
 	for index in _live:
 		var bone := _bones[index]
 		bone.apply_central_impulse(_pull * (bone.mass * delta))
 		if _floor_radius > 0.0:
 			_keep_above_ground(bone, _girth[index], delta)
 		# Last, so it catches the ground guard as well as the solver.
-		if bone.linear_velocity.length_squared() > MAX_SPEED * MAX_SPEED:
-			bone.linear_velocity = bone.linear_velocity.limit_length(MAX_SPEED)
+		if bone.linear_velocity.length_squared() > _ceiling * _ceiling:
+			bone.linear_velocity = bone.linear_velocity.limit_length(_ceiling)
 		if bone.angular_velocity.length_squared() > MAX_SPIN * MAX_SPIN:
 			bone.angular_velocity = bone.angular_velocity.limit_length(MAX_SPIN)
 	_hold_joints(delta)
@@ -575,7 +607,16 @@ func _keep_above_ground(bone: PhysicalBone3D, girth: float, delta: float) -> voi
 		# itself. What it had along the surface is untouched, so a body still
 		# travelling slides and rolls rather than stopping dead where it landed.
 		carried -= out * (into * (1.0 + GROUND_BOUNCE))
-	bone.linear_velocity = carried + out * minf(under / delta, ESCAPE_SPEED)
+	# Brought *up to* the escape speed rather than given it on top of whatever it
+	# already had. Added blindly it is free upward speed for every bone the
+	# surface reads as grazed, which on a body that has just been launched off the
+	# ground is most of them — the whole ragdoll then outclimbs the capsule that
+	# was handed the same launch, and the character ends up above its own camera.
+	var escape := minf(under / delta, ESCAPE_SPEED)
+	var leaving := carried.dot(out)
+	if leaving < escape:
+		carried += out * (escape - leaving)
+	bone.linear_velocity = carried
 
 
 func _build(skeleton: Skeleton3D, id: int, bone_name: StringName,

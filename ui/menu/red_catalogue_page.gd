@@ -659,8 +659,8 @@ func _fill_empty_state() -> void:
 			_empty_glyph.glyph = RedMenuGlyph.Glyph.ABILITIES
 			_empty_title.text = "ABILITY CHANNELS STANDBY"
 			_empty_body.text = (
-				"NO ABILITY DEFINITIONS ARE KNOWN YET.\n"
-				+ "LMB AND RMB TARGETS ARE READY FOR A FUTURE SIGNAL."
+				"NO ABILITIES MATCH THIS VIEW.\n"
+				+ "LMB AND RMB ASSIGNMENTS REMAIN AVAILABLE."
 			)
 
 
@@ -732,7 +732,7 @@ func _fill_detail() -> void:
 func _detail_record(entry: Dictionary, id: String, description: String) -> HBoxContainer:
 	var row := HBoxContainer.new()
 	row.name = "SelectedItemRecord"
-	row.custom_minimum_size.y = 104.0
+	row.custom_minimum_size.y = 178.0 if ItemDB.is_ability(id) else 104.0
 	row.add_theme_constant_override(&"separation", 10)
 	row.add_child(_detail_icon_block(id))
 
@@ -756,7 +756,17 @@ func _detail_record(entry: Dictionary, id: String, description: String) -> HBoxC
 	copy.add_child(state)
 	copy.add_child(_rule())
 
-	var detail := _label("DETAIL //\n%s" % description, 10, RED_TEXT, true)
+	var detail_text := "DETAIL //\n%s" % description
+	if ItemDB.is_ability(id):
+		var profile := ItemDB.ability_profile(id)
+		if not profile.is_empty():
+			detail_text += "\n\nPROFILE //  %s" % profile
+		var written_stats := PackedStringArray()
+		for line: String in ItemDB.stat_lines(id):
+			written_stats.append(line.replace("\t", "  "))
+		if not written_stats.is_empty():
+			detail_text += "\nSTATS //  %s" % "   |   ".join(written_stats)
+	var detail := _label(detail_text, 10, RED_TEXT, true)
 	detail.name = "SelectedItemDescription"
 	detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	copy.add_child(detail)
@@ -771,8 +781,8 @@ func _fill_empty_detail() -> void:
 	elif _mode == Mode.ABILITIES:
 		title_text = "NO ABILITY SELECTED"
 		body_text = (
-			"ABILITY DEFINITIONS ARE CURRENTLY EMPTY.\n"
-			+ "ASSIGNMENT WILL SAFELY REMAIN INACTIVE."
+			"SELECT A KNOWN ABILITY TO OPEN ITS POWER RECORD.\n"
+			+ "ASSIGN IT TO LMB OR RMB BELOW."
 		)
 	var title := _label(title_text, 22, RED_BRIGHT, true)
 	title.name = "SelectedItemTitle"

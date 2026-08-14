@@ -19,6 +19,8 @@ extends SurfaceAnchor
 ## Usually the colony ship. Trees fade in from this radius rather than trapping
 ## the player between a trunk and a landing leg at spawn.
 @export var clear_of: NodePath
+## Other pads and buildings that need the same tree-free working radius.
+@export var additional_clear_of: Array[NodePath] = []
 
 @export_group("Where they grow")
 ## Radius of the planted shelf around this anchor.
@@ -66,6 +68,15 @@ extends SurfaceAnchor
 @export var health_per_metre := 15.6
 ## Ability damage this wood absorbs. See [constant PlantSpecies.TOUGHNESS_SHARE].
 @export var toughness: PlantSpecies.Toughness = PlantSpecies.Toughness.WOODY
+## Resources felling one of these is worth, per metre of the tree's real height, to
+## anything harvesting it on purpose. Scaled by height rather than fixed so a
+## sixteen-metre trunk is worth clearing and a sapling is not, which comes out of the
+## same number the field already scatters heights from.
+##
+## Zero means a species is not worth cutting, which is what grass will be when
+## [GroundCover] grows the same field. Nothing about the tree changes when it is
+## harvested rather than shot; this is only what the harvester is owed.
+@export var harvest_yield := 4.6
 @export_range(0.0, 1.0) var break_momentum_keep := 0.58
 @export_enum("Organic", "Wood", "Crystal") var break_effect := 1
 @export var break_effect_color := Color(0.92, 0.16, 0.44, 1.0)
@@ -124,6 +135,8 @@ var _spacing := 1.0
 var _centre := Vector3.UP
 var _east := Vector3.RIGHT
 var _north := Vector3.FORWARD
+var _keep_outs := PackedVector3Array()
+var _keep_cos := 1.0
 var _into_local := Transform3D.IDENTITY
 
 var _trunk_mesh: Mesh
@@ -280,6 +293,16 @@ func _grow() -> void:
 	_east = _centre.cross(Vector3.UP if absf(_centre.y) < 0.9
 		else Vector3.RIGHT).normalized()
 	_north = _centre.cross(_east).normalized()
+	_keep_outs.clear()
+	var clear_paths: Array[NodePath] = [clear_of]
+	clear_paths.append_array(additional_clear_of)
+	for path in clear_paths:
+		var anchor := get_node_or_null(path) as SurfaceAnchor
+		if anchor != null:
+			_keep_outs.append(anchor.direction.normalized())
+	if _keep_outs.is_empty():
+		_keep_outs.append(_centre)
+	_keep_cos = cos(keep_back / _radius)
 	_into_local = transform.affine_inverse()
 	if not _read_model():
 		return
@@ -293,11 +316,11 @@ func _grow() -> void:
 			break
 		var spin := rng.randf() * TAU
 		var reach := sqrt(rng.randf()) * spread
-		if reach < keep_back:
-			continue
 		var offset := Vector2(cos(spin), sin(spin)) * reach
 		var at := (_centre
 			+ (_east * offset.x + _north * offset.y) / _radius).normalized()
+		if _inside_clearance(at):
+			continue
 		var ground := _ground(at)
 		if is_nan(ground):
 			continue
@@ -626,6 +649,47 @@ func _fell(index: int, at: Vector3, strength: float,
 			up, strength, visual_height, break_effect_color, break_effect)
 
 
+## Every tree still standing within [param radius] of a world point, as the world
+## position it is rooted at and the height it grew to.
+##
+## Packed four to a vector — position in `xyz`, height in `w` — because the caller
+## wants both together and neither an array of dictionaries nor two parallel returns
+## is worth the allocation.
+##
+## Answered for whoever is felling trees on purpose rather than by accident, which
+## today is the Meep colony's mining. It is answerable at all because this field is
+## not streamed: every tree is placed once and kept, so the colony can plan work
+## against trees that no player is anywhere near. [GroundCover] cannot promise that —
+## its tiles exist only around a viewer — which is why this is the field mining
+## starts with rather than the one with the most in it.
+func standing_near(centre: Vector3, radius: float) -> PackedVector4Array:
+	var found := PackedVector4Array()
+	if _trees.is_empty() or radius <= 0.0 or not centre.is_finite():
+		return found
+	var to_world := global_transform
+	# The colony against the sphere once, before any tree is looked at. The same
+	# rejection [method apply_damage] opens with, and for the same reason.
+	if (to_world * _bound_centre).distance_to(centre) > radius + _bound_radius:
+		return found
+	var reach := radius * radius
+	for index in _trees.size():
+		if _broken_trees.has(index):
+			continue
+		var root := to_world * _trees[index].origin
+		if root.distance_squared_to(centre) > reach:
+			continue
+		found.push_back(Vector4(root.x, root.y, root.z,
+			_trees[index].basis.y.length() * _authored_height))
+	return found
+
+
+## What felling one of these is worth to whoever cut it down, by the tree's real
+## height. Means nothing to this field; it is the one number a harvester needs and
+## the tree is the thing that knows it.
+func harvest_value(visual_height: float) -> float:
+	return maxf(harvest_yield, 0.0) * maxf(visual_height, 0.0)
+
+
 ## The trees felled since this was last asked, forgetting them as it answers.
 ## Drained on every peer; only the host does anything with the answer.
 func drain_new_breaks() -> PackedInt32Array:
@@ -826,6 +890,13 @@ func _turn_between(from: Vector3, to: Vector3) -> Basis:
 		axis = first.cross(Vector3.RIGHT if absf(first.x) < 0.9
 			else Vector3.FORWARD)
 	return Basis(axis.normalized(), acos(cosine))
+
+
+func _inside_clearance(at: Vector3) -> bool:
+	for keep_out in _keep_outs:
+		if at.dot(keep_out) >= _keep_cos:
+			return true
+	return false
 
 
 ## A suitable root patch. This mirrors GroundCover's slope/lumpiness check and

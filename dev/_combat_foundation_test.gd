@@ -107,6 +107,7 @@ func _ready() -> void:
 	player.set_physics_process(false)
 
 	_check_scoped_factions(player, enemy, other_enemy, flora_a, flora_b)
+	_check_walkable_slopes(player)
 	_check_input(player)
 	_check_parry_health_and_feedback(player, enemy)
 	_check_death_snapshot_respawn(world_a, player, enemy)
@@ -248,6 +249,26 @@ func _check_scoped_factions(player: OnlinePlayer, enemy: TestEnemy,
 	_expect(is_equal_approx(enemy.taken, enemy_before + 7.0)
 		and flora_a.hits == flora_before + 1,
 		"an actor blast skips the duplicate flora scan")
+
+
+func _check_walkable_slopes(player: OnlinePlayer) -> void:
+	var up := player._up().normalized()
+	var across := player.global_basis.x.normalized()
+	var walkable_angle := deg_to_rad(72.0)
+	var walkable := (
+		up * cos(walkable_angle) - across * sin(walkable_angle)
+	).normalized()
+	var cliff_angle := deg_to_rad(80.0)
+	var cliff := (
+		up * cos(cliff_angle) - across * sin(cliff_angle)
+	).normalized()
+	_expect(absf(rad_to_deg(player.floor_max_angle)
+			- OnlinePlayer.MAX_WALK_SLOPE_DEGREES) < 0.01
+		and walkable.dot(up) > OnlinePlayer.FLOOR_FACE
+		and cliff.dot(up) < OnlinePlayer.FLOOR_FACE,
+		"terrain up to 75 degrees is floor while sharper cliffs remain walls")
+	_expect(not player._impact_crashes(walkable, across * 40.0, false),
+		"a fast run onto newly walkable steep terrain does not crash")
 
 
 func _check_input(player: OnlinePlayer) -> void:

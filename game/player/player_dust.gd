@@ -212,13 +212,18 @@ func pop_ground(at: Vector3, up: Vector3, strength := 1.0) -> void:
 ## Kicks a shallow disc of white dust up around a weapon impact.
 ##
 ## Radius is the affected ground, not a particle size. A laser uses less than a
-## metre; Meteor hands over its six-to-twelve-metre crater radius. Both are
+## metre; Meteor hands over its six-to-twelve-metre crater radius. All of them are
 ## clamped before they reach counts, scale or bounds.
+##
+## The upper bound is well short of the widest blast in the game. A nuke reaches a
+## hundred metres and this is the skirt of dust at the foot of it, not the blast
+## itself — spread over the whole radius the same handful of puffs would be a few
+## specks scattered across a field.
 func impact_cloud(at: Vector3, up: Vector3, radius: float,
 		strength := 1.0) -> void:
 	if _bursts.is_empty() or not at.is_finite():
 		return
-	var span := clampf(radius, 0.3, 14.0)
+	var span := clampf(radius, 0.3, 34.0)
 	var power := clampf(strength, 0.3, 2.5)
 	var outward := up.normalized() if up.length_squared() > 0.001 else Vector3.UP
 	var side := outward.cross(
@@ -243,11 +248,11 @@ func impact_cloud(at: Vector3, up: Vector3, radius: float,
 	process.gravity = -outward * (0.85 + power * 0.35)
 	process.damping_min = 0.75
 	process.damping_max = 1.65
-	process.scale_min = clampf(0.1 + span * 0.055, 0.12, 0.86)
-	process.scale_max = clampf(0.2 + span * 0.13 + power * 0.08, 0.26, 2.2)
+	process.scale_min = clampf(0.1 + span * 0.055, 0.12, 1.9)
+	process.scale_max = clampf(0.2 + span * 0.13 + power * 0.08, 0.26, 4.8)
 	process.color = Color(1.0, 1.0, 1.0, clampf(0.62 + power * 0.08, 0.0, 0.86))
-	burst.amount = clampi(roundi(12.0 + span * 6.0 + power * 9.0), 16, 112)
-	burst.lifetime = clampf(0.48 + span * 0.095 + power * 0.2, 0.62, 2.15)
+	burst.amount = clampi(roundi(12.0 + span * 6.0 + power * 9.0), 16, 210)
+	burst.lifetime = clampf(0.48 + span * 0.095 + power * 0.2, 0.62, 3.4)
 	# Almost one-shot rather than exactly one: the fraction of a second over
 	# which the puffs leave makes a cloud billow instead of becoming one frame
 	# of evenly-spaced white dots.

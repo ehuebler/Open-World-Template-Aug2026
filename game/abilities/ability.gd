@@ -11,9 +11,9 @@ extends RefCounted
 ## different powers, a sustained beam and a single launch, live behind the same
 ## six methods.
 ##
-## The numbers come from [ItemDB], not from here. A subclass reads its own stats
-## out of the dictionary it is configured with, so damage and range are edited
-## in the catalogue the menu reads rather than in the code the menu cannot see.
+## The numbers come from the generated [AbilityDefinition], not from here. A
+## subclass reads its own stats out of the configured dictionary, so damage and
+## range are edited in the manifest the menu reads rather than hidden in code.
 
 ## Stances an ability may be started from. Left empty, any of them.
 var allowed_stances: Array[int] = []
@@ -25,6 +25,7 @@ var player: OnlinePlayer
 ## Which mouse button this is bound to: 0 is attack, 1 is aim.
 var slot := 0
 var ability_id := ""
+var definition: AbilityDefinition
 var stats: Dictionary = {}
 
 ## Seconds until it may be used again, counted down by the controller.
@@ -36,11 +37,22 @@ var _held := false
 ## [method _configure] rather than this, so it cannot forget to record what it
 ## was given.
 func configure(owner: OnlinePlayer, index: int, id: String,
-		numbers: Dictionary) -> void:
+		record: Variant) -> void:
 	player = owner
 	slot = index
 	ability_id = id
-	stats = numbers
+	definition = null
+	stats = {}
+	blocked_underwater = false
+	allowed_stances.clear()
+	if record is AbilityDefinition:
+		definition = record
+		stats = definition.stats
+		blocked_underwater = definition.blocked_underwater
+		for stance_value: int in definition.allowed_stances:
+			allowed_stances.append(stance_value)
+	elif record is Dictionary:
+		stats = record as Dictionary
 	_configure()
 
 
@@ -87,7 +99,7 @@ func _can_use() -> bool:
 ## The button went down. Returns whether the ability actually started, which is
 ## what decides whether the cooldown is charged.
 func press() -> bool:
-	if not can_use():
+	if _held or not can_use():
 		return false
 	_held = true
 	if not _press():
@@ -106,7 +118,9 @@ func _press() -> bool:
 func tick(delta: float) -> void:
 	if _cooldown_left > 0.0:
 		_cooldown_left = maxf(_cooldown_left - delta, 0.0)
-	if _held and (player == null or not player.can_attack()):
+	if _held and (player == null \
+			or (not player.can_attack()
+				and not _can_continue_when_attack_blocked())):
 		cancel()
 		return
 	if _held:
@@ -115,6 +129,12 @@ func tick(delta: float) -> void:
 
 func _tick(_delta: float) -> void:
 	pass
+
+
+## A committed movement may deliberately disable every other attack while its
+## own Ability instance remains responsible for observing completion.
+func _can_continue_when_attack_blocked() -> bool:
+	return false
 
 
 ## The button came up, the duration ran out, or something else ended it. Safe to

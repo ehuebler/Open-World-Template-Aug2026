@@ -36,15 +36,19 @@ const HOLD := 0.16
 var _beams: Array[MeshInstance3D] = []
 var _lamp: OmniLight3D
 var _alive := 0.0
+var _core_material: StandardMaterial3D
+var _glow_material: StandardMaterial3D
+var _colour := COLOR
 
 
 func _ready() -> void:
 	# Two passes over one line: an opaque core that reads against anything, and
 	# an additive sheath around it that does not. Additive alone disappears
 	# against bright ground, which is most of the ground there is.
-	var core := _beam_mesh(RADIUS * CORE_SHARE,
-		_material(CORE_COLOR, 4.0, false))
-	var glow := _beam_mesh(RADIUS, _material(COLOR, 2.4, true))
+	_core_material = _material(CORE_COLOR, 4.0, false)
+	_glow_material = _material(COLOR, 2.4, true)
+	var core := _beam_mesh(RADIUS * CORE_SHARE, _core_material)
+	var glow := _beam_mesh(RADIUS, _glow_material)
 	for eye in 2:
 		_beams.append(_beam_node(core))
 		_beams.append(_beam_node(glow))
@@ -62,10 +66,14 @@ func _ready() -> void:
 	set_process(false)
 
 
-## Draws both beams from the two eyes onto one point.
-func aim(left_eye: Vector3, right_eye: Vector3, at: Vector3) -> void:
+## Draws both beams from the two eyes onto one point. The optional colour lets
+## another eye-beam ability share the exact presentation without inheriting
+## Laser Eyes' red damage effect.
+func aim(left_eye: Vector3, right_eye: Vector3, at: Vector3,
+		colour: Color = COLOR) -> void:
 	if _beams.is_empty():
 		return
+	_set_colour(colour)
 	_place(_beams[0], left_eye, at)
 	_place(_beams[1], left_eye, at)
 	_place(_beams[2], right_eye, at)
@@ -74,6 +82,24 @@ func aim(left_eye: Vector3, right_eye: Vector3, at: Vector3) -> void:
 	_lamp.visible = true
 	_alive = HOLD
 	set_process(true)
+
+
+func _set_colour(colour: Color) -> void:
+	colour = Color(colour.r, colour.g, colour.b, 1.0)
+	if colour == _colour:
+		return
+	_colour = colour
+	var core_colour := CORE_COLOR if colour == COLOR \
+		else colour.lerp(Color.WHITE, 0.22)
+	_core_material.albedo_color = core_colour
+	_core_material.emission = core_colour
+	_glow_material.albedo_color = Color(colour, 0.72)
+	_glow_material.emission = colour
+	_lamp.light_color = colour
+	var laser_eyes := colour == COLOR
+	_core_material.emission_energy_multiplier = 4.0 if laser_eyes else 1.8
+	_glow_material.emission_energy_multiplier = 2.4 if laser_eyes else 1.2
+	_lamp.light_energy = 3.4 if laser_eyes else 2.0
 
 
 ## Takes the beams down now, for the firing player letting go.

@@ -4,8 +4,10 @@ extends CharacterBody3D
 ## Networked first/third person character. The local player simulates itself and
 ## broadcasts state; everyone else is interpolated toward the state they receive.
 
-enum Stance { STAND, CROUCH, SLIDE, FLY, CRASH, SWIM, HERO, METEOR }
+enum Stance { STAND, CROUCH, SLIDE, FLY, CRASH, SWIM, HERO, METEOR, GRAPPLE }
 enum CameraMode { FIRST, THIRD_NEAR, THIRD_FAR }
+enum GrapplePhase { RISE, APEX, SLAM }
+enum ProjectileRequestState { PENDING, ACCEPTED, REJECTED }
 
 ## Extension points for item and ability definitions that do not exist yet.
 ## Empty slots never emit either signal.
@@ -36,6 +38,9 @@ const MAX_ACCEPTED_STEP := 4.0
 ## How far in front of the eyes something can be interacted with. Measured from
 ## the body, not the camera, so third person is not a longer arm.
 const REACH := 2.4
+## How far above the collider the interaction ray hit to look for the script that
+## knows what using it means. See [method _interactable].
+const INTERACT_ANCESTOR_HOPS := 6
 const BACKPACK_SLOTS := CharacterDB.BACKPACK_SLOTS
 
 ## Three numbered weapon/item slots and two mouse ability slots. WEAPON_SLOTS is
@@ -58,7 +63,7 @@ const CELL_PAUSE := 0.55
 ## Clips baked by assets/source/blender/build_animations.py. The looping set is
 ## marked here because glTF carries no loop flag.
 const LOOPING_CLIPS := ["Idle", "Walk", "Run", "CrouchIdle", "CrouchWalk", "Fall", "Float",
-	"Fly", "Tread", "Swim"]
+	"Fly", "GrappleCarry", "LassoHold", "LassoFloatHold", "Tread", "Swim"]
 const CLIP_BLEND := 0.14
 ## A normal hop lands before this. Longer arcs earn a deliberate landing stride
 ## instead of leaving the arms-back launch pose to sag in a looping fall.
@@ -76,8 +81,8 @@ const LAND_TIME := 0.28
 # not resize it: a hat is not a reason to stop fitting through a gap. Flight and
 # swimming both borrow the standing capsule, which is why taking off, landing and
 # wading out never have to ask whether there is room.
-const COLLIDER_HEIGHTS := [1.45, 1.2, 0.9, 1.45, 0.9, 1.45, 0.9, 1.45]
-const EYE_HEIGHTS := [1.29, 1.06, 0.78, 1.29, 0.6, 1.29, 0.72, 1.29]
+const COLLIDER_HEIGHTS := [1.45, 1.2, 0.9, 1.45, 0.9, 1.45, 0.9, 1.45, 1.45]
+const EYE_HEIGHTS := [1.29, 1.06, 0.78, 1.29, 0.6, 1.29, 0.72, 1.29, 1.29]
 
 ## Fraction of `fly_speed` at which the body has finished going over from an
 ## upright hover to flat-out flight. A quarter, so almost the whole boost is
@@ -93,10 +98,12 @@ const LEAN_PIVOT := 0.72
 ## legs stop reading, so past a point the lean is what carries the speed.
 const SPRINT_LEAN := 0.35
 const GROUND_FLAT_OUT := 0.35
-## How much of the way to straight up a contact normal has to be before it counts
-## as floor rather than as something hit. This matches `floor_max_angle`, near
-## enough, and is used anywhere raw collision normals must make the same choice.
-const FLOOR_FACE := 0.7
+## Seventy-five degrees clears the south-pole caldera's inner wall while leaving
+## cliffs and building walls outside the floor cone. `FLOOR_FACE` is cos(75°)
+## and is used anywhere raw collision normals must make the same choice as
+## CharacterBody3D's `floor_max_angle`.
+const MAX_WALK_SLOPE_DEGREES := 75.0
+const FLOOR_FACE := 0.258819
 ## How far off the ground a face has to lean before running into it ends the run
 ## rather than being ridden over. `_steepest_contact` measures 0 for flat ground
 ## and 1 for a vertical wall, so 0.8 reserves this for cliffs and buildings.
@@ -241,6 +248,18 @@ const METEOR_LEAN_RATE := 18.0
 ## a second the usual quarter-second blend is the whole first half of the move
 ## spent between two poses.
 const METEOR_CLIP_BLEND := 0.08
+## Time a client waits for the host to approve a grapple target.
+const GRAPPLE_REQUEST_TIMEOUT := 0.8
+## Extra crosshair width around a target, added to its combat radius.
+## Close third-person framing puts the camera over a shoulder; at two metres a
+## body can visibly fill the reticle while its combat centre is more than half a
+## metre off the ray. This still requires the unobstructed target to be in front.
+const GRAPPLE_AIM_PADDING := 0.8
+## The owner still has to be inside the authored two metres. The host copy can
+## trail one movement packet behind, so its validation gets this small cushion.
+const GRAPPLE_HOST_RANGE_MARGIN := 1.25
+const LASSO_REQUEST_TIMEOUT := 0.8
+const LASSO_AIM_PADDING := 0.5
 ## Momentum retained by a shallow high-speed flight landing.
 const RUN_LANDING_KEEP := 0.88
 ## Slight automatic nose-up applied only when a fast jump enters Fly directly.
@@ -650,6 +669,9 @@ var _stroke := 0.0
 ## to play: the tumble is the body's own lean pivot driven round instead.
 var _crash_left := 0.0
 var _hero_left := 0.0
+## Landing pose selected by the ability definition that committed this landing.
+## Ordinary high-speed flight keeps the same HeroLand fallback.
+var _hero_clip := "HeroLand"
 ## Meteor punch: the launch direction, held fixed for the whole flight so the
 ## punch goes where it was aimed rather than wherever the player looks next.
 var _meteor_along := Vector3.FORWARD
@@ -672,12 +694,35 @@ var _meteor_since_sweep := 0.0
 ## Numbers from the ability's catalogue entry, kept here for the duration of the
 ## flight so the movement code does not have to hold a reference to the ability.
 var _meteor_stats: Dictionary = {}
+## Player-authored grapple. Separate from `_grabbed`, which means an enemy has
+## attached this player to one of its sockets.
+var _ability_grapple_id := ""
+var _ability_grapple_target: Node3D
+var _ability_grapple_target_path := NodePath()
+var _ability_grapple_stats: Dictionary = {}
+var _ability_grapple_origin := Vector3.ZERO
+var _ability_grapple_up := Vector3.UP
+var _ability_grapple_return_stance: int = Stance.STAND
+var _ability_grapple_phase: int = GrapplePhase.RISE
+var _ability_grapple_apex_left := 0.0
+var _ability_grapple_pending_left := 0.0
+## A ranged physical tether is separate from the committed carry-slam grapple:
+## the caster keeps ordinary movement while the host simulates the caught body.
+var _ability_lasso_id := ""
+var _ability_lasso_target: Node3D
+var _ability_lasso_target_path := NodePath()
+var _ability_lasso_runtime: AbilityLassoTether
+var _ability_lasso_pending_left := 0.0
 ## Ground height a punch landed on, and how long is left to watch it for the
 ## crater that punch asked for. Zero when no hole is owed.
 var _crater_floor := 0.0
 var _crater_left := 0.0
 var _tumble := 0.0
 var _tumble_rate := 0.0
+## How far the limp bones sat above the capsule's feet when the crash began. The
+## height the capsule tries to hold over the body while it is off the ground; see
+## [method _crash_move].
+var _crash_body_lift := 0.0
 ## Crashes since the body spawned. Only the harness reads it.
 var _crashes := 0
 ## What the flight was doing at the start of the last frame it flew. The speed at
@@ -763,12 +808,16 @@ var _dead := false
 var _death_cause := ""
 ## Local player only, and only while they are dead.
 var _death_screen: DeathScreen
+## Local player only, and only while they are stood at a colony ship.
+var _city_menu: CityMenu
 var _stagger_left := 0.0
 ## Damage/throw ragdolls do not start blending upright until they have landed.
 var _forced_ragdoll := false
 var _forced_recovery_started := false
 var _forced_ragdoll_left := 0.0
 var _grabbed := false
+var _lassoed := false
+var _lasso_source_peer := 0
 var _grab_socket_path := NodePath()
 var _grab_socket_node: Node3D
 var _grab_offset := Transform3D.IDENTITY
@@ -787,6 +836,38 @@ var _beam_request_sequence := 0
 var _last_beam_request_sequence := 0
 var _host_beam_sequence := 0
 var _last_beam_sequence := 0
+var _projectile_request_sequence := 0
+var _last_projectile_request_sequence := 0
+var _host_projectile_sequence := 0
+var _last_projectile_sequence := 0
+var _projectile_result_sequence := 0
+var _projectile_result: int = ProjectileRequestState.REJECTED
+var _ability_explosion_request_sequence := 0
+var _last_ability_explosion_request_sequence := 0
+var _host_ability_explosion_sequence := 0
+var _last_ability_explosion_sequence := 0
+var _ability_grapple_request_sequence := 0
+var _last_ability_grapple_request_sequence := 0
+var _host_ability_grapple_sequence := 0
+var _last_ability_grapple_sequence := 0
+var _ability_lasso_request_sequence := 0
+var _last_ability_lasso_request_sequence := 0
+var _host_ability_lasso_sequence := 0
+var _last_ability_lasso_sequence := 0
+var _host_lasso_motion_sequence := 0
+var _last_lasso_motion_sequence := 0
+var _ability_wall_request_sequence := 0
+var _last_ability_wall_request_sequence := 0
+var _host_ability_wall_sequence := 0
+var _last_ability_wall_sequence := 0
+var _ability_wall_result_sequence := 0
+var _ability_wall_result: int = ProjectileRequestState.REJECTED
+var _delayed_blast_request_sequence := 0
+var _last_delayed_blast_request_sequence := 0
+var _host_delayed_blast_sequence := 0
+var _last_delayed_blast_sequence := 0
+var _delayed_blast_result_sequence := 0
+var _delayed_blast_result: int = ProjectileRequestState.REJECTED
 var _combat_state_sequence := 0
 var _last_combat_state_sequence := 0
 var _feedback_sequence := 0
@@ -874,6 +955,8 @@ var _cells: Dictionary = {}
 var _cell_pause := 0.0
 var _base_fov := 75.0
 var _clip := ""
+var _ability_clip := ""
+var _ability_clip_left := 0.0
 var _land_left := 0.0
 var _was_airborne := false
 var _airborne_time := 0.0
@@ -898,6 +981,7 @@ var _extrapolated := 0.0
 func _ready() -> void:
 	add_to_group("network_players")
 	add_to_group(DamageHit.COMBATANT_GROUP)
+	floor_max_angle = deg_to_rad(MAX_WALK_SLOPE_DEGREES)
 	var settings := get_node_or_null("/root/SettingsManager")
 	if settings != null and settings.has_method("get_setting"):
 		mouse_sensitivity = float(settings.call("get_setting", &"gameplay", &"mouse_sensitivity", 0.35)) / 140.0
@@ -980,6 +1064,7 @@ func _ready() -> void:
 		_weapon_bar = WeaponBar.new()
 		hud.add_child(_weapon_bar)
 		_weapon_bar.bind_loadout(abilities, hotbar)
+		_weapon_bar.bind_ability_controller(_ability_controller)
 		_weapon_bar.holster()
 		# Behind the bar, so a waypoint pinned to the bottom of the screen does
 		# not sit over the weapon icons.
@@ -1116,6 +1201,7 @@ func _process(delta: float) -> void:
 	_update_walking_ground_offset(delta)
 	_update_body_lean(delta)
 	_update_camera(delta)
+	_ability_clip_left = maxf(_ability_clip_left - delta, 0.0)
 	_update_animation(delta)
 	_update_dust_trails()
 	_update_meteor_shock()
@@ -1133,6 +1219,10 @@ func _physics_process(delta: float) -> void:
 	_tick_combat(delta)
 	if _grabbed:
 		_follow_grab_socket()
+		_track_water_crossing()
+		_track_footprints()
+		return
+	if _lassoed:
 		_track_water_crossing()
 		_track_footprints()
 		return
@@ -1191,14 +1281,33 @@ func _interact_target() -> Node:
 		from, from - camera.global_basis.z * (REACH + camera_arm.spring_length))
 	query.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
-	var node := hit.get("collider") as Node
-	if node != null and node.has_method("interact") and node.has_method("interact_prompt"):
-		return node
+	return _interactable(hit.get("collider") as Node)
+
+
+## The nearest thing at or above [param collider] that can be used.
+##
+## A dropped item is its own collider, but anything built from an imported .glb is
+## not: the ship's shape arrives as a [StaticBody3D] somewhere inside a hull whose
+## node names MeshMaker chose, and the script that knows what using it means is the
+## anchor the whole model hangs off. So the collider is where the search starts
+## rather than where it ends.
+##
+## Bounded rather than walked to the root, because the top of every chain is the
+## planet and then the world, and a scene that ever grows an `interact` up there
+## should not turn every rock on it into a button.
+func _interactable(collider: Node) -> Node:
+	var node := collider
+	var hops := INTERACT_ANCESTOR_HOPS
+	while node != null and hops >= 0:
+		if node.has_method("interact") and node.has_method("interact_prompt"):
+			return node
+		node = node.get_parent()
+		hops -= 1
 	return null
 
 
 func _interact() -> bool:
-	if _dead or _grabbed:
+	if _dead or _grabbed or _lassoed:
 		return false
 	var target := _interact_target()
 	if target != null:
@@ -1226,6 +1335,46 @@ func _open_game_menu(tab: GameMenu.Tab) -> void:
 	var world := NetworkManager.active_world as GameWorld
 	if world != null:
 		world.set_local_pause(true)
+
+
+## Opened by using a [ColonyShip]. On this player's HUD rather than in the world,
+## and costing the same as any other menu: the mouse, the crosshair and — alone —
+## the simulation, exactly as [method _open_game_menu] does.
+##
+## The panel is given a way to read the colony and a way to ask for settlers, and
+## is told nothing else. Both close over the world this body is in rather than
+## whichever one is current, so a panel left open across a session change reports
+## nothing instead of reporting somebody else's town.
+func open_city_menu(site: StringName) -> void:
+	if _menu_open or is_instance_valid(_city_menu):
+		return
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return
+	var menu := CityMenu.new()
+	menu.configure(func() -> Dictionary:
+		return world.colony_report(site) if is_instance_valid(world) else {})
+	menu.release_settlers_requested.connect(func() -> void:
+		if is_instance_valid(world):
+			world.request_release_settlers(peer_id, site))
+	menu.closed.connect(_on_city_menu_closed)
+	_city_menu = menu
+	open_menu()
+	hud.add_child(menu)
+	world.set_local_pause(true)
+
+
+func _on_city_menu_closed() -> void:
+	_city_menu = null
+	# Dying at the ship leaves the death screen behind the panel, which owns the
+	# mouse from here rather than the world doing.
+	if is_instance_valid(_death_screen):
+		open_menu()
+	else:
+		close_menu()
+	var world := NetworkManager.active_world as GameWorld
+	if world != null:
+		world.set_local_pause(false)
 
 
 func _on_game_menu_closed() -> void:
@@ -2067,8 +2216,8 @@ func activate_primary() -> void:
 ## simulate its fall. That must not also leave the weapon and ability entry
 ## points live while its hands are attached to a grab socket or physically limp.
 func can_attack() -> bool:
-	return not _dead and not _grabbed and not _forced_ragdoll \
-		and _stance != Stance.CRASH
+	return not _dead and not _grabbed and not _lassoed and not _forced_ragdoll \
+		and _stance != Stance.CRASH and _stance != Stance.GRAPPLE
 
 
 ## Which of [enum Stance] the body is in. Abilities gate on this — a meteor
@@ -2076,6 +2225,12 @@ func can_attack() -> bool:
 ## outside this file should be reading the private field to find out.
 func stance() -> int:
 	return _stance
+
+
+## Whether flight presentation is currently using its raised-knee hover end.
+## Ability casts capture this into their replicated animation variant.
+func uses_float_pose() -> bool:
+	return _stance == Stance.FLY and _fly_blend <= 0.45
 
 
 ## How much of the body is under water, 0 to 1. The public form of the same
@@ -2204,6 +2359,120 @@ func _publish_ability_beam(id: String, left_eye: Vector3,
 		_host_beam_sequence, id, left_eye, right_eye, at, landed)
 
 
+## Launches a definition-selected projectile on every peer.
+func fire_ability_projectile(id: String, from: Vector3, along: Vector3,
+		variant := 0) -> int:
+	var definition := ItemDB.ability_definition(id)
+	var inherited_velocity := velocity
+	if not can_attack() or definition == null \
+			or not _uses_launched_projectile(definition) \
+			or not from.is_finite() or not along.is_finite() \
+			or not inherited_velocity.is_finite() \
+			or along.length_squared() < 0.001:
+		return 0
+	_projectile_request_sequence += 1
+	_projectile_result_sequence = _projectile_request_sequence
+	_projectile_result = ProjectileRequestState.PENDING
+	if not _has_listeners():
+		var spawned := _spawn_ability_projectile(
+			id, from, along, inherited_velocity, variant)
+		_projectile_result = ProjectileRequestState.ACCEPTED \
+			if spawned else ProjectileRequestState.REJECTED
+		return _projectile_request_sequence if spawned else 0
+	if multiplayer.is_server():
+		var accepted := _publish_ability_projectile(
+			_projectile_request_sequence, id, from, along,
+			inherited_velocity, variant)
+		if not accepted:
+			_projectile_result = ProjectileRequestState.REJECTED
+		elif _projectile_result == ProjectileRequestState.PENDING:
+			_projectile_result = ProjectileRequestState.ACCEPTED
+		return _projectile_request_sequence if accepted else 0
+	_request_ability_projectile.rpc_id(
+		1, _projectile_request_sequence, id, from, along,
+		inherited_velocity, variant)
+	return _projectile_request_sequence
+
+
+func ability_projectile_request_state(request_sequence: int) -> int:
+	if request_sequence <= 0 or request_sequence != _projectile_result_sequence:
+		return ProjectileRequestState.REJECTED
+	return _projectile_result
+
+
+func _uses_launched_projectile(definition: AbilityDefinition) -> bool:
+	return definition != null and definition.projectile_type in [
+		AbilityDefinition.ProjectileType.ENERGY_DISK,
+		AbilityDefinition.ProjectileType.ENERGY_ORB,
+	]
+
+
+func _publish_ability_projectile(request_sequence: int, id: String,
+		from: Vector3, along: Vector3, inherited_velocity: Vector3,
+		variant: int) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if not inherited_velocity.is_finite():
+		return false
+	var from_left := (variant & 1) != 0
+	var host_from := hand_point(from_left)
+	var host_along := aim_direction(host_from).normalized()
+	var claimed_along := along.normalized() \
+		if along.length_squared() > 0.001 else Vector3.ZERO
+	var spawn_tolerance := maxf(
+		2.5, velocity.length() * SYNC_INTERVAL * 3.0)
+	if not can_attack() or definition == null \
+			or not _uses_launched_projectile(definition) \
+			or not from.is_finite() or not along.is_finite() \
+			or along.length_squared() < 0.001 \
+			or from.distance_to(host_from) > spawn_tolerance \
+			or host_along.dot(claimed_along) < 0.35 \
+			or inherited_velocity.length() > _speed_limit(Stance.FLY) * 1.25:
+		return false
+	var authoritative_velocity := velocity \
+		if velocity.is_finite() else Vector3.ZERO
+	_host_projectile_sequence += 1
+	_apply_ability_projectile.rpc(
+		_host_projectile_sequence, request_sequence, id,
+		host_from, host_along, authoritative_velocity, variant)
+	return true
+
+
+func _spawn_ability_projectile(id: String, from: Vector3, along: Vector3,
+		inherited_velocity: Vector3, variant: int) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if definition == null:
+		return false
+	# Every peer draws the same flight, but only the host resolves its collision.
+	# That keeps reactions, player damage, and terrain deformation out of a
+	# client-authored packet while retaining responsive local projectile motion.
+	var owns_impact := not multiplayer.has_multiplayer_peer() \
+		or multiplayer.is_server()
+	var projectile := AbilityProjectile.launch(
+		get_parent(), self, id, from, along, owns_impact, inherited_velocity)
+	if projectile == null:
+		return false
+	var from_left := (variant & 1) != 0
+	var from_hover := (variant & 2) != 0
+	var clip := definition.animation
+	if from_hover and from_left \
+			and not definition.alternate_hover_animation.is_empty():
+		clip = definition.alternate_hover_animation
+	elif from_hover and not definition.hover_animation.is_empty():
+		clip = definition.hover_animation
+	elif from_left and not definition.alternate_animation.is_empty():
+		clip = definition.alternate_animation
+	play_ability_animation(clip,
+		float(definition.stats.get("animation_duration", 0.32)))
+	return true
+
+
+func play_ability_animation(clip: StringName, duration: float) -> void:
+	if clip.is_empty():
+		return
+	_ability_clip = String(clip)
+	_ability_clip_left = maxf(duration, 0.0)
+
+
 ## Cosmetic dust at a laser landing. Beam packets and carbine bolts already run
 ## on every peer, so this must not send another packet; each copy calls it from
 ## the impact it resolved locally.
@@ -2226,6 +2495,47 @@ func play_meteor_impact_dust(at: Vector3, facing: Vector3,
 		_meteor_impact_cloud.rpc(at, facing, radius, strength)
 	else:
 		_meteor_impact_cloud(at, facing, radius, strength)
+
+
+## Replicated emissive pulse used by data-authored explosive impacts.
+func play_ability_explosion(at: Vector3, radius: float, tint: Color,
+		duration := EnergyExplosion.LIFE, massive := false,
+		nuclear := false) -> void:
+	if not at.is_finite() or not is_finite(radius) or not is_finite(duration):
+		return
+	_ability_explosion_request_sequence += 1
+	if not _has_listeners():
+		_spawn_ability_explosion(at, radius, tint, duration, massive, nuclear)
+	elif multiplayer.is_server():
+		_publish_ability_explosion(
+			at, radius, tint, duration, massive, nuclear, false)
+	else:
+		# The owner sees the contact immediately; the host-approved event below
+		# supplies the server and every other client.
+		_spawn_ability_explosion(at, radius, tint, duration, massive, nuclear)
+		_request_ability_explosion.rpc_id(
+			1, _ability_explosion_request_sequence, at, radius, tint,
+			duration, massive, nuclear)
+
+
+func _publish_ability_explosion(at: Vector3, radius: float,
+		tint: Color, duration: float, massive: bool, nuclear: bool,
+		predicted_owner: bool) -> void:
+	if not at.is_finite() or not is_finite(radius) or not is_finite(duration):
+		return
+	_host_ability_explosion_sequence += 1
+	_apply_ability_explosion.rpc(
+		_host_ability_explosion_sequence, at,
+		clampf(radius, 0.2, EnergyExplosion.MAX_RADIUS),
+		tint, clampf(duration, 0.12, 2.0), massive, nuclear, predicted_owner)
+
+
+func _spawn_ability_explosion(at: Vector3, radius: float,
+		tint: Color, duration := EnergyExplosion.LIFE,
+		massive := false, nuclear := false) -> void:
+	EnergyExplosion.burst(
+		get_parent(), at, clampf(radius, 0.2, EnergyExplosion.MAX_RADIUS), tint,
+		clampf(duration, 0.12, 2.0), massive, nuclear)
 
 
 ## Asks the world to cut a mark into the ground. Routed through the player
@@ -2299,7 +2609,7 @@ func status_snapshot() -> Dictionary:
 
 
 func can_fly() -> bool:
-	return not _dead and not _grabbed \
+	return not _dead and not _grabbed and not _lassoed \
 		and not statuses.has(CombatStatuses.FLIGHTLESS)
 
 
@@ -2322,6 +2632,8 @@ func combat_snapshot() -> Dictionary:
 		"grabbed": _grabbed,
 		"grab_socket": String(_grab_socket_path),
 		"grab_offset": _grab_offset,
+		"lassoed": _lassoed,
+		"lasso_source_peer": _lasso_source_peer,
 	}
 
 
@@ -2351,6 +2663,9 @@ func apply_combat_snapshot(snapshot: Dictionary) -> void:
 		"grab_offset", Transform3D.IDENTITY)
 	_grab_offset = offset_variant as Transform3D \
 		if offset_variant is Transform3D else Transform3D.IDENTITY
+	_lassoed = bool(snapshot.get("lassoed", false))
+	_lasso_source_peer = maxi(int(snapshot.get("lasso_source_peer", 0)), 0) \
+		if _lassoed else 0
 	if collider != null:
 		collider.set_deferred(&"disabled", _grabbed)
 	var was_dead := _dead
@@ -2358,7 +2673,7 @@ func apply_combat_snapshot(snapshot: Dictionary) -> void:
 	_death_cause = String(snapshot.get(
 		"death_cause", DeathScreen.DEFAULT_NOTICE)) if _dead else ""
 	var snapshot_forced := bool(snapshot.get("forced_ragdoll", false))
-	if _grabbed:
+	if _grabbed or _lassoed:
 		_interrupt_combat_actions()
 	if _dead:
 		if not _forced_ragdoll:
@@ -2377,9 +2692,13 @@ func respawn_at(at_transform: Transform3D, sequence := 0) -> void:
 	if sequence > 0 and sequence <= _respawn_sequence:
 		return
 	_respawn_sequence = maxi(sequence, _respawn_sequence + 1)
+	if not _ability_grapple_id.is_empty():
+		_finish_ability_grapple_local(false, global_position)
 	_dead = false
 	_death_cause = ""
 	_grabbed = false
+	_lassoed = false
+	_lasso_source_peer = 0
 	_grab_socket_path = NodePath()
 	_grab_socket_node = null
 	_grab_offset = Transform3D.IDENTITY
@@ -2494,6 +2813,76 @@ func is_grabbed() -> bool:
 	return _grabbed
 
 
+func can_be_lassoed() -> bool:
+	return not _dead and not _grabbed and not _lassoed \
+		and not _forced_ragdoll
+
+
+func begin_lasso(source: Node3D) -> bool:
+	if not can_be_lassoed() or source == null:
+		return false
+	_lassoed = true
+	_lasso_source_peer = int(source.get("peer_id")) \
+		if source.get("peer_id") != null else 0
+	_interrupt_combat_actions()
+	if collider != null:
+		collider.set_deferred(&"disabled", false)
+	return true
+
+
+func lasso_simulate(motion: Vector3,
+		next_velocity: Vector3) -> Dictionary:
+	if not _is_host_authority() or not _lassoed \
+			or not motion.is_finite() or not next_velocity.is_finite():
+		return {}
+	var collision := move_and_collide(motion)
+	velocity = next_velocity
+	_host_last_position = global_position
+	_host_has_state = true
+	if collision == null:
+		return {"collided": false}
+	return {
+		"collided": true,
+		"normal": collision.get_normal(),
+		"position": collision.get_position(),
+		"collider": collision.get_collider(),
+	}
+
+
+func lasso_apply_network_motion(at: Transform3D,
+		next_velocity: Vector3) -> void:
+	if _is_host_authority() or not _lassoed \
+			or not at.is_finite() or not next_velocity.is_finite():
+		return
+	global_transform = at
+	velocity = next_velocity
+	_target_transform = at
+	_target_velocity = next_velocity
+	_extrapolated = 0.0
+	reset_physics_interpolation()
+
+
+func end_lasso(throw_velocity: Vector3) -> void:
+	if not _lassoed:
+		return
+	_lassoed = false
+	_lasso_source_peer = 0
+	if throw_velocity.is_finite():
+		velocity = throw_velocity
+	if collider != null:
+		collider.set_deferred(&"disabled", false)
+	if _is_host_authority() and velocity.length_squared() > 1.0:
+		force_full_ragdoll(velocity)
+
+
+func lasso_mass() -> float:
+	return 1.0
+
+
+func is_lassoed() -> bool:
+	return _lassoed
+
+
 func grab_socket() -> Node3D:
 	if is_instance_valid(_grab_socket_node):
 		return _grab_socket_node
@@ -2584,6 +2973,8 @@ func _die(hit: DamageHit) -> void:
 	_death_cause = _death_notice(hit)
 	_interrupt_combat_actions()
 	_grabbed = false
+	_lassoed = false
+	_lasso_source_peer = 0
 	_grab_socket_path = NodePath()
 	_grab_socket_node = null
 	if collider != null:
@@ -2863,6 +3254,10 @@ func _simulate_local_player(delta: float) -> void:
 	_align_to_planet(delta)
 	_read_surface()
 	_read_lava()
+	_ability_grapple_pending_left = maxf(
+		_ability_grapple_pending_left - delta, 0.0)
+	_ability_lasso_pending_left = maxf(
+		_ability_lasso_pending_left - delta, 0.0)
 	# Before the stance branches. A punch lands in HERO but the pose is short and
 	# the crater is not always here yet, so this must outlive the stance that
 	# asked for it rather than hang off one.
@@ -2882,6 +3277,9 @@ func _simulate_local_player(delta: float) -> void:
 		return
 	if _stance == Stance.HERO:
 		_hero_land_move(delta)
+		return
+	if _stance == Stance.GRAPPLE:
+		_ability_grapple_move(delta)
 		return
 	if _stance == Stance.METEOR:
 		_meteor_move(delta)
@@ -3788,6 +4186,11 @@ func _begin_crash(carried: Vector3, preserve_velocity := false) -> void:
 		if planet != null and _ground_radius > 0.0:
 			_ragdoll.set_floor(planet.global_position, _ground_radius)
 		_ragdoll.go_limp(velocity, -_up() * _gravity())
+		# How high the bones sat over the capsule's feet at the moment they were
+		# handed over, which is the offset the crash should keep. Measured rather
+		# than assumed: it is the average of whichever bones this rig turned out
+		# to have, taken from whatever pose the body happened to be in.
+		_crash_body_lift = (_ragdoll.centre() - global_position).dot(_up())
 
 
 ## No steering and no jumping: the whole point is that the player is not driving
@@ -3807,6 +4210,12 @@ func _begin_crash(carried: Vector3, preserve_velocity := false) -> void:
 ## may spend closing the gap is capped: a limb that finds its way somewhere the
 ## capsule cannot follow pulls the view for a moment and then gives up, rather
 ## than firing the player across the world after it.
+##
+## What is followed is both what the body is doing and where it has got to. Along
+## the ground, always. Up the surface normal, only while the capsule is off it: on
+## the ground that correction would answer a bone the surface has nudged by
+## lifting the capsule off the floor it is waiting to get up from, so there it
+## does no more than hold the climb down to the body's own.
 func _crash_move(delta: float) -> void:
 	var grounded_before := _grounded()
 	var can_recover := not _dead
@@ -3829,16 +4238,40 @@ func _crash_move(delta: float) -> void:
 		velocity -= _up() * (_gravity() * delta)
 	var limp := _ragdoll != null and _ragdoll.limp()
 	var along := _flat(velocity)
+	var rise := _rise()
 	var gap := _flat(_ragdoll.centre() - global_position) if limp else Vector3.ZERO
 	if limp and gap.length() <= CRASH_CHASE_REACH:
-		# Straight at the body rather than a force toward it. A spring would
-		# overshoot a tumble that is still turning, and the capsule has no
-		# momentum worth conserving here: nobody is driving it, and the motion
-		# the crash is made of belongs to the bones.
-		along = (gap / CRASH_CHASE_TIME).limit_length(CRASH_CHASE_SPEED)
+		# What the body is doing, plus a bounded pull toward where it has got to.
+		# The pull on its own — which is what this was — trails a body that is
+		# still travelling by the chase time, and that is a hand's breadth at
+		# tumbling speed and tens of metres behind a blast that throws the player
+		# at sixty. Straight at the body rather than a force toward it, because a
+		# spring would overshoot a tumble that is still turning.
+		var drift := _ragdoll.drift()
+		along = _flat(drift) \
+			+ (gap / CRASH_CHASE_TIME).limit_length(CRASH_CHASE_SPEED)
+		var climb := drift.dot(_up())
+		if not grounded_before:
+			# Off the ground the height is followed as well, back to the offset
+			# the crash started with: a body launched off its feet pushes off the
+			# ground on the way, so it does not arrive at the top of an arc the
+			# capsule's own gravity would have put it at, and the camera hanging
+			# off the capsule is looking somewhere the character is not.
+			#
+			# Only while airborne. On the ground the same correction would answer
+			# a bone the surface has nudged upward by lifting the capsule off the
+			# floor it is waiting to get up from.
+			var lift := (_ragdoll.centre() - global_position).dot(_up())
+			rise = climb + clampf(
+				(lift - _crash_body_lift) / CRASH_CHASE_TIME,
+				-CRASH_CHASE_SPEED, CRASH_CHASE_SPEED)
+		elif rise > 0.0:
+			# Held down to what the body is climbing at, never lifted up to it,
+			# and never past a standstill: the capsule has to stay free to fall.
+			rise = minf(rise, maxf(climb, 0.0))
 	else:
 		along = along.move_toward(Vector3.ZERO, CRASH_FRICTION * delta)
-	velocity = along + _up() * _rise()
+	velocity = along + _up() * rise
 	move_and_slide()
 	_catch_ground()
 	if limp:
@@ -3912,6 +4345,7 @@ func _land_fast_flight(carried: Vector3) -> void:
 	if steep:
 		velocity = _flat(carried).limit_length(walk_speed)
 		_run_speed = walk_speed
+		_hero_clip = "HeroLand"
 		_hero_left = HERO_LANDING_TIME
 		# The look pitch is *not* reset here. A dive arrives with the view aimed
 		# into the floor and HeroLand wants it on the horizon, but snapping it
@@ -3941,6 +4375,769 @@ func _hero_land_move(delta: float) -> void:
 	if _hero_left <= 0.0:
 		velocity = Vector3.ZERO
 		_try_stand()
+
+
+## Requests the close target currently under the crosshair and starts the
+## committed carry on host approval.
+func begin_ability_grapple(id: String, numbers: Dictionary) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if not can_attack() or _stance == Stance.HERO \
+			or _stance == Stance.METEOR or _stance == Stance.GRAPPLE \
+			or definition == null \
+			or definition.grapple_type != AbilityDefinition.GrappleType.CARRY_SLAM:
+		return false
+	var reach := maxf(float(numbers.get("range", 2.0)), 0.1)
+	var target := _find_ability_grapple_target(reach)
+	if target == null:
+		return false
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return false
+	var target_path := world.get_path_to(target)
+	_ability_grapple_id = id
+	_ability_grapple_pending_left = GRAPPLE_REQUEST_TIMEOUT
+	_ability_grapple_request_sequence += 1
+	if not _has_listeners():
+		var started := _start_ability_grapple_local(id, String(target_path))
+		if not started:
+			_finish_ability_grapple_local(false, global_position)
+		return started
+	if multiplayer.is_server():
+		var accepted := _publish_ability_grapple(
+			true, false, id, String(target_path), global_position)
+		if not accepted:
+			_finish_ability_grapple_local(false, global_position)
+		return accepted
+	_request_ability_grapple.rpc_id(1, _ability_grapple_request_sequence,
+		true, false, id, String(target_path), global_position)
+	return true
+
+
+func grapple_active() -> bool:
+	return is_instance_valid(_ability_grapple_target)
+
+
+func grapple_pending() -> bool:
+	return not grapple_active() and _ability_grapple_pending_left > 0.0
+
+
+func grapple_active_or_pending() -> bool:
+	return grapple_active() or grapple_pending()
+
+
+func cancel_ability_grapple() -> void:
+	if _ability_grapple_id.is_empty():
+		return
+	var id := _ability_grapple_id
+	var at := global_position
+	_finish_ability_grapple_local(false, at)
+	_broadcast_ability_grapple_finish(id, false, at)
+
+
+func grapple_carry_point() -> Vector3:
+	var up := _ability_grapple_up.normalized()
+	var forward := -global_basis.z
+	forward -= up * forward.dot(up)
+	if forward.length_squared() < 0.001:
+		forward = global_basis.x.cross(up)
+	return global_position + up * (_body_height * 0.78) \
+		+ forward.normalized() * (_body_height * 0.36)
+
+
+func _find_ability_grapple_target(reach: float) -> Node3D:
+	var best: Node3D
+	var best_miss := INF
+	for candidate_variant: Variant in get_tree().get_nodes_in_group(
+			DamageHit.COMBATANT_GROUP):
+		var candidate := candidate_variant as Node3D
+		if candidate == null or candidate == self \
+				or not _ability_grapple_target_valid(candidate, reach, true):
+			continue
+		var target_at := _combatant_point(candidate)
+		var from := camera.global_position
+		var look := look_direction().normalized()
+		var depth := (target_at - from).dot(look)
+		var miss := (target_at - from - look * depth).length()
+		if miss < best_miss:
+			best = candidate
+			best_miss = miss
+	return best
+
+
+func _ability_grapple_target_valid(target: Node3D, reach: float,
+		require_aim: bool) -> bool:
+	if target == null or not DamageHit.in_same_world(self, target) \
+			or not target.has_method(&"begin_grapple") \
+			or not target.has_method(&"grapple_follow") \
+			or not target.has_method(&"end_grapple"):
+		return false
+	if target.has_method(&"can_be_grappled") \
+			and not bool(target.call(&"can_be_grappled")):
+		return false
+	if target.has_method(&"combat_faction") \
+			and int(target.call(&"combat_faction")) != DamageHit.Faction.ENEMY:
+		return false
+	var target_at := _combatant_point(target)
+	var target_radius := _combatant_bounds(target)
+	var gap := combat_position().distance_to(target_at) \
+		- combat_radius() - target_radius
+	if gap > reach:
+		return false
+	if not require_aim:
+		return true
+	var from := camera.global_position
+	var look := look_direction().normalized()
+	var toward := target_at - from
+	var depth := toward.dot(look)
+	if depth <= 0.0:
+		return false
+	var miss := (toward - look * depth).length()
+	if miss > target_radius + GRAPPLE_AIM_PADDING:
+		return false
+	var query := PhysicsRayQueryParameters3D.create(from, target_at)
+	query.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return true
+	var collider_node := hit.get("collider") as Node
+	return _node_belongs_to(collider_node, target)
+
+
+func _combatant_point(target: Node3D) -> Vector3:
+	if target.has_method(&"combat_position"):
+		var value: Variant = target.call(&"combat_position")
+		if value is Vector3:
+			return value as Vector3
+	return target.global_position
+
+
+func _combatant_bounds(target: Node3D) -> float:
+	return maxf(float(target.call(&"combat_radius")), 0.0) \
+		if target.has_method(&"combat_radius") else 0.0
+
+
+func _node_belongs_to(node: Node, owner: Node) -> bool:
+	var walk := node
+	while walk != null:
+		if walk == owner:
+			return true
+		walk = walk.get_parent()
+	return false
+
+
+func _grapple_target_from_path(path_text: String) -> Node3D:
+	var path := NodePath(path_text)
+	if path.is_empty() or path.is_absolute():
+		return null
+	for index in path.get_name_count():
+		if path.get_name(index) == &"..":
+			return null
+	var world := DamageHit.game_world_of(self)
+	return world.get_node_or_null(path) as Node3D if world != null else null
+
+
+func _publish_ability_grapple(starting: bool, landed: bool, id: String,
+		target_path: String, impact_at: Vector3) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if definition == null \
+			or definition.grapple_type != AbilityDefinition.GrappleType.CARRY_SLAM \
+			or not impact_at.is_finite():
+		return false
+	if starting:
+		var target := _grapple_target_from_path(target_path)
+		var reach := maxf(float(definition.stats.get("range", 2.0)), 0.1) \
+			+ GRAPPLE_HOST_RANGE_MARGIN
+		if target == null \
+				or not _ability_grapple_target_valid(target, reach, true):
+			return false
+	elif impact_at.distance_to(global_position) > 8.0:
+		impact_at = global_position
+	_host_ability_grapple_sequence += 1
+	_apply_ability_grapple.rpc(_host_ability_grapple_sequence,
+		starting, landed, id, target_path, impact_at)
+	return true
+
+
+func _start_ability_grapple_local(id: String, target_path: String) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	var target := _grapple_target_from_path(target_path)
+	if definition == null or target == null:
+		_ability_grapple_id = ""
+		_ability_grapple_pending_left = 0.0
+		return false
+	var accepted: Variant = target.call(&"begin_grapple", self)
+	if accepted is bool and not bool(accepted):
+		_ability_grapple_id = ""
+		_ability_grapple_pending_left = 0.0
+		return false
+	_ability_grapple_id = id
+	_ability_grapple_target = target
+	_ability_grapple_target_path = NodePath(target_path)
+	_ability_grapple_stats = definition.stats
+	_ability_grapple_origin = global_position
+	_ability_grapple_up = _up()
+	_ability_grapple_return_stance = Stance.FLY \
+		if _stance == Stance.FLY else Stance.STAND
+	_ability_grapple_phase = GrapplePhase.RISE
+	_ability_grapple_apex_left = 0.0
+	_ability_grapple_pending_left = 0.0
+	_flight_velocity = Vector3.ZERO
+	_footed = false
+	_ground_radius = -1.0
+	floor_snap_length = 0.0
+	velocity = _ability_grapple_up \
+		* maxf(float(_ability_grapple_stats.get("launch_speed", 32.0)), 1.0)
+	_apply_stance(Stance.GRAPPLE)
+	play_ability_animation(definition.animation, 0.28)
+	return true
+
+
+func _finish_ability_grapple_local(landed: bool, at: Vector3) -> void:
+	var target := _ability_grapple_target
+	var landing_clip := "HeroLand"
+	var definition := ItemDB.ability_definition(_ability_grapple_id)
+	if definition != null and not definition.impact_animation.is_empty():
+		landing_clip = String(definition.impact_animation)
+	if is_instance_valid(target) and target.has_method(&"end_grapple"):
+		target.call(&"end_grapple", at, _ability_grapple_up)
+	var return_stance := _ability_grapple_return_stance
+	_ability_grapple_target = null
+	_ability_grapple_target_path = NodePath()
+	_ability_grapple_id = ""
+	_ability_grapple_stats = {}
+	_ability_grapple_pending_left = 0.0
+	_ability_grapple_apex_left = 0.0
+	floor_snap_length = _floor_snap
+	_flight_velocity = Vector3.ZERO
+	velocity = Vector3.ZERO
+	if landed:
+		_hero_clip = landing_clip
+		_hero_left = HERO_LANDING_TIME
+		_run_speed = walk_speed
+		_apply_stance(Stance.HERO)
+	elif _stance == Stance.GRAPPLE:
+		_apply_stance(return_stance)
+
+
+func _broadcast_ability_grapple_finish(id: String, landed: bool,
+		impact_at: Vector3) -> void:
+	if not _has_listeners():
+		return
+	_ability_grapple_request_sequence += 1
+	if multiplayer.is_server():
+		_publish_ability_grapple(false, landed, id, "", impact_at)
+	else:
+		_request_ability_grapple.rpc_id(1, _ability_grapple_request_sequence,
+			false, landed, id, "", impact_at)
+
+
+## Fires a physical string toward the crosshair. A valid combatant becomes a
+## host-authoritative tether; a miss still travels to its landing and retracts.
+func begin_ability_lasso(id: String, numbers: Dictionary) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if not can_attack() or ability_lasso_active_or_pending() \
+			or definition == null \
+			or definition.grapple_type \
+				!= AbilityDefinition.GrappleType.PHYSICS_TETHER:
+		return false
+	var reach := maxf(float(numbers.get("range", 30.0)), 1.0)
+	var target := _find_ability_lasso_target(definition, reach)
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return false
+	_ability_lasso_id = id
+	_ability_lasso_target_path = world.get_path_to(target) \
+		if target != null else NodePath()
+	_ability_lasso_pending_left = LASSO_REQUEST_TIMEOUT
+	_ability_lasso_request_sequence += 1
+	if not _has_listeners():
+		return _start_ability_lasso_local(
+			id, String(_ability_lasso_target_path)) \
+			if target != null else _start_ability_lasso_miss_local(id)
+	if multiplayer.is_server():
+		var accepted := _publish_ability_lasso(
+			true, id, String(_ability_lasso_target_path), Vector3.ZERO)
+		if not accepted:
+			_clear_ability_lasso()
+		return accepted
+	_request_ability_lasso.rpc_id(
+		1, _ability_lasso_request_sequence, true, id,
+		String(_ability_lasso_target_path))
+	return true
+
+
+func ability_lasso_active() -> bool:
+	return is_instance_valid(_ability_lasso_runtime) \
+		and is_instance_valid(_ability_lasso_target)
+
+
+func ability_lasso_casting() -> bool:
+	return is_instance_valid(_ability_lasso_runtime) \
+		and _ability_lasso_runtime.is_miss_cast()
+
+
+func ability_lasso_pending() -> bool:
+	return not ability_lasso_active() and not ability_lasso_casting() \
+		and _ability_lasso_pending_left > 0.0
+
+
+func ability_lasso_active_or_pending() -> bool:
+	return ability_lasso_active() or ability_lasso_casting() \
+		or ability_lasso_pending()
+
+
+func release_ability_lasso() -> void:
+	if _ability_lasso_id.is_empty():
+		return
+	if not _has_listeners():
+		var throw := _ability_lasso_runtime.throw_velocity() \
+			if is_instance_valid(_ability_lasso_runtime) else Vector3.ZERO
+		_finish_ability_lasso_local(throw)
+	elif multiplayer.is_server():
+		host_finish_ability_lasso()
+	else:
+		_ability_lasso_request_sequence += 1
+		_request_ability_lasso.rpc_id(
+			1, _ability_lasso_request_sequence, false,
+			_ability_lasso_id, "")
+
+
+## Called by the host-owned tether on timeout, target loss, or explicit release.
+func host_finish_ability_lasso() -> void:
+	if not _is_host_authority() or _ability_lasso_id.is_empty():
+		return
+	var throw := _ability_lasso_runtime.throw_velocity() \
+		if is_instance_valid(_ability_lasso_runtime) else Vector3.ZERO
+	var definition := ItemDB.ability_definition(_ability_lasso_id)
+	if definition != null:
+		throw = throw.limit_length(maxf(float(
+			definition.stats.get("max_speed", 55.0)), 1.0))
+	_publish_ability_lasso(false, _ability_lasso_id, "", throw)
+
+
+func publish_ability_lasso_motion(path: NodePath, at: Transform3D,
+		next_velocity: Vector3) -> void:
+	if not _is_host_authority() or not _has_listeners() \
+			or not at.is_finite() or not next_velocity.is_finite() \
+			or path != _ability_lasso_target_path:
+		return
+	_host_lasso_motion_sequence += 1
+	_apply_ability_lasso_motion.rpc(
+		_host_lasso_motion_sequence, String(path), at, next_velocity)
+
+
+func _find_ability_lasso_target(definition: AbilityDefinition,
+		reach: float) -> Node3D:
+	var best: Node3D
+	var best_miss := INF
+	for candidate_variant: Variant in get_tree().get_nodes_in_group(
+			DamageHit.COMBATANT_GROUP):
+		var candidate := candidate_variant as Node3D
+		if candidate == null or candidate == self \
+				or not _ability_lasso_target_valid(
+					candidate, definition, reach, true):
+			continue
+		var target_at := _combatant_point(candidate)
+		var from := camera.global_position
+		var look := look_direction().normalized()
+		var depth := (target_at - from).dot(look)
+		var miss := (target_at - from - look * depth).length()
+		if miss < best_miss:
+			best = candidate
+			best_miss = miss
+	return best
+
+
+func _ability_lasso_target_valid(target: Node3D,
+		definition: AbilityDefinition, reach: float,
+		require_aim: bool) -> bool:
+	if target == null or definition == null \
+			or not DamageHit.in_same_world(self, target) \
+			or not target.has_method(&"begin_lasso") \
+			or not target.has_method(&"lasso_simulate") \
+			or not target.has_method(&"end_lasso"):
+		return false
+	if target.has_method(&"can_be_lassoed") \
+			and not bool(target.call(&"can_be_lassoed")):
+		return false
+	if target.has_method(&"combat_faction"):
+		var faction := int(target.call(&"combat_faction"))
+		if faction == DamageHit.Faction.PLAYER \
+				and not definition.affects_players:
+			return false
+		if faction != DamageHit.Faction.PLAYER \
+				and faction != DamageHit.Faction.ENEMY:
+			return false
+	var target_at := _combatant_point(target)
+	var bounds := _combatant_bounds(target)
+	var gap := combat_position().distance_to(target_at) \
+		- combat_radius() - bounds
+	if gap > reach:
+		return false
+	if not require_aim:
+		return true
+	var from := camera.global_position
+	var look := look_direction().normalized()
+	var toward := target_at - from
+	var depth := toward.dot(look)
+	if depth <= 0.0:
+		return false
+	var miss := (toward - look * depth).length()
+	if miss > bounds + LASSO_AIM_PADDING:
+		return false
+	var query := PhysicsRayQueryParameters3D.create(from, target_at, 1)
+	query.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if hit.is_empty():
+		return true
+	return _node_belongs_to(hit.get("collider") as Node, target)
+
+
+func _publish_ability_lasso(starting: bool, id: String,
+		target_path: String, throw_velocity: Vector3) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if definition == null or definition.grapple_type \
+			!= AbilityDefinition.GrappleType.PHYSICS_TETHER:
+		return false
+	if starting:
+		if not target_path.is_empty():
+			var target := _grapple_target_from_path(target_path)
+			var reach := maxf(float(
+				definition.stats.get("range", 30.0)), 1.0)
+			if target == null or not _ability_lasso_target_valid(
+					target, definition, reach, true):
+				# The target may have moved while the request crossed the wire.
+				# Publish its miss instead of hiding the string from the owner.
+				target_path = ""
+	elif not ability_lasso_active_or_pending():
+		return false
+	if not throw_velocity.is_finite():
+		throw_velocity = Vector3.ZERO
+	throw_velocity = throw_velocity.limit_length(maxf(float(
+		definition.stats.get("max_speed", 55.0)), 1.0))
+	_host_ability_lasso_sequence += 1
+	_apply_ability_lasso.rpc(
+		_host_ability_lasso_sequence, starting, id,
+		target_path, throw_velocity)
+	return true
+
+
+func _start_ability_lasso_local(id: String,
+		target_path: String) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	var target := _grapple_target_from_path(target_path)
+	if definition == null or target == null:
+		_clear_ability_lasso()
+		return false
+	var accepted: Variant = target.call(&"begin_lasso", self)
+	if accepted is bool and not bool(accepted):
+		_clear_ability_lasso()
+		return false
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		target.call(&"end_lasso", Vector3.ZERO)
+		_clear_ability_lasso()
+		return false
+	_ability_lasso_id = id
+	_ability_lasso_target = target
+	_ability_lasso_target_path = NodePath(target_path)
+	_ability_lasso_pending_left = 0.0
+	_ability_lasso_runtime = AbilityLassoTether.create(
+		world, self, target, definition, _ability_lasso_target_path,
+		_is_host_authority())
+	if _ability_lasso_runtime == null:
+		target.call(&"end_lasso", Vector3.ZERO)
+		_clear_ability_lasso()
+		return false
+	var clip := definition.hover_animation \
+		if uses_float_pose() and not definition.hover_animation.is_empty() \
+		else definition.animation
+	play_ability_animation(
+		clip, float(definition.stats.get("animation_duration", 0.3)))
+	return true
+
+
+func _start_ability_lasso_miss_local(id: String) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	var world := DamageHit.game_world_of(self)
+	if definition == null or world == null:
+		_clear_ability_lasso()
+		return false
+	_ability_lasso_id = id
+	_ability_lasso_target = null
+	_ability_lasso_target_path = NodePath()
+	_ability_lasso_pending_left = 0.0
+	_ability_lasso_runtime = AbilityLassoTether.create_miss(
+		world, self, definition)
+	if _ability_lasso_runtime == null:
+		_clear_ability_lasso()
+		return false
+	_ability_lasso_runtime.miss_finished.connect(
+		_on_ability_lasso_miss_finished)
+	var clip := definition.hover_animation \
+		if uses_float_pose() and not definition.hover_animation.is_empty() \
+		else definition.animation
+	play_ability_animation(
+		clip, float(definition.stats.get("animation_duration", 0.3)))
+	return true
+
+
+func _on_ability_lasso_miss_finished(
+		tether: AbilityLassoTether) -> void:
+	if tether == _ability_lasso_runtime:
+		_clear_ability_lasso()
+
+
+func _finish_ability_lasso_local(throw_velocity: Vector3) -> void:
+	var target := _ability_lasso_target
+	if is_instance_valid(target) and target.has_method(&"end_lasso"):
+		target.call(&"end_lasso", throw_velocity)
+	if is_instance_valid(_ability_lasso_runtime):
+		_ability_lasso_runtime.queue_free()
+	_clear_ability_lasso()
+
+
+func _clear_ability_lasso() -> void:
+	_ability_lasso_id = ""
+	_ability_lasso_target = null
+	_ability_lasso_target_path = NodePath()
+	_ability_lasso_runtime = null
+	_ability_lasso_pending_left = 0.0
+
+
+func place_ability_wall(id: String) -> int:
+	var definition := ItemDB.ability_definition(id)
+	if not can_attack() or definition == null \
+			or definition.construct_type \
+				!= AbilityDefinition.ConstructType.BARRIER:
+		return 0
+	_ability_wall_request_sequence += 1
+	_ability_wall_result_sequence = _ability_wall_request_sequence
+	_ability_wall_result = ProjectileRequestState.PENDING
+	if not _has_listeners() or multiplayer.is_server():
+		var accepted := _publish_ability_wall(
+			_ability_wall_request_sequence, id)
+		_ability_wall_result = ProjectileRequestState.ACCEPTED \
+			if accepted else ProjectileRequestState.REJECTED
+		return _ability_wall_request_sequence if accepted else 0
+	_request_ability_wall.rpc_id(
+		1, _ability_wall_request_sequence, id)
+	return _ability_wall_request_sequence
+
+
+func ability_wall_request_state(request_sequence: int) -> int:
+	if request_sequence <= 0 \
+			or request_sequence != _ability_wall_result_sequence:
+		return ProjectileRequestState.REJECTED
+	return _ability_wall_result
+
+
+func _publish_ability_wall(request_sequence: int, id: String) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if not can_attack() or definition == null \
+			or definition.construct_type \
+				!= AbilityDefinition.ConstructType.BARRIER:
+		return false
+	var stats := definition.stats
+	var size := Vector3(
+		maxf(float(stats.get("wall_width", 8.0)), 0.2),
+		maxf(float(stats.get("wall_height", 4.0)), 0.2),
+		maxf(float(stats.get("wall_thickness", 0.35)), 0.05))
+	var up := _up().normalized()
+	var forward := look_direction()
+	forward -= up * forward.dot(up)
+	if forward.length_squared() < 0.001:
+		forward = -global_basis.z
+		forward -= up * forward.dot(up)
+	forward = forward.normalized()
+	var right := forward.cross(up).normalized()
+	var basis := Basis(right, up, right.cross(up)).orthonormalized()
+	var at := Transform3D(
+		basis,
+		global_position
+			+ forward * maxf(float(stats.get("range", 4.0)), 1.0)
+			+ up * (size.y * 0.5 + 0.18))
+	if not _ability_wall_space_clear(at, size):
+		return false
+	var world := DamageHit.game_world_of(self) as GameWorld
+	if world == null:
+		return false
+	var construct_id := world.allocate_ability_construct_id()
+	if construct_id <= 0:
+		return false
+	var variant := 2 if uses_float_pose() else 0
+	_host_ability_wall_sequence += 1
+	if not _has_listeners():
+		_apply_ability_wall(
+			_host_ability_wall_sequence, request_sequence, construct_id,
+			id, at, size,
+			maxf(float(stats.get("duration", 7.0)), 0.2),
+			maxf(float(stats.get("fade_duration", 4.0)), 0.0),
+			definition.tint, variant)
+	else:
+		_apply_ability_wall.rpc(
+			_host_ability_wall_sequence, request_sequence, construct_id,
+			id, at, size,
+			maxf(float(stats.get("duration", 7.0)), 0.2),
+			maxf(float(stats.get("fade_duration", 4.0)), 0.0),
+			definition.tint, variant)
+	return true
+
+
+func _ability_wall_space_clear(at: Transform3D,
+		size: Vector3) -> bool:
+	var shape := BoxShape3D.new()
+	# Placement keeps a small visible/collision gap around existing bodies.
+	shape.size = size + Vector3.ONE * 0.08
+	var query := PhysicsShapeQueryParameters3D.new()
+	query.shape = shape
+	query.transform = at
+	query.collision_mask = 1
+	query.collide_with_areas = false
+	query.exclude = [get_rid()]
+	return get_world_3d().direct_space_state \
+		.intersect_shape(query, 1).is_empty()
+
+
+func fire_ability_delayed_blast(id: String, from: Vector3,
+		along: Vector3) -> int:
+	var definition := ItemDB.ability_definition(id)
+	if not can_attack() or definition == null \
+			or definition.impact_type \
+				!= AbilityDefinition.ImpactType.DELAYED_BLAST \
+			or not from.is_finite() or not along.is_finite() \
+			or along.length_squared() < 0.001:
+		return 0
+	_delayed_blast_request_sequence += 1
+	_delayed_blast_result_sequence = _delayed_blast_request_sequence
+	_delayed_blast_result = ProjectileRequestState.PENDING
+	if not _has_listeners() or multiplayer.is_server():
+		var accepted := _publish_ability_delayed_blast(
+			_delayed_blast_request_sequence, id, from, along)
+		_delayed_blast_result = ProjectileRequestState.ACCEPTED \
+			if accepted else ProjectileRequestState.REJECTED
+		return _delayed_blast_request_sequence if accepted else 0
+	_request_ability_delayed_blast.rpc_id(
+		1, _delayed_blast_request_sequence, id, from, along)
+	return _delayed_blast_request_sequence
+
+
+func ability_delayed_blast_request_state(request_sequence: int) -> int:
+	if request_sequence <= 0 \
+			or request_sequence != _delayed_blast_result_sequence:
+		return ProjectileRequestState.REJECTED
+	return _delayed_blast_result
+
+
+func _publish_ability_delayed_blast(request_sequence: int, id: String,
+		from: Vector3, along: Vector3) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if not can_attack() or definition == null \
+			or definition.projectile_type \
+				!= AbilityDefinition.ProjectileType.BEAM \
+			or definition.impact_type \
+				!= AbilityDefinition.ImpactType.DELAYED_BLAST \
+			or not from.is_finite() or not along.is_finite() \
+			or from.distance_to(combat_position()) > 5.0 \
+			or along.length_squared() < 0.001:
+		return false
+	var host_eyes := eye_points()
+	var host_from: Vector3 = (host_eyes[0] + host_eyes[1]) * 0.5
+	var host_along := aim_direction(host_from).normalized()
+	if host_along.dot(along.normalized()) < 0.35:
+		return false
+	var reach := maxf(float(definition.stats.get("range", 14.0)), 1.0)
+	var target := host_from + host_along * reach
+	var hit := LaserEyes.terrain_surface(self, host_from, target)
+	if hit.is_empty():
+		return false
+	var at: Vector3 = hit["position"]
+	var normal: Vector3 = hit["normal"]
+	if not at.is_finite() or not normal.is_finite():
+		return false
+	var variant := 2 if uses_float_pose() else 0
+	_host_delayed_blast_sequence += 1
+	var warning := maxf(float(definition.stats.get("delay", 1.0)), 0.1)
+	if not _has_listeners():
+		_apply_ability_delayed_blast(
+			_host_delayed_blast_sequence, request_sequence, id,
+			host_from, at, normal, warning, variant)
+	else:
+		_apply_ability_delayed_blast.rpc(
+			_host_delayed_blast_sequence, request_sequence, id,
+			host_from, at, normal, warning, variant)
+	return true
+
+
+func _ability_grapple_move(delta: float) -> void:
+	if not is_instance_valid(_ability_grapple_target):
+		cancel_ability_grapple()
+		return
+	var launch_height := maxf(
+		float(_ability_grapple_stats.get("launch_height", 20.0)), 1.0)
+	var rise_speed := maxf(
+		float(_ability_grapple_stats.get("launch_speed", 32.0)), 1.0)
+	var slam_speed := maxf(
+		float(_ability_grapple_stats.get("slam_speed", 46.0)), 1.0)
+	var height := (global_position - _ability_grapple_origin).dot(
+		_ability_grapple_up)
+	match _ability_grapple_phase:
+		GrapplePhase.RISE:
+			velocity = _ability_grapple_up * rise_speed
+			move_and_slide()
+			height = (global_position - _ability_grapple_origin).dot(
+				_ability_grapple_up)
+			if height >= launch_height or get_slide_collision_count() > 0:
+				_ability_grapple_phase = GrapplePhase.APEX
+				_ability_grapple_apex_left = maxf(float(
+					_ability_grapple_stats.get("apex_time", 0.16)), 0.0)
+				velocity = Vector3.ZERO
+		GrapplePhase.APEX:
+			velocity = Vector3.ZERO
+			_ability_grapple_apex_left = maxf(
+				_ability_grapple_apex_left - delta, 0.0)
+			if _ability_grapple_apex_left <= 0.0:
+				_ability_grapple_phase = GrapplePhase.SLAM
+		GrapplePhase.SLAM:
+			velocity = -_ability_grapple_up * slam_speed
+			move_and_slide()
+			var caught := _catch_ground()
+			# Do not stop at the altitude the grapple began. A mid-air grab must
+			# keep descending until it reaches terrain, not "land" in empty air.
+			# A streamed collision can hold the capsule a few centimetres above
+			# the sampled height field. `_catch_ground` deliberately calls that
+			# a graze, but for this straight-down slam an actual floor contact is
+			# the landing and must finish the committed move.
+			if caught or _grounded():
+				_land_ability_grapple()
+				return
+	_carry_ability_grapple_target()
+
+
+func _carry_ability_grapple_target() -> void:
+	if is_instance_valid(_ability_grapple_target) \
+			and _ability_grapple_target.has_method(&"grapple_follow"):
+		_ability_grapple_target.call(
+			&"grapple_follow", grapple_carry_point(), _ability_grapple_up)
+
+
+func _land_ability_grapple() -> void:
+	var id := _ability_grapple_id
+	var definition := ItemDB.ability_definition(id)
+	var up := _up()
+	var forward := -global_basis.z
+	forward -= up * forward.dot(up)
+	var at := global_position + forward.normalized() * 0.8 \
+		if forward.length_squared() > 0.001 else global_position
+	_await_crater()
+	_finish_ability_grapple_local(true, at)
+	# Finish reaches the host first, so its copy is no longer in the
+	# attack-blocking GRAPPLE stance when the impact request follows.
+	_broadcast_ability_grapple_finish(id, true, at)
+	if definition != null and (not _has_listeners() \
+			or peer_id == multiplayer.get_unique_id()):
+		AbilityImpact.apply(self, definition, at, up)
+	_settle_into_crater(0.0)
 
 
 ## Throws the body forward, fist first. Returns whether the punch started.
@@ -4121,6 +5318,10 @@ func _meteor_contact(handled: Dictionary) -> Dictionary:
 ## the shape the requirement asks for.
 func _land_meteor(at: Vector3, struck: bool, arrival: float) -> void:
 	var force := _impact_scale(arrival)
+	var crater_radius := maxf(
+		float(_meteor_stats.get("crater_radius", METEOR_CRATER_RADIUS)), 0.1)
+	var crater_depth := maxf(
+		float(_meteor_stats.get("crater_depth", METEOR_CRATER_DEPTH)), 0.1)
 	var blow := DamageHit.area(at, METEOR_SPREAD * force,
 		float(_meteor_stats.get("impact", 0.0)) * force, 1.0)
 	blow.ability_id = "meteor_punch"
@@ -4138,7 +5339,7 @@ func _land_meteor(at: Vector3, struck: bool, arrival: float) -> void:
 	var world_planet := _planet_below()
 	var impact_up := world_planet.up_at(at) if world_planet != null else _up()
 	play_meteor_impact_dust(
-		at, impact_up, METEOR_CRATER_RADIUS * force, force)
+		at, impact_up, crater_radius * force, force)
 	if world_planet != null:
 		var centre := at
 		if not struck:
@@ -4149,7 +5350,7 @@ func _land_meteor(at: Vector3, struck: bool, arrival: float) -> void:
 		# second, flora-only volume is flat across the scar and quiet under the
 		# impact cloud; it cannot increase what another combatant takes.
 		var flatten := DamageHit.area(centre,
-			METEOR_CRATER_RADIUS * force + METEOR_FLORA_MARGIN,
+			crater_radius * force + METEOR_FLORA_MARGIN,
 			maxf(METEOR_FLORA_DAMAGE,
 				float(_meteor_stats.get("impact", 0.0)) * force), 0.0)
 		flatten.ability_id = "meteor_punch"
@@ -4158,8 +5359,8 @@ func _land_meteor(at: Vector3, struck: bool, arrival: float) -> void:
 		deal_damage(flatten)
 		var scar := TerrainScars.Scar.new()
 		scar.direction = world_planet.to_local(centre).normalized()
-		scar.radius = METEOR_CRATER_RADIUS * force
-		scar.depth = METEOR_CRATER_DEPTH * force
+		scar.radius = crater_radius * force
+		scar.depth = crater_depth * force
 		scar.profile = TerrainScars.Profile.BOWL if struck \
 			else TerrainScars.Profile.CONE
 		# Broken ground rather than burned. A punch does not scorch, and the
@@ -4179,6 +5380,10 @@ func _land_meteor(at: Vector3, struck: bool, arrival: float) -> void:
 	# The same pose a steep flight landing gets, and for the same reason: the
 	# crater is already in the height field by the time the pose finishes, so
 	# the player stands up at the bottom of the hole they just made.
+	var definition := ItemDB.ability_definition("meteor_punch")
+	_hero_clip = String(definition.impact_animation) \
+		if definition != null and not definition.impact_animation.is_empty() \
+		else "HeroLand"
 	_hero_left = HERO_LANDING_TIME
 	_apply_stance(Stance.HERO)
 	# Once now, because on a host and in a single-player session the hole was cut
@@ -4255,17 +5460,25 @@ func _field_radius_here() -> float:
 		local.normalized(), planet.spacing_underfoot())
 
 
-## Where the right fist is in the world. The punch's damage hangs off this, so
-## it follows the arm through the clip rather than sitting at the body's centre.
-func fist_point() -> Vector3:
+## Where either animated hand is in the world. Starfire alternates these, while
+## Meteor Punch keeps the right-hand convenience wrapper below.
+func hand_point(left := false) -> Vector3:
 	var skeleton := Wardrobe.skeleton_of(character) if character != null else null
 	if skeleton != null:
-		var bone := skeleton.find_bone(&"RightHand")
+		var bone_name := &"LeftHand" if left else &"RightHand"
+		var bone := skeleton.find_bone(bone_name)
 		if bone >= 0:
 			return skeleton.global_transform \
 				* skeleton.get_bone_global_pose(bone) * Vector3.ZERO
 	return global_position + _up() * (_body_height * 0.6) \
-		+ _meteor_along * (_body_height * 0.45)
+		- global_basis.z * (_body_height * 0.35) \
+		+ global_basis.x * (-0.28 if left else 0.28)
+
+
+## Where the right fist is in the world. The punch's damage hangs off this, so
+## it follows the arm through the clip rather than sitting at the body's centre.
+func fist_point() -> Vector3:
+	return hand_point(false)
 
 
 ## Hands one volume of damage to every peer, including this one.
@@ -4291,8 +5504,39 @@ func deal_damage(hit: DamageHit) -> void:
 			1, _combat_event_sequence, hit.to_wire())
 
 
-func _publish_hero_combat_hit(hit: DamageHit) -> void:
-	if hit == null or not can_attack():
+## Host-only path for an effect whose cast was already approved and whose
+## consequence was built from its AbilityDefinition. Unlike a client hero
+## packet, the trusted reaction and radial impulse must survive serialization.
+func deal_authoritative_ability_damage(hit: DamageHit) -> void:
+	if hit == null or not _is_host_authority() \
+			or ItemDB.ability_definition(hit.ability_id) == null:
+		return
+	hit.faction = DamageHit.Faction.PLAYER
+	hit.set_source(self, peer_id)
+	if not _has_listeners():
+		DamageHit.apply_to_world(self, hit)
+	else:
+		_publish_hero_combat_hit(hit, false)
+
+
+## Separate player-facing half of a hero blast. Player-authored hits normally
+## target enemies; this host-built ENEMY-faction volume reaches other players,
+## while the standard source exclusion keeps the caster immune to its damage.
+func deal_authoritative_player_damage(hit: DamageHit) -> void:
+	var definition := ItemDB.ability_definition(
+		hit.ability_id if hit != null else "")
+	if hit == null or not _is_host_authority() or definition == null \
+			or not definition.affects_players:
+		return
+	hit.faction = DamageHit.Faction.ENEMY
+	hit.affects_flora = false
+	hit.set_source(self, peer_id)
+	DamageHit.apply_to_combatants(self, hit)
+
+
+func _publish_hero_combat_hit(hit: DamageHit,
+		require_attack := true) -> void:
+	if hit == null or (require_attack and not can_attack()):
 		return
 	# The server's event sequence is independent from a client's request
 	# sequence, so reconnects and two sources cannot collide.
@@ -5078,14 +6322,26 @@ func _update_animation(delta: float) -> void:
 
 	var speed := _horizontal_speed()
 	if _stance == Stance.HERO:
-		_play("HeroLand")
+		_play(_hero_clip)
 	elif _stance == Stance.CRASH:
 		# There is no crash clip. `Fall` is the loosest pose the character has and
 		# the tumble is what sells it; `Land` is a knee bend, which read the right
 		# way round is someone pushing themselves back up.
 		_play("Land" if _crash_left < CRASH_RISE else "Fall")
+	elif _stance == Stance.GRAPPLE:
+		var grapple_definition := ItemDB.ability_definition(_ability_grapple_id)
+		var held_clip := String(grapple_definition.held_animation) \
+			if grapple_definition != null else "GrappleCarry"
+		_play(_ability_clip if _ability_clip_left > 0.0 else held_clip,
+			1.0, METEOR_CLIP_BLEND)
 	elif _stance == Stance.METEOR:
-		_play("MeteorFly", 1.0, METEOR_CLIP_BLEND)
+		var meteor_definition := ItemDB.ability_definition("meteor_punch")
+		var meteor_clip := String(meteor_definition.animation) \
+			if meteor_definition != null \
+				and not meteor_definition.animation.is_empty() else "MeteorFly"
+		_play(meteor_clip, 1.0, METEOR_CLIP_BLEND)
+	elif _ability_clip_left > 0.0 and not _ability_clip.is_empty():
+		_play(_ability_clip, 1.0, METEOR_CLIP_BLEND)
 	elif _stance == Stance.FLY:
 		# The two ends of one continuum, crossfaded at the point the body is about
 		# halfway over: the lean is doing most of the work either side of it.
@@ -5238,6 +6494,8 @@ func _hud_motion_state() -> String:
 			return "hero landing"
 		Stance.METEOR:
 			return "meteor punch"
+		Stance.GRAPPLE:
+			return "grappling"
 		Stance.CRASH:
 			return "crashed"
 	if _horizontal_speed() > sprint_speed:
@@ -5281,6 +6539,8 @@ func _speed_limit(stance: int) -> float:
 		return fly_speed * 1.2
 	if stance == Stance.SWIM:
 		return maxf(swim_sprint_speed, fly_speed * swim_entry_keep) * 1.2
+	if stance == Stance.GRAPPLE:
+		return 70.0
 	# A slide leaves the ground run at 1.15 times what it entered on.
 	return run_top_speed * 1.25
 
@@ -5295,7 +6555,8 @@ func _submit_state(next_transform: Transform3D, next_velocity: Vector3, look_pit
 	if sender != peer_id:
 		return
 	var next_stance := clampi(stance, 0, Stance.size() - 1)
-	if _dead or _grabbed or _stagger_left > 0.0 or _forced_ragdoll \
+	if _dead or _grabbed or _lassoed or _stagger_left > 0.0 \
+			or _forced_ragdoll \
 			or (next_stance == Stance.FLY
 				and statuses.has(CombatStatuses.FLIGHTLESS)):
 		_apply_state.rpc_id(sender, global_transform, velocity, _pitch, _stance)
@@ -5397,6 +6658,252 @@ func _apply_ability_beam(event_sequence: int, id: String,
 	LaserEyes.apply_effect(self, id, left_eye, right_eye, at, landed)
 
 
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_projectile(request_sequence: int, id: String,
+		from: Vector3, along: Vector3, inherited_velocity: Vector3,
+		variant: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id \
+			or request_sequence <= _last_projectile_request_sequence:
+		return
+	_last_projectile_request_sequence = request_sequence
+	if not _publish_ability_projectile(
+			request_sequence, id, from, along, inherited_velocity, variant):
+		_reject_ability_projectile.rpc_id(sender, request_sequence)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _reject_ability_projectile(request_sequence: int) -> void:
+	if request_sequence == _projectile_result_sequence:
+		_projectile_result = ProjectileRequestState.REJECTED
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_ability_projectile(event_sequence: int, request_sequence: int,
+		id: String, from: Vector3, along: Vector3,
+		inherited_velocity: Vector3, variant: int) -> void:
+	if event_sequence <= _last_projectile_sequence:
+		return
+	_last_projectile_sequence = event_sequence
+	var definition := ItemDB.ability_definition(id)
+	if definition == null \
+			or definition.projectile_type == AbilityDefinition.ProjectileType.NONE \
+			or not from.is_finite() or not along.is_finite() \
+			or not inherited_velocity.is_finite() \
+			or along.length_squared() < 0.001:
+		return
+	var spawned := _spawn_ability_projectile(
+		id, from, along.normalized(), inherited_velocity, clampi(variant, 0, 3))
+	if peer_id == multiplayer.get_unique_id() \
+			and request_sequence == _projectile_result_sequence:
+		_projectile_result = ProjectileRequestState.ACCEPTED \
+			if spawned else ProjectileRequestState.REJECTED
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_grapple(request_sequence: int, starting: bool,
+		landed: bool, id: String, target_path: String,
+		impact_at: Vector3) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id \
+			or request_sequence <= _last_ability_grapple_request_sequence:
+		return
+	_last_ability_grapple_request_sequence = request_sequence
+	if starting and not can_attack():
+		_reject_ability_grapple.rpc_id(sender, request_sequence)
+		return
+	if not _publish_ability_grapple(
+			starting, landed, id, target_path, impact_at) and starting:
+		_reject_ability_grapple.rpc_id(sender, request_sequence)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _reject_ability_grapple(request_sequence: int) -> void:
+	if request_sequence != _ability_grapple_request_sequence \
+			or grapple_active():
+		return
+	_finish_ability_grapple_local(false, global_position)
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_ability_grapple(event_sequence: int, starting: bool,
+		landed: bool, id: String, target_path: String,
+		impact_at: Vector3) -> void:
+	if event_sequence <= _last_ability_grapple_sequence:
+		return
+	_last_ability_grapple_sequence = event_sequence
+	if starting:
+		_start_ability_grapple_local(id, target_path)
+	elif _ability_grapple_id == id or grapple_active_or_pending() \
+			or _stance == Stance.GRAPPLE:
+		_finish_ability_grapple_local(landed, impact_at)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_lasso(request_sequence: int, starting: bool,
+		id: String, target_path: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id \
+			or request_sequence <= _last_ability_lasso_request_sequence:
+		return
+	_last_ability_lasso_request_sequence = request_sequence
+	if starting:
+		if not can_attack() or not _publish_ability_lasso(
+				true, id, target_path, Vector3.ZERO):
+			_reject_ability_lasso.rpc_id(sender, request_sequence)
+		return
+	if id == _ability_lasso_id:
+		host_finish_ability_lasso()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _reject_ability_lasso(request_sequence: int) -> void:
+	if request_sequence != _ability_lasso_request_sequence \
+			or ability_lasso_active():
+		return
+	_clear_ability_lasso()
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_ability_lasso(event_sequence: int, starting: bool,
+		id: String, target_path: String,
+		throw_velocity: Vector3) -> void:
+	if event_sequence <= _last_ability_lasso_sequence \
+			or not throw_velocity.is_finite():
+		return
+	_last_ability_lasso_sequence = event_sequence
+	if starting:
+		if target_path.is_empty():
+			_start_ability_lasso_miss_local(id)
+		else:
+			_start_ability_lasso_local(id, target_path)
+	elif _ability_lasso_id == id or ability_lasso_active_or_pending():
+		_finish_ability_lasso_local(throw_velocity)
+
+
+@rpc("authority", "call_local", "unreliable_ordered")
+func _apply_ability_lasso_motion(sequence: int, target_path: String,
+		at: Transform3D, next_velocity: Vector3) -> void:
+	if sequence <= _last_lasso_motion_sequence or not at.is_finite() \
+			or not next_velocity.is_finite() \
+			or NodePath(target_path) != _ability_lasso_target_path:
+		return
+	_last_lasso_motion_sequence = sequence
+	var target := _grapple_target_from_path(target_path)
+	if target != null and target.has_method(&"lasso_apply_network_motion"):
+		target.call(
+			&"lasso_apply_network_motion", at, next_velocity)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_wall(request_sequence: int, id: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id \
+			or request_sequence <= _last_ability_wall_request_sequence:
+		return
+	_last_ability_wall_request_sequence = request_sequence
+	if not _publish_ability_wall(request_sequence, id):
+		_reject_ability_wall.rpc_id(sender, request_sequence)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _reject_ability_wall(request_sequence: int) -> void:
+	if request_sequence == _ability_wall_result_sequence:
+		_ability_wall_result = ProjectileRequestState.REJECTED
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_ability_wall(event_sequence: int, request_sequence: int,
+		construct_id: int, id: String, at: Transform3D, size: Vector3,
+		duration: float, fade_duration: float, tint: Color,
+		variant: int) -> void:
+	if event_sequence <= _last_ability_wall_sequence or construct_id <= 0 \
+			or not at.is_finite() or not size.is_finite() \
+			or not is_finite(duration) or not is_finite(fade_duration):
+		return
+	var definition := ItemDB.ability_definition(id)
+	if definition == null or definition.construct_type \
+			!= AbilityDefinition.ConstructType.BARRIER:
+		return
+	_last_ability_wall_sequence = event_sequence
+	var world := DamageHit.game_world_of(self) as GameWorld
+	if world == null:
+		return
+	world.spawn_ability_barrier_local(
+		construct_id, peer_id, at, size,
+		clampf(duration, 0.2, 30.0),
+		clampf(fade_duration, 0.0, clampf(duration, 0.2, 30.0)), tint)
+	var clip := definition.hover_animation \
+		if (variant & 2) != 0 and not definition.hover_animation.is_empty() \
+		else definition.animation
+	play_ability_animation(
+		clip, float(definition.stats.get("animation_duration", 0.45)))
+	if peer_id == multiplayer.get_unique_id() \
+			and request_sequence == _ability_wall_result_sequence:
+		_ability_wall_result = ProjectileRequestState.ACCEPTED
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_delayed_blast(request_sequence: int, id: String,
+		from: Vector3, along: Vector3) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id \
+			or request_sequence <= _last_delayed_blast_request_sequence:
+		return
+	_last_delayed_blast_request_sequence = request_sequence
+	if not _publish_ability_delayed_blast(
+			request_sequence, id, from, along):
+		_reject_ability_delayed_blast.rpc_id(sender, request_sequence)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _reject_ability_delayed_blast(request_sequence: int) -> void:
+	if request_sequence == _delayed_blast_result_sequence:
+		_delayed_blast_result = ProjectileRequestState.REJECTED
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_ability_delayed_blast(event_sequence: int,
+		request_sequence: int, id: String, from: Vector3,
+		at: Vector3, normal: Vector3, warning: float,
+		variant: int) -> void:
+	if event_sequence <= _last_delayed_blast_sequence \
+			or not from.is_finite() or not at.is_finite() \
+			or not normal.is_finite() or not is_finite(warning):
+		return
+	var definition := ItemDB.ability_definition(id)
+	if definition == null or definition.impact_type \
+			!= AbilityDefinition.ImpactType.DELAYED_BLAST:
+		return
+	_last_delayed_blast_sequence = event_sequence
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return
+	var eyes := eye_points()
+	laser_beams().aim(eyes[0], eyes[1], at, definition.tint)
+	AbilityDelayedBlast.create(
+		world, self, definition, from, at, normal,
+		clampf(warning, 0.1, 5.0), _is_host_authority())
+	var clip := definition.hover_animation \
+		if (variant & 2) != 0 and not definition.hover_animation.is_empty() \
+		else definition.animation
+	play_ability_animation(
+		clip, float(definition.stats.get("animation_duration", 0.4)))
+	if peer_id == multiplayer.get_unique_id() \
+			and request_sequence == _delayed_blast_result_sequence:
+		_delayed_blast_result = ProjectileRequestState.ACCEPTED
+
+
 ## Backward-compatible local helper retained for older harnesses.
 func _ability_beam(id: String, left_eye: Vector3, right_eye: Vector3,
 		at: Vector3, landed: bool) -> void:
@@ -5413,6 +6920,36 @@ func _meteor_impact_cloud(at: Vector3, facing: Vector3,
 	if not at.is_finite() or not facing.is_finite():
 		return
 	dust.impact_cloud(at, facing, radius, strength)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_explosion(request_sequence: int, at: Vector3,
+		radius: float, tint: Color, duration: float, massive: bool,
+		nuclear: bool) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id \
+			or request_sequence <= _last_ability_explosion_request_sequence:
+		return
+	_last_ability_explosion_request_sequence = request_sequence
+	_publish_ability_explosion(
+		at, radius, tint, duration, massive, nuclear, true)
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_ability_explosion(event_sequence: int, at: Vector3,
+		radius: float, tint: Color, duration: float, massive: bool,
+		nuclear: bool, predicted_owner: bool) -> void:
+	if event_sequence <= _last_ability_explosion_sequence \
+			or not at.is_finite() or not is_finite(radius) \
+			or not is_finite(duration):
+		return
+	_last_ability_explosion_sequence = event_sequence
+	if predicted_owner and not multiplayer.is_server() \
+			and peer_id == multiplayer.get_unique_id():
+		return
+	_spawn_ability_explosion(at, radius, tint, duration, massive, nuclear)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -5562,7 +7099,8 @@ func _sender_owns_this_player() -> bool:
 @rpc("authority", "call_remote", "unreliable_ordered")
 func _apply_state(next_transform: Transform3D, next_velocity: Vector3, look_pitch: float, stance: int) -> void:
 	var local_owner := peer_id == multiplayer.get_unique_id()
-	var authoritative_override := _dead or _grabbed or _stagger_left > 0.0 \
+	var authoritative_override := _dead or _grabbed or _lassoed \
+		or _stagger_left > 0.0 \
 		or _forced_ragdoll \
 		or (statuses.has(CombatStatuses.FLIGHTLESS) and _stance == Stance.FLY)
 	if local_owner and not authoritative_override:

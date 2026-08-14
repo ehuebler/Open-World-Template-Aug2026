@@ -105,6 +105,20 @@ uniform float night_pulse_speed : hint_range(0.0, 2.0) = 0.3;
 uniform float night_emission_albedo : hint_range(0.0, 1.0) = 0.38;
 group_uniforms;
 
+group_uniforms Creature_Gait;
+// Optional one-mesh quadruped gait. COLOR_0 identifies authored leg/foot
+// vertices, leaving the body rigid while four phase-offset legs swing and lift.
+uniform bool quadruped_gait = false;
+uniform vec3 gait_leg_mask_color : source_color = vec3(0.09, 0.14, 0.23);
+uniform float gait_leg_mask_tolerance : hint_range(0.01, 1.0) = 0.16;
+uniform float gait_authored_height = 1.0;
+uniform float gait_leg_top_share : hint_range(0.1, 0.8) = 0.42;
+uniform float gait_phase = 0.0;
+uniform float gait_amount : hint_range(0.0, 1.0) = 0.0;
+uniform float gait_swing = 0.1;
+uniform float gait_lift = 0.04;
+group_uniforms;
+
 group_uniforms Distance_Growth;
 // Disabled for ordinary props. Large instanced flora can opt in so each
 // instance rises from its rooted origin as the viewer approaches, matching the
@@ -120,6 +134,31 @@ varying float v_night_phase;
 varying float v_night_rate;
 
 void vertex() {
+	if (quadruped_gait && gait_amount > 0.0) {
+		float colour_gap = distance(COLOR.rgb, gait_leg_mask_color);
+		float semantic_leg = 1.0 - smoothstep(
+			gait_leg_mask_tolerance * 0.45,
+			gait_leg_mask_tolerance, colour_gap);
+		float leg_top = max(gait_authored_height * gait_leg_top_share, 0.001);
+		float down_leg = clamp((leg_top - VERTEX.y) / leg_top, 0.0, 1.0);
+		float leg_weight = semantic_leg * down_leg * gait_amount;
+
+		bool right = VERTEX.x >= 0.0;
+		bool front = VERTEX.z <= 0.0;
+		float leg_offset = 0.0;
+		if (!front && right) {
+			leg_offset = TAU * 0.25;
+		} else if (front && right) {
+			leg_offset = TAU * 0.5;
+		} else if (!front && !right) {
+			leg_offset = TAU * 0.75;
+		}
+		float leg_cycle = gait_phase + leg_offset;
+		float stride = sin(leg_cycle);
+		float lift = pow(max(stride, 0.0), 2.0);
+		VERTEX.z += stride * gait_swing * leg_weight;
+		VERTEX.y += lift * gait_lift * leg_weight;
+	}
 	if (distance_growth) {
 		vec3 base = MODEL_MATRIX[3].xyz;
 		float growth = 1.0 - smoothstep(growth_full_within,

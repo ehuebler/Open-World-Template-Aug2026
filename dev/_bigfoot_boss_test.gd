@@ -218,6 +218,7 @@ func _ready() -> void:
 	boss.call(&"_capture_spawn")
 
 	_check_combatant(boss, player)
+	await _check_player_grapple(boss, player)
 	_check_camera_rim(boss)
 	_check_arena_boundary(boss)
 	_check_arena_containment(boss)
@@ -291,6 +292,46 @@ func _check_combatant(boss: CharacterBody3D, player: TestPlayer) -> void:
 	boss.connect(&"damaged_flash", func(strength: float) -> void: flashes[0] = strength)
 	boss.call(&"flash_damage", 0.5)
 	_expect(flashes[0] > 0.0, "flash_damage emits damaged_flash")
+
+
+func _check_player_grapple(boss: CharacterBody3D, player: TestPlayer) -> void:
+	boss.call(&"_reset_arena")
+	var start := boss.global_transform
+	var up := start.basis.y.normalized()
+	boss.call(&"_start_attack", &"punch")
+	_expect(bool(boss.call(&"can_be_grappled")),
+		"a living Bigfoot exposes the generalized grapple target interface")
+	_expect(bool(boss.call(&"begin_grapple", player))
+		and StringName(boss.get("_attack")).is_empty(),
+		"grappling Bigfoot interrupts his current boss attack")
+	var carried_to := start.origin + up * 20.0
+	boss.call(&"grapple_follow", carried_to, up)
+	_expect((boss.call(&"combat_position") as Vector3).distance_to(
+		carried_to) < 0.05,
+		"Bigfoot follows the same twenty-metre carry socket as other targets")
+	boss.call(&"end_grapple", start.origin, up)
+	await get_tree().process_frame
+	var collision := boss.get_node(^"CollisionShape3D") as CollisionShape3D
+	_expect(bool(boss.call(&"can_be_grappled"))
+		and collision != null and not collision.disabled,
+		"the slam releases Bigfoot and restores his collision")
+
+	boss.call(&"_start_attack", &"rock")
+	_expect(bool(boss.call(&"begin_lasso", player))
+		and bool(boss.call(&"is_lassoed"))
+		and StringName(boss.get("_attack")).is_empty()
+		and is_equal_approx(float(boss.call(&"lasso_mass")), 8.0),
+		"Lasso captures Bigfoot, interrupts attacks, and applies boss mass")
+	boss.call(&"lasso_simulate", Vector3.RIGHT * 0.4,
+		Vector3(9.0, 3.0, 0.0))
+	_expect(not collision.disabled,
+		"Lasso keeps Bigfoot collision active while he is swung")
+	boss.call(&"end_lasso", Vector3(12.0, 4.0, 0.0))
+	await get_tree().process_frame
+	_expect(bool(boss.call(&"can_be_lassoed"))
+		and not bool(boss.call(&"is_lassoed"))
+		and boss.velocity.length() > 10.0 and not collision.disabled,
+		"Lasso throw restores Bigfoot control and preserves release velocity")
 
 
 func _check_camera_rim(boss: CharacterBody3D) -> void:

@@ -62,10 +62,6 @@ var _dwell := 0.0
 var _dwell_burned := false
 
 
-func _configure() -> void:
-	blocked_underwater = true
-
-
 func _press() -> bool:
 	_left = stat("duration", 4.0)
 	_since_damage = DAMAGE_STEP
@@ -144,6 +140,22 @@ static func _surface(shooter: OnlinePlayer, from: Vector3,
 			return hit
 		ignored.append(hit["rid"])
 	return {}
+
+
+## The first real terrain face between two points. Planet terrain colliders are
+## internal StaticBody3Ds parented directly to Planet; requiring that exact
+## relationship keeps a delayed terrain mark off props, actors and barriers.
+static func terrain_surface(shooter: OnlinePlayer, from: Vector3,
+		to: Vector3) -> Dictionary:
+	var hit := _surface(shooter, from, to)
+	if hit.is_empty():
+		return {}
+	var world_planet := shooter.planet()
+	var collider := hit.get("collider") as Node
+	if world_planet == null or collider == null \
+			or collider.get_parent() != world_planet:
+		return {}
+	return hit
 
 
 ## Whether a ray hit a plant. Both fields hang the ownership metadata on the

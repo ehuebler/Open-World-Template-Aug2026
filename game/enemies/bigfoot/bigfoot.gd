@@ -369,6 +369,13 @@ var _meteor_sweep_left := 0.0
 var _meteor_landed := false
 
 var _grabbed_peer := 0
+## The inverse of Bigfoot's own grab: a player ability is carrying the boss.
+var _grappled := false
+var _grapple_carrier_peer := 0
+var _grapple_carrier: Node3D
+var _lassoed := false
+var _lasso_source_peer := 0
+var _lasso_knockback_left := 0.0
 var _arena_empty_left := 0.0
 
 var _ground_speed := 0.0
@@ -476,7 +483,41 @@ func _level_to_surface() -> void:
 		* global_basis).orthonormalized()
 
 
+func _upright_basis(forward: Vector3, up: Vector3) -> Basis:
+	up = up.normalized()
+	forward -= up * forward.dot(up)
+	if forward.length_squared() < 0.001:
+		var hint := Vector3.FORWARD if absf(up.z) < 0.9 else Vector3.RIGHT
+		forward = hint - up * hint.dot(up)
+	forward = forward.normalized()
+	var right := forward.cross(up).normalized()
+	return Basis(right, up, right.cross(up).normalized()).orthonormalized()
+
+
 func _physics_process(delta: float) -> void:
+	if _grappled:
+		_tick_grappled(delta)
+		_update_presentation(delta)
+		return
+	if _lassoed:
+		_update_presentation(delta)
+		return
+	if _lasso_knockback_left > 0.0 and _is_host():
+		_lasso_knockback_left = maxf(_lasso_knockback_left - delta, 0.0)
+		var up := _up()
+		up_direction = up
+		var gravity := float(ProjectSettings.get_setting(
+			"physics/3d/default_gravity", 34.0))
+		velocity -= up * gravity * delta
+		move_and_slide()
+		if is_on_floor():
+			velocity = velocity.move_toward(Vector3.ZERO, 20.0 * delta)
+		_sync_left -= delta
+		if _sync_left <= 0.0:
+			_sync_left = SYNC_INTERVAL
+			_publish_sync(false)
+		_update_presentation(delta)
+		return
 	# Reading bone poses forces the skeleton to resolve, and nothing looks at a
 	# fist or a mouth unless he is swinging one or carrying somebody. While he is
 	# simply crossing his jungle the markers ride along as ordinary children.
@@ -491,6 +532,24 @@ func _physics_process(delta: float) -> void:
 	else:
 		_client_tick(delta)
 	_update_presentation(delta)
+
+
+func _tick_grappled(delta: float) -> void:
+	if not is_instance_valid(_grapple_carrier) and _grapple_carrier_peer > 0:
+		_grapple_carrier = _player_by_peer(_grapple_carrier_peer) as Node3D
+	if is_instance_valid(_grapple_carrier) \
+			and _grapple_carrier.has_method(&"grapple_carry_point"):
+		grapple_follow(
+			_grapple_carrier.call(&"grapple_carry_point"),
+			_grapple_carrier.global_basis.y)
+	elif _is_host():
+		end_grapple(global_position, _up())
+	if _is_host():
+		_process_cooldowns(delta)
+		_sync_left -= delta
+		if _sync_left <= 0.0:
+			_sync_left = SYNC_INTERVAL
+			_publish_sync(false)
 
 
 func _host_tick(delta: float) -> void:
@@ -575,6 +634,8 @@ func _begin_aggro() -> void:
 
 func _reset_arena() -> void:
 	_release_grabbed()
+	_clear_player_grapple()
+	_clear_player_lasso()
 	set_arena_boundary_visible(false)
 	_attack = &""
 	_attack_left = 0.0
@@ -1859,6 +1920,10 @@ func boss_snapshot() -> Dictionary:
 		"roar_radius": _roar_radius,
 		"roar_origin": _roar_origin,
 		"grabbed_peer": _grabbed_peer,
+		"grappled": _grappled,
+		"grapple_carrier_peer": _grapple_carrier_peer,
+		"lassoed": _lassoed,
+		"lasso_source_peer": _lasso_source_peer,
 		"meteor_landed": _meteor_landed,
 		"sync_sequence": _sync_sequence,
 	}
@@ -1886,6 +1951,15 @@ func apply_boss_snapshot(wire: Dictionary) -> void:
 	_defeated = bool(wire.get("defeated", _defeated))
 	_target_peer = int(wire.get("target_peer", 0))
 	_grabbed_peer = int(wire.get("grabbed_peer", 0))
+	_grappled = bool(wire.get("grappled", _grappled))
+	_grapple_carrier_peer = int(wire.get(
+		"grapple_carrier_peer", _grapple_carrier_peer))
+	_grapple_carrier = _player_by_peer(_grapple_carrier_peer) as Node3D \
+		if _grappled and _grapple_carrier_peer > 0 else null
+	_set_grapple_collision(_grappled)
+	_lassoed = bool(wire.get("lassoed", _lassoed))
+	_lasso_source_peer = int(wire.get(
+		"lasso_source_peer", _lasso_source_peer)) if _lassoed else 0
 	_meteor_landed = bool(wire.get("meteor_landed", _meteor_landed))
 	var transform_variant: Variant = wire.get("transform", global_transform)
 	if transform_variant is Transform3D:
@@ -1950,6 +2024,183 @@ func combat_radius() -> float:
 	return 0.72
 
 
+func can_be_grappled() -> bool:
+	return not _defeated and _health > 0.0 and not _grappled \
+		and not _lassoed
+
+
+func begin_grapple(carrier: Node3D) -> bool:
+	if not can_be_grappled() or carrier == null:
+		return false
+	_release_grabbed()
+	_attack = &""
+	_attack_left = 0.0
+	_attack_fired = false
+	_grab_strike_done = false
+	_throw_released = false
+	_melee_whiffed = false
+	_attack_hit_peers.clear()
+	_ground_speed = 0.0
+	velocity = Vector3.ZERO
+	_grappled = true
+	_grapple_carrier = carrier
+	_grapple_carrier_peer = _peer_id(carrier)
+	_set_grapple_collision(true)
+	_play_clip(CLIP_IDLE)
+	if is_instance_valid(_meteor_shock):
+		_meteor_shock.stop()
+	if is_instance_valid(_roar_wave) and _roar_wave.has_method(&"clear"):
+		_roar_wave.call(&"clear")
+	if _is_host():
+		if not _engaged:
+			_begin_aggro()
+		_publish_sync(true)
+	return true
+
+
+func grapple_follow(centre: Vector3, up: Vector3) -> void:
+	if not _grappled or not centre.is_finite():
+		return
+	up = up.normalized() if up.length_squared() > 0.001 else _up()
+	global_position = centre - up * 1.58
+	global_basis = _upright_basis(-global_basis.z, up)
+	velocity = Vector3.ZERO
+	reset_physics_interpolation()
+
+
+func end_grapple(at: Vector3, up: Vector3) -> void:
+	if not _grappled:
+		return
+	_clear_player_grapple()
+	if at.is_finite():
+		global_position = at
+	if up.length_squared() > 0.001:
+		global_basis = _upright_basis(-global_basis.z, up.normalized())
+	_level_to_surface()
+	_snap_to_ground()
+	velocity = Vector3.ZERO
+	_target_transform = global_transform
+	_target_velocity = Vector3.ZERO
+	_has_target = true
+	_extrapolated = 0.0
+	reset_physics_interpolation()
+	if not _defeated:
+		_play_clip(CLIP_IDLE)
+	if _is_host():
+		_publish_sync(true)
+
+
+func can_be_lassoed() -> bool:
+	return not _defeated and _health > 0.0 and not _grappled \
+		and not _lassoed
+
+
+func begin_lasso(source: Node3D) -> bool:
+	if not can_be_lassoed() or source == null:
+		return false
+	_release_grabbed()
+	_attack = &""
+	_attack_left = 0.0
+	_attack_fired = false
+	_grab_pending = false
+	_grab_strike_done = false
+	_throw_released = false
+	_melee_whiffed = false
+	_attack_hit_peers.clear()
+	_ground_speed = 0.0
+	_lasso_knockback_left = 0.0
+	velocity = Vector3.ZERO
+	_lassoed = true
+	_lasso_source_peer = int(source.get("peer_id")) \
+		if source.get("peer_id") != null else 0
+	_set_grapple_collision(false)
+	_play_clip(CLIP_IDLE)
+	if is_instance_valid(_meteor_shock):
+		_meteor_shock.stop()
+	if _is_host():
+		if not _engaged:
+			_begin_aggro()
+		_publish_sync(true)
+	return true
+
+
+func lasso_simulate(motion: Vector3,
+		next_velocity: Vector3) -> Dictionary:
+	if not _is_host() or not _lassoed or not motion.is_finite() \
+			or not next_velocity.is_finite():
+		return {}
+	var collision := move_and_collide(motion)
+	velocity = next_velocity
+	_target_transform = global_transform
+	_target_velocity = velocity
+	_has_target = true
+	_extrapolated = 0.0
+	if collision == null:
+		return {"collided": false}
+	return {
+		"collided": true,
+		"normal": collision.get_normal(),
+		"position": collision.get_position(),
+		"collider": collision.get_collider(),
+	}
+
+
+func lasso_apply_network_motion(at: Transform3D,
+		next_velocity: Vector3) -> void:
+	if _is_host() or not _lassoed or not at.is_finite() \
+			or not next_velocity.is_finite():
+		return
+	global_transform = at
+	_target_transform = at
+	velocity = next_velocity
+	_target_velocity = next_velocity
+	_has_target = true
+	_extrapolated = 0.0
+	reset_physics_interpolation()
+
+
+func end_lasso(throw_velocity: Vector3) -> void:
+	if not _lassoed:
+		return
+	_clear_player_lasso()
+	velocity = throw_velocity if throw_velocity.is_finite() else Vector3.ZERO
+	_target_velocity = velocity
+	_target_transform = global_transform
+	_has_target = true
+	_extrapolated = 0.0
+	_lasso_knockback_left = 0.9 if velocity.length_squared() > 1.0 else 0.0
+	reset_physics_interpolation()
+	if _is_host():
+		_publish_sync(true)
+
+
+func lasso_mass() -> float:
+	return 8.0
+
+
+func is_lassoed() -> bool:
+	return _lassoed
+
+
+func _clear_player_grapple() -> void:
+	_grappled = false
+	_grapple_carrier_peer = 0
+	_grapple_carrier = null
+	_set_grapple_collision(false)
+
+
+func _clear_player_lasso() -> void:
+	_lassoed = false
+	_lasso_source_peer = 0
+	_set_grapple_collision(false)
+
+
+func _set_grapple_collision(disabled: bool) -> void:
+	var collision := get_node_or_null(^"CollisionShape3D") as CollisionShape3D
+	if collision != null:
+		collision.set_deferred(&"disabled", disabled)
+
+
 func apply_damage(hit: DamageHit) -> float:
 	if hit == null or not _is_host() or _defeated:
 		return 0.0
@@ -1965,6 +2216,12 @@ func apply_damage(hit: DamageHit) -> float:
 			UNDER_FIRE_BEAM if hit.kind == DamageHit.Kind.BEAM
 			else UNDER_FIRE_HIT)
 		_health = before - amount
+		if not _lassoed and (hit.reaction == DamageHit.Reaction.KNOCKBACK \
+				or hit.reaction == DamageHit.Reaction.RAGDOLL):
+			var impulse := hit.world_impulse \
+				if hit.world_impulse.is_finite() else Vector3.ZERO
+			velocity += impulse / lasso_mass()
+			_lasso_knockback_left = maxf(_lasso_knockback_left, 0.75)
 		health_changed.emit(_health, MAX_HEALTH)
 		_publish_event({"kind": "damaged", "amount": amount,
 			"at": hit.centre()})
@@ -1972,6 +2229,8 @@ func apply_damage(hit: DamageHit) -> float:
 		_begin_aggro()
 	if _health <= 0.0 and before > 0.0:
 		_defeated = true
+		_clear_player_grapple()
+		_clear_player_lasso()
 		set_arena_boundary_visible(false)
 		_phase = Phase.DEFEATED
 		_release_grabbed()

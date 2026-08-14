@@ -1,0 +1,19 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/fauna/fauna_spawner.gd" id="1_spawner"]
+[ext_resource type="Script" path="res://game/fauna/fauna_species.gd" id="2_species_script"]
+[ext_resource type="Resource" path="res://game/fauna/species/lumaquill_porcupine.tres" id="3_species"]
+[ext_resource type="Resource" path="res://game/fauna/species/prism_coil_slinky.tres" id="4_species"]
+[ext_resource type="Resource" path="res://game/fauna/species/aurora_fleece_alpaca.tres" id="5_species"]
+
+[node name="FaunaPopulations" type="Node3D"]
+script = ExtResource("1_spawner")
+species = Array[ExtResource("2_species_script")]([ExtResource("3_species"), ExtResource("4_species"), ExtResource("5_species")])
+survey_interval = 1.25
+initial_survey_delay = 1.5
+max_spawns_per_survey = 2
+candidate_limit_per_species = 128
+light_limit = 7
+lights_within = 95.0
+light_follow_speed = 9.0
+light_fade_speed = 5.0

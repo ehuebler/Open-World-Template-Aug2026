@@ -1,0 +1,93 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://game/enemies/training_dummy.gd" id="1_dummy"]
+
+[sub_resource type="StandardMaterial3D" id="Material_dummy"]
+albedo_color = Color(0.15, 0.31, 0.29, 1)
+metallic = 0.25
+roughness = 0.58
+
+[sub_resource type="StandardMaterial3D" id="Material_target"]
+albedo_color = Color(0.31, 0.9, 0.76, 1)
+emission_enabled = true
+emission = Color(0.14, 0.72, 0.58, 1)
+emission_energy_multiplier = 1.8
+roughness = 0.42
+
+[sub_resource type="CapsuleShape3D" id="Shape_dummy"]
+radius = 0.48
+height = 2.0
+
+[sub_resource type="BoxMesh" id="Mesh_torso"]
+material = SubResource("Material_dummy")
+size = Vector3(0.78, 1.05, 0.42)
+
+[sub_resource type="SphereMesh" id="Mesh_head"]
+material = SubResource("Material_dummy")
+radius = 0.3
+height = 0.6
+radial_segments = 20
+rings = 10
+
+[sub_resource type="CylinderMesh" id="Mesh_limb"]
+material = SubResource("Material_dummy")
+top_radius = 0.13
+bottom_radius = 0.13
+height = 0.82
+radial_segments = 10
+
+[sub_resource type="TorusMesh" id="Mesh_target"]
+material = SubResource("Material_target")
+inner_radius = 0.18
+outer_radius = 0.27
+rings = 20
+ring_segments = 8
+
+[node name="TrainingDummy" type="CharacterBody3D"]
+floor_snap_length = 0.3
+floor_max_angle = 1.0472
+script = ExtResource("1_dummy")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 1, 0)
+shape = SubResource("Shape_dummy")
+
+[node name="Visuals" type="Node3D" parent="."]
+
+[node name="Torso" type="MeshInstance3D" parent="Visuals"]
+position = Vector3(0, 1.15, 0)
+mesh = SubResource("Mesh_torso")
+
+[node name="Head" type="MeshInstance3D" parent="Visuals"]
+position = Vector3(0, 1.98, 0)
+mesh = SubResource("Mesh_head")
+
+[node name="LeftArm" type="MeshInstance3D" parent="Visuals"]
+position = Vector3(-0.52, 1.22, 0)
+mesh = SubResource("Mesh_limb")
+
+[node name="RightArm" type="MeshInstance3D" parent="Visuals"]
+position = Vector3(0.52, 1.22, 0)
+mesh = SubResource("Mesh_limb")
+
+[node name="LeftLeg" type="MeshInstance3D" parent="Visuals"]
+position = Vector3(-0.22, 0.4, 0)
+mesh = SubResource("Mesh_limb")
+
+[node name="RightLeg" type="MeshInstance3D" parent="Visuals"]
+position = Vector3(0.22, 0.4, 0)
+mesh = SubResource("Mesh_limb")
+
+[node name="Target" type="MeshInstance3D" parent="Visuals"]
+position = Vector3(0, 1.18, -0.225)
+rotation = Vector3(1.5708, 0, 0)
+mesh = SubResource("Mesh_target")
+
+[node name="Label" type="Label3D" parent="."]
+position = Vector3(0, 2.58, 0)
+billboard = 1
+modulate = Color(0.45, 1, 0.86, 1)
+outline_modulate = Color(0.02, 0.08, 0.07, 1)
+font_size = 32
+outline_size = 8
+text = "TRAINING DUMMY"

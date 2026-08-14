@@ -1,0 +1,50 @@
+[gd_resource type="Resource" script_class="AbilityDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/abilities/ability_definition.gd" id="1_definition"]
+[ext_resource type="Script" path="res://game/abilities/nausicaa.gd" id="2_implementation"]
+[ext_resource type="Texture2D" path="res://assets/runtime/abilities/icons/nausicaa.svg" id="3_icon"]
+
+[resource]
+script = ExtResource("1_definition")
+ability_id = "nausicaa"
+title = "Nausicaä"
+description = "Sweep a short blue eye laser across terrain. Each glowing patch waits one second, then the trail erupts from its first mark to its last and carves a shallow indent. Props and targets cannot be painted."
+implementation = ExtResource("2_implementation")
+icon = ExtResource("3_icon")
+tint = Color(0.184314, 0.470588, 1.000000, 1.000000)
+activation_type = 1
+projectile_type = 1
+impact_type = 6
+grapple_type = 0
+construct_type = 0
+reaction_type = 3
+affects_players = true
+self_launch = false
+blast_occlusion = true
+animation = &""
+alternate_animation = &""
+hover_animation = &""
+alternate_hover_animation = &""
+held_animation = &""
+held_hover_animation = &""
+impact_animation = &""
+blocked_underwater = true
+allowed_stances = PackedInt32Array(0, 1, 2, 3)
+stats = {
+"damage": 2500.0,
+"player_damage": 12.0,
+"duration": 0.75,
+"range": 14.0,
+"radius": 5.0,
+"cooldown": 7.0,
+"delay": 1.0,
+"beam_radius": 0.1,
+"paint_radius": 0.85,
+"paint_spacing": 1.25,
+"chain_interval": 0.09,
+"crater_radius": 2.0,
+"crater_depth": 0.55,
+"knockback": 18.0,
+"lift": 6.0,
+"explosion_duration": 0.5,
+}

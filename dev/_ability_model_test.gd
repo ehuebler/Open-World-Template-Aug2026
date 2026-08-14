@@ -30,6 +30,7 @@ class GroundAbility extends Ability:
 
 func _ready() -> void:
 	_check_catalogue()
+	_check_authored_ability_shapes()
 	_check_stat_lines()
 	_check_slot_filters()
 
@@ -44,6 +45,14 @@ func _ready() -> void:
 	_player.set_physics_process(false)
 	await get_tree().process_frame
 
+	_check_starfire_alternation()
+	_check_starfire_motion()
+	_check_starfire_rejection()
+	_check_grapple_pending_release()
+	await _check_new_ability_runtime()
+	await _check_blast_self_launch()
+	await _check_blast_presentation()
+	_check_training_dummy()
 	_check_cooldown()
 	_check_gating()
 	_check_controller()
@@ -58,9 +67,11 @@ func _ready() -> void:
 
 func _check_catalogue() -> void:
 	var ids := ItemDB.ability_ids()
-	_expect(ids.has("laser_eyes") and ids.has("meteor_punch"),
-		"both abilities are in the catalogue")
-	for id: String in ["laser_eyes", "meteor_punch"]:
+	var expected := PackedStringArray(
+		["laser_eyes", "meteor_punch", "starfire", "grapple",
+			"nuke", "lasso", "wall", "nausicaa"])
+	_expect(ids == expected, "all eight abilities are in manifest order")
+	for id: String in expected:
 		_expect(ItemDB.kind_of(id) == ItemDB.KIND_ABILITY,
 			"%s is an ability" % id)
 		_expect(not ItemDB.description(id).is_empty(),
@@ -71,10 +82,125 @@ func _check_catalogue() -> void:
 		var script := load(path) as GDScript
 		_expect(script != null and script.new() is Ability,
 			"%s script is an Ability" % id)
+		_expect(ItemDB.ability_icon(id) != null,
+			"%s has a menu icon" % id)
 		var stats := ItemDB.stats_of(id)
 		_expect(stats.has("damage") and stats.has("range")
 			and stats.has("cooldown"),
 			"%s quotes damage, range and cooldown" % id)
+
+
+func _check_authored_ability_shapes() -> void:
+	var meteor := ItemDB.ability_definition("meteor_punch")
+	var starfire := ItemDB.ability_definition("starfire")
+	var grapple := ItemDB.ability_definition("grapple")
+	var nuke := ItemDB.ability_definition("nuke")
+	var lasso := ItemDB.ability_definition("lasso")
+	var wall := ItemDB.ability_definition("wall")
+	var nausicaa := ItemDB.ability_definition("nausicaa")
+	_expect(starfire != null
+		and starfire.activation_type
+			== AbilityDefinition.ActivationType.SUSTAINED
+		and starfire.projectile_type
+			== AbilityDefinition.ProjectileType.ENERGY_DISK
+		and starfire.impact_type
+			== AbilityDefinition.ImpactType.EXPLOSION_CRATER,
+		"Starfire dispatches a sustained stream of exploding energy disks")
+	_expect(starfire != null and not starfire.animation.is_empty()
+		and not starfire.alternate_animation.is_empty()
+		and not starfire.hover_animation.is_empty()
+		and not starfire.alternate_hover_animation.is_empty()
+		and starfire.animation != starfire.alternate_animation,
+		"Starfire has standing and raised-knee clips for both hands")
+	_expect(meteor != null and starfire != null
+		and is_equal_approx(
+			float(starfire.stats.get("crater_radius", 0.0)) * 2.0,
+			float(meteor.stats.get("crater_radius", -1.0)))
+		and is_equal_approx(
+			float(starfire.stats.get("crater_depth", 0.0)) * 2.0,
+			float(meteor.stats.get("crater_depth", -1.0))),
+		"Starfire's crater dimensions are half Meteor Punch's")
+	_expect(grapple != null
+		and grapple.grapple_type
+			== AbilityDefinition.GrappleType.CARRY_SLAM
+		and grapple.impact_type
+			== AbilityDefinition.ImpactType.GRAPPLE_SLAM,
+		"Grapple dispatches a carry slam")
+	_expect(grapple != null
+		and is_equal_approx(float(grapple.stats.get("range", 0.0)), 2.0)
+		and is_equal_approx(
+			float(grapple.stats.get("launch_height", 0.0)), 20.0)
+		and not grapple.animation.is_empty()
+		and not grapple.held_animation.is_empty()
+		and not grapple.impact_animation.is_empty(),
+		"Grapple authors its two-metre reach, twenty-metre rise, and clips")
+	_expect(nuke != null
+		and nuke.projectile_type
+			== AbilityDefinition.ProjectileType.ENERGY_ORB
+		and nuke.impact_type
+			== AbilityDefinition.ImpactType.MASSIVE_BLAST
+		and nuke.reaction_type == AbilityDefinition.ReactionType.RAGDOLL
+		and nuke.affects_players and nuke.self_launch
+		and nuke.blast_occlusion,
+		"Nuke authors a host-resolved occluded orb blast and self-launch")
+	_expect(nuke != null
+		and is_equal_approx(float(nuke.stats.get("range", 0.0)), 240.0)
+		and is_equal_approx(float(nuke.stats.get("radius", 0.0)), 110.0)
+		and is_equal_approx(
+			float(nuke.stats.get("crater_radius", 0.0)), 72.0)
+		and is_equal_approx(
+			float(nuke.stats.get("crater_depth", 0.0)), 20.0)
+		and float(nuke.stats.get("crater_warp", 0.0)) > 0.0,
+		"Nuke carries the authored range, blast, and massive crater profile")
+	# The blast has to stay inside the reach it can be thrown, or every shot of it
+	# catches its own caster and there is no way to use it at a distance.
+	_expect(nuke != null
+		and float(nuke.stats.get("range", 0.0))
+			> float(nuke.stats.get("radius", 0.0)),
+		"and can be thrown further than it reaches")
+	_expect(lasso != null
+		and lasso.activation_type
+			== AbilityDefinition.ActivationType.SUSTAINED
+		and lasso.projectile_type
+			== AbilityDefinition.ProjectileType.TETHER
+		and lasso.grapple_type
+			== AbilityDefinition.GrappleType.PHYSICS_TETHER
+		and not lasso.held_animation.is_empty()
+		and not lasso.held_hover_animation.is_empty(),
+		"Lasso authors a sustained physical tether and both hold poses")
+	_expect(lasso != null
+		and is_equal_approx(float(lasso.stats.get("range", 0.0)), 30.0)
+		and is_equal_approx(
+			float(lasso.stats.get("rope_length", 0.0)), 10.0)
+		and is_equal_approx(float(lasso.stats.get("duration", 0.0)), 2.0),
+		"Lasso carries its reach, rope length, and two-second hold")
+	_expect(wall != null
+		and wall.construct_type == AbilityDefinition.ConstructType.BARRIER
+		and is_equal_approx(float(wall.stats.get("wall_width", 0.0)), 8.0)
+		and is_equal_approx(float(wall.stats.get("wall_height", 0.0)), 4.0)
+		and is_equal_approx(float(wall.stats.get("duration", 0.0)), 7.0)
+		and is_equal_approx(
+			float(wall.stats.get("fade_duration", 0.0)), 4.0),
+		"Wall authors an eight-by-four indestructible fading barrier")
+	_expect(nausicaa != null
+		and nausicaa.activation_type
+			== AbilityDefinition.ActivationType.SUSTAINED
+		and nausicaa.impact_type
+			== AbilityDefinition.ImpactType.DELAYED_BLAST
+		and nausicaa.blast_occlusion
+		and nausicaa.animation.is_empty()
+		and nausicaa.hover_animation.is_empty()
+		and is_equal_approx(
+			float(nausicaa.stats.get("delay", 0.0)), 1.0)
+		and is_equal_approx(
+			float(nausicaa.stats.get("duration", 0.0)), 0.75)
+		and float(nausicaa.stats.get("duration", 0.0))
+			< float(ItemDB.stats_of("laser_eyes").get("duration", 0.0))
+		and is_equal_approx(
+			float(nausicaa.stats.get("paint_spacing", 0.0)), 1.25)
+		and is_equal_approx(
+			float(nausicaa.stats.get("crater_depth", 0.0)), 0.55),
+		"Nausicaä authors a short Laser Eyes-style terrain chain with shallow indents")
 
 
 func _check_stat_lines() -> void:
@@ -138,6 +264,459 @@ func _check_eye_points() -> void:
 	# to the right place even if one of them is inside an ear.
 	_expect(absf(left.z - right.z) < 0.02 and absf(left.y - right.y) < 0.02,
 		"and they are level with each other")
+
+
+func _check_starfire_alternation() -> void:
+	var definition := ItemDB.ability_definition("starfire")
+	var ability := Starfire.new()
+	ability.configure(_player, 0, "starfire", definition)
+	var fired := ability.press()
+	var first_clip := _player._ability_clip
+	ability.tick(0.0)
+	ability.tick(ability.cooldown() + 0.01)
+	var second_clip := _player._ability_clip
+	ability.tick(0.0)
+	ability.tick(ability.cooldown() + 0.01)
+	var third_clip := _player._ability_clip
+	ability.tick(0.0)
+	_expect(fired and ability.is_held(),
+		"holding Starfire launches each authored disk automatically")
+	_expect(first_clip == String(definition.animation)
+		and second_clip == String(definition.alternate_animation)
+		and third_clip == String(definition.animation),
+		"Starfire casts right, left, then right again")
+	ability.release()
+	for child: Node in get_children():
+		if child is AbilityProjectile:
+			child.queue_free()
+
+
+func _check_starfire_motion() -> void:
+	var definition := ItemDB.ability_definition("starfire")
+	var ability := Starfire.new()
+	ability.configure(_player, 0, "starfire", definition)
+	_player._apply_stance(OnlinePlayer.Stance.FLY)
+	_player._fly_blend = 0.0
+	var carried := Vector3(7.0, 2.0, -3.0)
+	_player.velocity = carried
+	_expect(ability.press(), "Starfire throws while floating")
+	_expect(_player.animator != null
+		and _player.animator.has_animation(definition.hover_animation)
+		and _player.animator.has_animation(definition.alternate_hover_animation),
+		"the player rig ships both raised-knee Starfire clips")
+	var projectile: AbilityProjectile
+	for child: Node in get_children():
+		if child is AbilityProjectile:
+			projectile = child as AbilityProjectile
+	_expect(_player._ability_clip == String(definition.hover_animation),
+		"a floating throw keeps the raised-knee animation")
+	_expect(projectile != null and projectile._velocity.is_equal_approx(
+		projectile._along * projectile._speed + carried),
+		"Starfire adds the player's velocity to disk launch velocity")
+	_expect(projectile != null and is_zero_approx(projectile._disk.rotation.x),
+		"the disk leads on its thin rim like a frisbee")
+	ability.tick(0.0)
+	ability.release()
+	_player.velocity = Vector3.ZERO
+	_player._fly_blend = 0.0
+	_player._apply_stance(OnlinePlayer.Stance.STAND)
+	for child: Node in get_children():
+		if child is AbilityProjectile:
+			child.queue_free()
+
+
+func _check_starfire_rejection() -> void:
+	var definition := ItemDB.ability_definition("starfire")
+	var ability := Starfire.new()
+	ability.configure(_player, 0, "starfire", definition)
+	_expect(ability.press(), "Starfire can wait for projectile approval")
+	_player._projectile_result = OnlinePlayer.ProjectileRequestState.REJECTED
+	ability.tick(0.0)
+	_expect(not ability.is_held() and ability.can_use(),
+		"a rejected Starfire cast spends no cooldown")
+
+	_player._ability_clip = ""
+	_expect(ability.press(), "Starfire retries immediately after rejection")
+	ability.tick(0.0)
+	_expect(_player._ability_clip == String(definition.animation),
+		"a rejected cast does not advance the alternating hand")
+	ability.release()
+	for child: Node in get_children():
+		if child is AbilityProjectile:
+			child.queue_free()
+
+
+func _check_grapple_pending_release() -> void:
+	var ability := Grapple.new()
+	ability.configure(
+		_player, 0, "grapple", ItemDB.ability_definition("grapple"))
+	# The real press is waiting on a remote host at this point. Releasing a
+	# normal click must not cancel the request before that answer returns.
+	ability._held = true
+	_player._ability_grapple_id = "grapple"
+	_player._ability_grapple_pending_left = 0.5
+	ability.release()
+	_expect(ability.is_held() and _player.grapple_pending(),
+		"Grapple keeps a quick click alive while host approval is pending")
+	_player._ability_grapple_pending_left = 0.0
+	ability.tick(0.0)
+	_expect(not ability.is_held() and is_zero_approx(ability.cooldown_left()),
+		"a rejected Grapple still clears without charging cooldown")
+
+
+func _check_new_ability_runtime() -> void:
+	var nuke_definition := ItemDB.ability_definition("nuke")
+	var nuke := Nuke.new()
+	nuke.configure(_player, 0, "nuke", nuke_definition)
+	_player.velocity = Vector3(4.0, 1.0, -2.0)
+	_expect(nuke.press(), "Nuke launches its host-approved hand projectile")
+	var orb: AbilityProjectile
+	for child: Node in get_children():
+		if child is AbilityProjectile \
+				and (child as AbilityProjectile).definition == nuke_definition:
+			orb = child as AbilityProjectile
+	_expect(orb != null and orb._disk.mesh is SphereMesh
+		and orb.authoritative,
+		"Nuke builds a spherical orb whose offline copy owns impact")
+	nuke.tick(0.0)
+	_player.velocity = Vector3.ZERO
+	if orb != null:
+		orb.queue_free()
+
+	var clips := [
+		"NukeThrow", "NukeFloatThrow",
+		"LassoThrow", "LassoFloatThrow", "LassoHold", "LassoFloatHold",
+		"WallPlace", "WallFloatPlace",
+	]
+	var clips_present := _player.animator != null
+	for clip: String in clips:
+		clips_present = clips_present and _player.animator.has_animation(clip)
+	_expect(clips_present,
+		"both character exports expose the authored cast and hover clips")
+
+	var barrier := AbilityBarrier.create(
+		self, 77, _player.peer_id, Transform3D.IDENTITY,
+		Vector3(8.0, 4.0, 0.35), 7.0, 4.0, Color.CORNFLOWER_BLUE)
+	_expect(barrier != null and barrier.collision_layer == 1
+		and barrier.size().is_equal_approx(Vector3(8.0, 4.0, 0.35)),
+		"Wall creates solid layer-one collision at its authored size")
+	if barrier != null:
+		barrier._process(4.0)
+		_expect(barrier._material.albedo_color.a < 0.52
+			and barrier.remaining() > 0.0,
+			"Wall fades gradually while its lifetime is still active")
+		barrier.queue_free()
+
+	var first_warning := AbilityDelayedBlast.create(
+		self, _player, ItemDB.ability_definition("nausicaa"),
+		Vector3(0.0, 2.0, 0.0), Vector3(0.0, 0.0, -8.0),
+		Vector3.UP, 1.0, false)
+	var second_warning := AbilityDelayedBlast.create(
+		self, _player, ItemDB.ability_definition("nausicaa"),
+		Vector3(0.0, 2.0, 0.0), Vector3(1.4, 0.0, -8.0),
+		Vector3.UP, 1.0, false)
+	_expect(first_warning != null and second_warning != null
+		and first_warning._marker.mesh is CylinderMesh
+		and first_warning._lamp.light_color \
+			== ItemDB.ability_definition("nausicaa").tint,
+		"Nausicaä paints replicated blue glow patches instead of a ground line")
+	if first_warning != null and second_warning != null:
+		first_warning.set_process(false)
+		second_warning.set_process(false)
+		# The second patch is painted a tenth of a second later. Equal fuses
+		# therefore preserve draw order without a separate chain controller.
+		first_warning._process(0.1)
+		first_warning._process(0.91)
+		second_warning._process(0.91)
+		_expect(first_warning._detonated and not second_warning._detonated,
+			"Nausicaä's first painted patch detonates first after one second")
+		second_warning._process(0.1)
+		_expect(second_warning._detonated,
+			"Nausicaä's detonation then advances along the painted trail")
+
+	var beams := _player.laser_beams()
+	var nausicaa_tint := ItemDB.ability_definition("nausicaa").tint
+	beams.aim(Vector3(-0.05, 1.8, 0.0), Vector3(0.05, 1.8, 0.0),
+		Vector3(0.0, 0.0, -8.0), nausicaa_tint)
+	_expect(beams._colour == nausicaa_tint
+		and beams._glow_material.emission == nausicaa_tint,
+		"Nausicaä reuses the Laser Eyes beams with a blue glow")
+	beams.stop()
+
+	var player_target := PLAYER.instantiate() as OnlinePlayer
+	player_target.peer_id = 2
+	player_target.defer_camera = true
+	add_child(player_target)
+	player_target.set_process(false)
+	player_target.set_physics_process(false)
+	_expect(player_target.begin_lasso(_player)
+		and player_target.is_lassoed(),
+		"Lasso temporarily transfers a player target to host movement")
+	var lasso_definition := ItemDB.ability_definition("lasso")
+	var tether := AbilityLassoTether.create(
+		self, _player, player_target, lasso_definition, NodePath(), true)
+	if tether != null:
+		tether.set_physics_process(false)
+		var first_string_segment := tether._string[0].mesh as CylinderMesh \
+			if not tether._string.is_empty() else null
+		_expect(tether._string.size() == AbilityLassoTether.STRING_SEGMENTS
+			and first_string_segment != null
+			and is_equal_approx(first_string_segment.top_radius,
+				AbilityLassoTether.STRING_RADIUS),
+			"Lasso renders as a thin segmented string instead of a glowing line")
+		var target_at := _player.hand_point(false) \
+			+ _player.global_basis.x.normalized() * 5.0
+		var up := _player.global_basis.y.normalized()
+		var radial := (target_at - _player.hand_point(false)).normalized()
+		var movement := radial.cross(up).normalized() * 20.0
+		player_target.global_position = target_at
+		_player.velocity = Vector3.ZERO
+		tether._velocity = Vector3.ZERO
+		tether._simulate_target(0.05)
+		var without_movement := tether.throw_velocity()
+		player_target.global_position = target_at
+		_player.velocity = movement
+		tether._velocity = Vector3.ZERO
+		tether._simulate_target(0.05)
+		var with_movement := tether.throw_velocity()
+		_expect((with_movement - without_movement).dot(
+			movement.normalized()) > 1.0,
+			"caster movement adds tangential Lasso momentum")
+		tether.queue_free()
+	_player.velocity = Vector3.ZERO
+	player_target.lasso_simulate(
+		Vector3.RIGHT * 0.3, Vector3(9.0, 2.0, 0.0))
+	player_target.end_lasso(Vector3.ZERO)
+	_expect(player_target.can_be_lassoed()
+		and not player_target.is_lassoed(),
+		"Lasso release restores normal player control")
+	player_target.global_position = Vector3(100.0, 0.0, 0.0)
+	var missed_lasso := AbilityLassoTether.create_miss(
+		self, _player, lasso_definition)
+	var miss_ended := [false]
+	if missed_lasso != null:
+		missed_lasso.set_physics_process(false)
+		missed_lasso.miss_finished.connect(
+			func(_tether: AbilityLassoTether) -> void:
+				miss_ended[0] = true)
+		missed_lasso._physics_process(missed_lasso._miss_out * 0.5)
+		var visible_segments := 0
+		for segment: MeshInstance3D in missed_lasso._string:
+			visible_segments += 1 if segment.visible else 0
+		_expect(missed_lasso.is_miss_cast() and visible_segments > 0,
+			"a missed Lasso still fires a visible string into the world")
+		missed_lasso._physics_process(
+			missed_lasso._miss_out + AbilityLassoTether.MISS_HOLD
+				+ AbilityLassoTether.MISS_RETRACT + 0.1)
+	_expect(missed_lasso != null and bool(miss_ended[0])
+		and missed_lasso._miss_done,
+		"a missed Lasso retracts and disappears after failing to grab")
+
+	var player_health_before := player_target.health()
+	var nuke_player_blast := DamageHit.area(
+		player_target.combat_position(), 22.0, 25.0, 1.0)
+	nuke_player_blast.ability_id = "nuke"
+	nuke_player_blast.faction = DamageHit.Faction.ENEMY
+	nuke_player_blast.reaction = DamageHit.Reaction.RAGDOLL
+	nuke_player_blast.world_impulse = Vector3(18.0, 8.0, 0.0)
+	var nuke_player_damage := player_target.apply_damage(nuke_player_blast)
+	_expect(nuke_player_damage > 0.0
+		and player_target.health() < player_health_before
+		and player_target._forced_ragdoll
+		and player_target.velocity.length() > 1.0,
+		"Nuke-style player damage ragdolls and blows the target away")
+	player_target._clear_ragdoll()
+	player_target.stats.set_health(player_target.maximum_health())
+
+	_player.global_position = Vector3.ZERO
+	player_target.global_position = Vector3(4.0, 0.0, 0.0)
+	var blocker := StaticBody3D.new()
+	blocker.collision_layer = 1
+	var blocker_shape := CollisionShape3D.new()
+	var blocker_box := BoxShape3D.new()
+	blocker_box.size = Vector3(0.25, 3.0, 3.0)
+	blocker_shape.shape = blocker_box
+	blocker.add_child(blocker_shape)
+	add_child(blocker)
+	blocker.global_position = Vector3(
+		2.0, player_target.combat_position().y, 0.0)
+	await get_tree().physics_frame
+	var occluded := DamageHit.area(
+		_player.combat_position(), 10.0, 1.0, 1.0)
+	occluded.blocked_by_world = true
+	_expect(occluded._world_blocks(_player, _player, player_target),
+		"opt-in blast damage is stopped by layer-one Wall geometry")
+	blocker.queue_free()
+	player_target.queue_free()
+
+
+## A blast that launches its caster has to take the caster's body with it. The
+## camera, the eye line and the position peers are told about all hang off the
+## capsule and not off the bones, so a launch the bones are not allowed to match
+## is a view that flies up on its own while the character stays where it stood.
+func _check_blast_self_launch() -> void:
+	var ragdoll := _player._ragdoll
+	if ragdoll == null or not ragdoll.built():
+		_expect(false, "the test body has a ragdoll to launch")
+		return
+	_player.global_position = Vector3.ZERO
+	var up := _player.global_basis.y.normalized()
+	# Nuke's authored `self_launch_speed`, which is well past the ceiling the
+	# ragdoll holds a body to once it is merely falling.
+	var launch := up * 68.0
+	_player.velocity = Vector3.ZERO
+	_player._force_full_ragdoll_local(launch, 0.5)
+	_expect(ragdoll.limp() and _player.velocity.is_equal_approx(launch),
+		"a self-launch hands the capsule and the bones the same velocity")
+	await get_tree().physics_frame
+	_expect(ragdoll.drift().dot(up) > Ragdoll.MAX_SPEED,
+		"limp bones keep an authored launch past their own safety ceiling")
+
+	# Half a second of the arc, with the capsule driven the way its own physics
+	# step would drive it. The bones shed some of the launch to their damping and
+	# gain some off the ground they left; either way the capsule goes where they
+	# go, because everything the player sees and aims with hangs off it.
+	var from := _player.global_position
+	var body_from := ragdoll.centre()
+	for _frame in 30:
+		await get_tree().physics_frame
+		_player._crash_move(get_physics_process_delta_time())
+	var capsule_climb := (_player.global_position - from).dot(up)
+	var body_climb := (ragdoll.centre() - body_from).dot(up)
+	# Left to its own gravity the capsule would be some thirty metres up by here,
+	# which is the whole of the fault: it is the camera, and the body is not.
+	_expect(body_climb > 1.0 and absf(capsule_climb - body_climb) < 1.0,
+		"the crash capsule climbs with the launched body and not past it")
+	_player._clear_ragdoll()
+	_player.velocity = Vector3.ZERO
+	_player.global_position = Vector3.ZERO
+
+
+## The staged detonation. A nuclear burst is not one shell that swells and stops:
+## it flashes, throws two fronts out along the ground, and stands a cloud up for
+## several times as long as the fireball it came out of.
+func _check_blast_presentation() -> void:
+	var nuke := ItemDB.ability_definition("nuke")
+	var radius := float(nuke.stats.get("radius", 0.0))
+	_expect(radius <= EnergyExplosion.MAX_RADIUS,
+		"the authored nuke fireball fits inside what the wire will carry (%.0f m)"
+			% radius)
+
+	var small := EnergyExplosion.burst(
+		self, Vector3.ZERO, 4.0, Color.ORANGE, 0.3, false)
+	var massive := EnergyExplosion.burst(
+		self, Vector3.ZERO, 16.0, Color.CYAN, 0.9, true, false)
+	var big := EnergyExplosion.burst(
+		self, Vector3.ZERO, radius, nuke.tint,
+		float(nuke.stats.get("explosion_duration", 0.8)), true, true)
+	_expect(small != null and big != null
+		and big.span() > small.span() * 4.0,
+		"a nuclear burst outlasts its own fireball and a small one does not")
+	_expect(massive != null and is_equal_approx(massive.span(), 0.9),
+		"a massive non-nuclear blast keeps its brighter shell without the cloud")
+
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var rings := 0
+	var clouds := 0
+	var flashes := 0
+	for child: Node in big.get_children():
+		if not (child is Node3D and (child as Node3D).top_level):
+			continue
+		if child is MeshInstance3D:
+			flashes += 1
+		for piece: Node in child.get_children():
+			var shape := piece as MeshInstance3D
+			if shape == null:
+				continue
+			if shape.mesh is TorusMesh:
+				rings += 1
+			else:
+				clouds += 1
+	_expect(flashes == 1 and rings == 2 and clouds >= 3,
+		"it builds a flash, two fronts, and a cloud (%d/%d/%d)"
+			% [flashes, rings, clouds])
+	# Both stand outside the fireball's own transform, which opens from a twelfth
+	# of full size: parented under it they would be multiplied by it.
+	_expect(big.scale.length() < radius,
+		"and the fireball is still opening while they run")
+
+	# The screen goes with it for anyone standing inside. Local only and nothing
+	# is sent — every peer already has the blast, so every peer's own distance to
+	# it is enough.
+	var feedback := CombatFeedback.new()
+	add_child(feedback)
+	feedback.configure(null, null)
+	_expect(is_zero_approx(feedback.blast_flash_remaining()),
+		"a view outside a blast is left alone")
+	feedback.blast_flash(0.8)
+	_expect(feedback.blast_flash_remaining()
+		> CombatFeedback.BLAST_FLASH_TIME * 0.9,
+		"and one inside it is turned inside out for about a second")
+	feedback.queue_free()
+	small.queue_free()
+	massive.queue_free()
+	big.queue_free()
+
+
+func _check_training_dummy() -> void:
+	var packed := load(
+		"res://game/enemies/training_dummy.tscn") as PackedScene
+	var dummy := packed.instantiate() as TrainingDummy
+	add_child(dummy)
+	dummy.set_physics_process(false)
+	_expect(not dummy.anchor_path.is_empty()
+		and is_finite(dummy.anchor_right_offset)
+		and is_finite(dummy.anchor_forward_offset),
+		"the training dummy can settle beside an authored surface anchor")
+	var carried_to := Vector3(3.0, 8.0, -2.0)
+	_expect(dummy.begin_grapple(_player),
+		"the training dummy accepts a grapple while alive")
+	dummy.grapple_follow(carried_to, Vector3.UP)
+	_expect(dummy.global_position.is_equal_approx(carried_to - Vector3.UP),
+		"the training dummy follows the carry socket")
+	dummy.end_grapple(Vector3(2.0, 0.0, 1.0), Vector3.UP)
+	_expect(dummy.can_be_grappled(),
+		"ending a carry releases the training dummy")
+	_expect(dummy.begin_lasso(_player) and dummy.is_lassoed(),
+		"the training dummy accepts a physical Lasso")
+	var lasso_tether := AbilityLassoTether.create(
+		self, _player, dummy, ItemDB.ability_definition("lasso"),
+		NodePath(), true)
+	if lasso_tether != null:
+		lasso_tether.set_physics_process(false)
+		lasso_tether._velocity = Vector3.RIGHT * 20.0
+		var before_collision := dummy.health()
+		lasso_tether._damage_combatant(
+			dummy, dummy.combat_position(), 20.0)
+		_expect(dummy.health() < before_collision,
+			"a high-speed Lasso collision damages its captured target")
+		dummy.set("_health", dummy.maximum_health)
+		lasso_tether.queue_free()
+	dummy.end_lasso(Vector3(12.0, 4.0, 0.0))
+	_expect(dummy.can_be_lassoed() and dummy.velocity.length() > 10.0,
+		"Lasso release restores the dummy and preserves throw velocity")
+
+	var radial := DamageHit.area(
+		dummy.combat_position() - Vector3.RIGHT * 2.0, 10.0, 100.0, 1.0)
+	radial.radial_impulse = 20.0
+	radial.radial_lift = 5.0
+	var resolved := radial.resolved_for(dummy)
+	_expect(resolved.world_impulse.x > 0.0
+		and resolved.world_impulse.y > 0.0,
+		"host-authored radial reactions resolve outward impulse and lift")
+
+	var hit := DamageHit.area(dummy.combat_position(), 2.0,
+		dummy.maximum_health, 0.0)
+	hit.faction = DamageHit.Faction.PLAYER
+	_expect(is_equal_approx(dummy.apply_damage(hit), dummy.maximum_health)
+		and not dummy.can_be_grappled(),
+		"the training dummy takes lethal ability damage")
+	dummy._physics_process(dummy.respawn_delay + 0.01)
+	_expect(dummy.can_be_grappled()
+		and is_equal_approx(dummy.health(), dummy.maximum_health),
+		"the training dummy respawns at full health")
+	dummy.queue_free()
 
 
 func _check_cooldown() -> void:

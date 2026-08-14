@@ -120,38 +120,6 @@ const ITEMS := {
 		"cell": 12,
 		"tint": Color(0.44, 0.47, 0.5),
 	},
-	"laser_eyes": {
-		"title": "Laser Eyes",
-		"description": "Two beams, converging on whatever you are looking at. They cut everything standing along their length, not only what they land on, and leave the ground burned where they finish. Will not fire under water.",
-		"kind": KIND_ABILITY,
-		"script": "res://game/abilities/laser_eyes.gd",
-		"tint": Color(0.95, 0.24, 0.18),
-		"stats": {
-			"damage": 1200.0,
-			"damage_unit": "/s",
-			"duration": 4.0,
-			"range": 60.0,
-			# Off while the abilities are being played with.
-			"cooldown": 0.0,
-			"radius": 0.45,
-		},
-	},
-	"meteor_punch": {
-		"title": "Meteor Punch",
-		"description": "Fist out, and go. From the air you dive; from your feet you launch flat and land in a crater of your own making. Anything growing in the way is taken with you.",
-		"kind": KIND_ABILITY,
-		"script": "res://game/abilities/meteor_punch.gd",
-		"tint": Color(0.98, 0.62, 0.16),
-		"stats": {
-			"damage": 6000.0,
-			"impact": 9000.0,
-			"speed": 200.0,
-			"range": 50.0,
-			# Off while the abilities are being played with.
-			"cooldown": 0.0,
-			"radius": 4.0,
-		},
-	},
 }
 
 ## How each stat is spelled out for the abilities menu, in the order it is shown.
@@ -161,25 +129,85 @@ const ITEMS := {
 ## places writing "60 m" their own way is how one of them ends up saying "60.0".
 ## Anything an ability declares that is not listed here is still shown, using
 ## its own key and a plain number, so a new stat is never silently swallowed.
-const STAT_ORDER := ["damage", "impact", "speed", "duration", "range",
-	"radius", "cooldown"]
+const STAT_ORDER := ["damage", "player_damage", "impact", "speed", "duration",
+	"range", "radius", "cooldown", "delay", "launch_height", "launch_speed",
+	"slam_speed", "rope_length", "swing_acceleration", "max_speed",
+	"impact_speed", "knockback", "lift", "self_launch_speed",
+	"crater_radius", "crater_depth", "crater_warp",
+	"projectile_radius", "beam_radius", "paint_radius", "paint_spacing",
+	"chain_interval",
+	"wall_width", "wall_height", "wall_thickness", "fade_duration",
+	"explosion_duration", "animation_duration", "apex_time"]
 const STAT_LABELS := {
 	"damage": "Damage",
+	"player_damage": "Player Damage",
 	"impact": "Impact",
 	"speed": "Speed",
 	"duration": "Duration",
 	"range": "Range",
 	"radius": "Radius",
 	"cooldown": "Cooldown",
+	"delay": "Delay",
+	"launch_height": "Launch Height",
+	"launch_speed": "Launch Speed",
+	"slam_speed": "Slam Speed",
+	"rope_length": "Rope Length",
+	"swing_acceleration": "Swing Acceleration",
+	"max_speed": "Maximum Speed",
+	"impact_speed": "Impact Threshold",
+	"knockback": "Knockback",
+	"lift": "Lift",
+	"self_launch_speed": "Self Launch",
+	"crater_radius": "Crater Radius",
+	"crater_depth": "Crater Depth",
+	"crater_warp": "Crater Irregularity",
+	"projectile_radius": "Projectile Radius",
+	"beam_radius": "Beam Radius",
+	"paint_radius": "Paint Radius",
+	"paint_spacing": "Paint Spacing",
+	"chain_interval": "Blast Step",
+	"wall_width": "Wall Width",
+	"wall_height": "Wall Height",
+	"wall_thickness": "Wall Thickness",
+	"fade_duration": "Fade",
+	"explosion_duration": "Explosion",
+	"animation_duration": "Animation",
+	"apex_time": "Apex Hold",
 }
 const STAT_UNITS := {
 	"damage": "",
+	"player_damage": "",
 	"impact": "",
 	"speed": " m/s",
 	"duration": " s",
 	"range": " m",
 	"radius": " m",
 	"cooldown": " s",
+	"delay": " s",
+	"launch_height": " m",
+	"launch_speed": " m/s",
+	"slam_speed": " m/s",
+	"rope_length": " m",
+	"swing_acceleration": " m/s²",
+	"max_speed": " m/s",
+	"impact_speed": " m/s",
+	"knockback": " m/s",
+	"lift": " m/s",
+	"self_launch_speed": " m/s",
+	"crater_radius": " m",
+	"crater_depth": " m",
+	"projectile_radius": " m",
+	"beam_radius": " m",
+	"paint_radius": " m",
+	"paint_spacing": " m",
+	"chain_interval": " s",
+	"wall_width": " m",
+	"wall_height": " m",
+	"wall_thickness": " m",
+	"fade_duration": " s",
+	"explosion_duration": " s",
+	"animation_duration": " s",
+	"apex_time": " s",
 }
 
 ## The body slots the equipment column shows, top to bottom.
@@ -199,14 +227,20 @@ const SLOT_LABELS := {
 
 
 static func has_item(id: String) -> bool:
-	return ITEMS.has(id)
+	return ITEMS.has(id) or AbilityCatalog.has(id)
 
 
 static func title(id: String) -> String:
+	var definition := ability_definition(id)
+	if definition != null:
+		return definition.title
 	return String(_field(id, "title", id))
 
 
 static func description(id: String) -> String:
+	var definition := ability_definition(id)
+	if definition != null:
+		return definition.description
 	return String(_field(id, "description", ""))
 
 
@@ -218,6 +252,8 @@ static func slot_of(id: String) -> String:
 ## Explicit catalogue classification. The fallback keeps an older external item
 ## table parseable, but every item shipped in [constant ITEMS] declares a kind.
 static func kind_of(id: String) -> String:
+	if AbilityCatalog.has(id):
+		return KIND_ABILITY
 	var explicit := String(_field(id, "kind", ""))
 	if not explicit.is_empty():
 		return explicit
@@ -300,16 +336,19 @@ static func hotbar_ids() -> PackedStringArray:
 
 
 static func ability_ids() -> PackedStringArray:
-	var ids := PackedStringArray()
-	for id: String in ITEMS:
-		if is_ability(id):
-			ids.append(id)
-	return ids
+	return AbilityCatalog.ids()
+
+
+## Complete authored definition, shared by runtime, menu, and effect factories.
+static func ability_definition(id: String) -> AbilityDefinition:
+	return AbilityCatalog.definition(id)
 
 
 ## The script that implements an ability, or "" for anything that is not one.
 static func ability_script(id: String) -> String:
-	return String(_field(id, "script", ""))
+	var definition := ability_definition(id)
+	return definition.implementation.resource_path \
+		if definition != null and definition.implementation != null else ""
 
 
 ## The raw numbers behind an ability: damage, range, cooldown and so on.
@@ -319,7 +358,18 @@ static func ability_script(id: String) -> String:
 ## splitting the numbers into the ability script would mean the menu had to load
 ## and instance an ability to find out what it does.
 static func stats_of(id: String) -> Dictionary:
-	return _field(id, "stats", {})
+	var definition := ability_definition(id)
+	return definition.stats if definition != null else {}
+
+
+static func ability_profile(id: String) -> String:
+	var definition := ability_definition(id)
+	return definition.profile_line() if definition != null else ""
+
+
+static func ability_icon(id: String) -> Texture2D:
+	var definition := ability_definition(id)
+	return definition.icon if definition != null else null
 
 
 ## The same numbers written out for a menu, one line each, in a fixed order.
@@ -375,6 +425,9 @@ static func cell_size(id: String) -> int:
 
 
 static func tint(id: String) -> Color:
+	var definition := ability_definition(id)
+	if definition != null:
+		return definition.tint
 	return _field(id, "tint", Color(0.6, 0.6, 0.6))
 
 

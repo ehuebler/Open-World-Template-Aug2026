@@ -133,6 +133,30 @@ func _check_compact_player_hud() -> void:
 			themed = themed and (node as ItemSlot).hud_style
 		_expect(themed, "all five hotbar squares use the red HUD style")
 
+		_player.abilities.set_item(0, "nuke")
+		await get_tree().process_frame
+		var ability := _player.ability_controller().ability_in(0)
+		var ability_slot := weapon_bar._ability_slots[0]
+		if ability != null:
+			ability._cooldown_left = ability.cooldown()
+			weapon_bar._process(0.0)
+		_expect(ability != null and ability_slot.cooldown_active
+			and is_zero_approx(ability_slot.cooldown_fill),
+			"an ability cooldown empties its HUD icon box")
+		if ability != null:
+			ability._cooldown_left = ability.cooldown() * 0.5
+			weapon_bar._process(0.0)
+		_expect(ability != null and is_equal_approx(
+			ability_slot.cooldown_fill, 0.5),
+			"the ability icon refills in proportion to cooldown recovery")
+		if ability != null:
+			ability._cooldown_left = 0.0
+			weapon_bar._process(0.0)
+		_expect(not ability_slot.cooldown_active
+			and is_equal_approx(ability_slot.cooldown_fill, 1.0),
+			"the icon is completely restored when the ability is ready")
+		_player.abilities.set_item(0, "")
+
 
 func _check_boss_bar() -> void:
 	var bar: BossBar = _hud.call("boss_bar")

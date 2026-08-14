@@ -82,6 +82,12 @@ func _drain() -> void:
 
 
 func _render(id: String) -> Texture2D:
+	# Abilities carry deliberately authored vector glyphs in their generated
+	# definitions. They need no viewport frame and remain crisp in both the HUD
+	# and the larger Tab-menu record.
+	var ability_icon := ItemDB.ability_icon(id)
+	if ability_icon != null:
+		return ability_icon
 	var garment := _load_garment(ItemDB.scene_path(id))
 	if garment == null:
 		return null

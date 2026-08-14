@@ -42,9 +42,9 @@ const SHOT_DIR := "res://dev/captures/"
 ## height field at.
 const SPACING := 1.5
 
-## Steepest ground [OnlinePlayer] will stand on, in degrees: its `floor_max_angle` is
-## left at Godot's default. A road edge steeper than this is a wall.
-const FLOOR_MAX_ANGLE := 45.0
+## Steepest ground [OnlinePlayer] will stand on, in degrees. A road edge steeper
+## than this is a wall.
+const FLOOR_MAX_ANGLE := OnlinePlayer.MAX_WALK_SLOPE_DEGREES
 ## The player's own step, in metres, which is the other way onto a raised road.
 const STEP_HEIGHT := 0.3
 

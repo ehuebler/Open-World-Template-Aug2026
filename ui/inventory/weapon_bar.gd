@@ -18,6 +18,7 @@ var _hotbar: ItemContainer
 var _slots: Array[ItemSlot] = []
 var _ability_slots: Array[ItemSlot] = []
 var _hotbar_slots: Array[ItemSlot] = []
+var _ability_controller: AbilityController
 var _icons: ItemIcons
 var _column: VBoxContainer
 var _cell_plate: PanelContainer
@@ -41,6 +42,7 @@ func _ready() -> void:
 	offset_bottom = -BOTTOM_MARGIN
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_build()
+	set_process(_ability_controller != null)
 
 
 ## Compatibility binding for callers that only know about the old weapon
@@ -60,6 +62,15 @@ func bind_loadout(ability_container: ItemContainer, hotbar_container: ItemContai
 		if container != null and not container.changed.is_connected(refresh):
 			container.changed.connect(refresh)
 	refresh()
+
+
+## Supplies the live runtime instances behind the two ability tiles. Containers
+## know which icon belongs in a slot; the controller knows how far that ability
+## is through its current cooldown.
+func bind_ability_controller(controller: AbilityController) -> void:
+	_ability_controller = controller
+	set_process(_ability_controller != null)
+	_update_cooldowns()
 
 
 ## Compatibility: index is a numbered slot, not an index into the five drawn
@@ -99,6 +110,26 @@ func add_vitals(control: Control) -> void:
 func refresh() -> void:
 	for slot in _slots:
 		slot.queue_redraw()
+	_update_cooldowns()
+
+
+func _process(_delta: float) -> void:
+	_update_cooldowns()
+
+
+func _update_cooldowns() -> void:
+	for index in _ability_slots.size():
+		var fill := 1.0
+		var active := false
+		var ability := _ability_controller.ability_in(index) \
+			if _ability_controller != null else null
+		if ability != null:
+			var duration := maxf(ability.cooldown(), 0.0)
+			var left := maxf(ability.cooldown_left(), 0.0)
+			active = duration > 0.0 and left > 0.0
+			if active:
+				fill = 1.0 - clampf(left / duration, 0.0, 1.0)
+		_ability_slots[index].set_cooldown(fill, active)
 
 
 func _build() -> void:

@@ -32,9 +32,15 @@ const ABILITY_DISPLAY_NAMES := {
 	"bigfoot_throw": "Grab Throw",
 	"bigfoot_roar": "Roar",
 	"bigfoot_trample": "Trample",
+	"grapple": "Grapple",
+	"lasso": "Lasso",
 	"laser_eyes": "Laser Eyes",
 	"meteor_punch": "Meteor Punch",
+	"nausicaa": "Nausicaä",
+	"nuke": "Nuke",
 	"parry_reflect": "Parry Reflection",
+	"starfire": "Starfire",
+	"wall": "Wall",
 }
 
 enum Shape {
@@ -134,6 +140,14 @@ var faction := Faction.NEUTRAL
 var reaction := Reaction.NONE
 ## World-space velocity/impulse authored by the attack.
 var world_impulse := Vector3.ZERO
+## Host-authored outward and local-up impulse. These are resolved separately for
+## each combatant, unlike `world_impulse`, which points the same way for all.
+var radial_impulse := 0.0
+var radial_lift := 0.0
+## When true, solid layer-one geometry between the volume centre and an actor
+## protects that actor. Kept opt-in because existing melee and flora volumes are
+## intentionally geometric rather than visibility queries.
+var blocked_by_world := false
 var status := &""
 var status_duration := 0.0
 var parryable := false
@@ -272,7 +286,10 @@ static func apply_to_combatants(anywhere: Node, hit: DamageHit) -> float:
 		# over the immutable event. Flora already calls damage_at per instance;
 		# combatants need the same dissipating-area contract.
 		var delivered := hit if hit.falloff <= 0.0 \
+				and hit.radial_impulse <= 0.0 and hit.radial_lift <= 0.0 \
 			else hit.resolved_for(combatant)
+		if hit.blocked_by_world and hit._world_blocks(anywhere, source, combatant):
+			continue
 		var result: Variant = combatant.call(&"apply_damage", delivered)
 		var dealt := float(result) if result is float or result is int else 0.0
 		absorbed += maxf(dealt, 0.0)
@@ -418,8 +435,62 @@ func resolved_for(combatant: Node) -> DamageHit:
 		away = maxf(_radial_axis_distance(point) - bounds, 0.0)
 	else:
 		away = maxf(distance_to(point) - bounds, 0.0)
-	delivered.amount = amount * _share_for_distance(away)
+	var share := _share_for_distance(away)
+	delivered.amount = amount * share
+	if radial_impulse > 0.0 or radial_lift > 0.0:
+		var up := Vector3.UP
+		if combatant is Node3D:
+			up = (combatant as Node3D).global_basis.y.normalized()
+		var outward := point - centre()
+		if outward.length_squared() < 0.001:
+			outward = up
+		else:
+			outward = outward.normalized()
+		delivered.world_impulse += outward * radial_impulse * share \
+			+ up * radial_lift * share
 	return delivered
+
+
+func _world_blocks(anywhere: Node, source: Node, combatant: Node) -> bool:
+	if anywhere == null or combatant == null or not anywhere.is_inside_tree():
+		return false
+	var to := _combatant_position(combatant)
+	var from := centre()
+	if not from.is_finite() or not to.is_finite() \
+			or from.distance_squared_to(to) < 0.001:
+		return false
+	var query := PhysicsRayQueryParameters3D.create(from, to, 1)
+	var excluded: Array[RID] = []
+	if source is CollisionObject3D:
+		excluded.append((source as CollisionObject3D).get_rid())
+	query.collide_with_areas = false
+	if not anywhere is Node3D:
+		return false
+	var space := (anywhere as Node3D).get_world_3d().direct_space_state
+	# Combatants do not shield one another from a blast. Walk past up to eight
+	# bodies until the ray reaches its target or finds actual world geometry.
+	for _step in 8:
+		query.exclude = excluded
+		var hit := space.intersect_ray(query)
+		if hit.is_empty():
+			return false
+		var collider := hit.get("collider") as Node
+		var walk := collider
+		var other_combatant: Node
+		while walk != null:
+			if walk == combatant:
+				return false
+			if other_combatant == null \
+					and walk.is_in_group(COMBATANT_GROUP):
+				other_combatant = walk
+			walk = walk.get_parent()
+		if other_combatant == null:
+			return true
+		if collider is CollisionObject3D:
+			excluded.append((collider as CollisionObject3D).get_rid())
+			continue
+		return false
+	return false
 
 
 ## Whether a sphere of [param bounds] around [param at] can touch this volume at
@@ -504,6 +575,9 @@ func _copy() -> DamageHit:
 	copy.faction = faction
 	copy.reaction = reaction
 	copy.world_impulse = world_impulse
+	copy.radial_impulse = radial_impulse
+	copy.radial_lift = radial_lift
+	copy.blocked_by_world = blocked_by_world
 	copy.status = status
 	copy.status_duration = status_duration
 	copy.parryable = parryable
@@ -535,6 +609,9 @@ func to_wire() -> Dictionary:
 		"faction": int(faction),
 		"reaction": int(reaction),
 		"world_impulse": world_impulse,
+		"radial_impulse": radial_impulse,
+		"radial_lift": radial_lift,
+		"blocked_by_world": blocked_by_world,
 		"status": String(status),
 		"status_duration": status_duration,
 		"parryable": parryable,
@@ -576,6 +653,12 @@ static func from_wire(wire: Dictionary) -> DamageHit:
 	hit.reaction = clampi(int(wire.get("reaction", Reaction.NONE)), 0,
 		Reaction.size() - 1) as Reaction
 	hit.world_impulse = _finite_vector(wire.get("world_impulse", Vector3.ZERO))
+	var radial_value := float(wire.get("radial_impulse", 0.0))
+	hit.radial_impulse = maxf(radial_value, 0.0) \
+		if is_finite(radial_value) else 0.0
+	var lift_value := float(wire.get("radial_lift", 0.0))
+	hit.radial_lift = maxf(lift_value, 0.0) if is_finite(lift_value) else 0.0
+	hit.blocked_by_world = bool(wire.get("blocked_by_world", false))
 	hit.status = StringName(String(wire.get("status", "")))
 	var duration_value := float(wire.get("status_duration", 0.0))
 	hit.status_duration = clampf(
@@ -598,6 +681,9 @@ static func sanitize_player_packet(wire: Dictionary, sender: int,
 	hit.target_peer = 0
 	hit.reaction = Reaction.NONE
 	hit.world_impulse = Vector3.ZERO
+	hit.radial_impulse = 0.0
+	hit.radial_lift = 0.0
+	hit.blocked_by_world = false
 	hit.status = &""
 	hit.status_duration = 0.0
 	hit.parryable = false

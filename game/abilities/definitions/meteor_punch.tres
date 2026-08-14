@@ -1,0 +1,42 @@
+[gd_resource type="Resource" script_class="AbilityDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/abilities/ability_definition.gd" id="1_definition"]
+[ext_resource type="Script" path="res://game/abilities/meteor_punch.gd" id="2_implementation"]
+[ext_resource type="Texture2D" path="res://assets/runtime/abilities/icons/meteor_punch.svg" id="3_icon"]
+
+[resource]
+script = ExtResource("1_definition")
+ability_id = "meteor_punch"
+title = "Meteor Punch"
+description = "Fist out, and go. From the air you dive; from your feet you launch flat and land in a crater of your own making. Anything growing in the way is taken with you."
+implementation = ExtResource("2_implementation")
+icon = ExtResource("3_icon")
+tint = Color(0.980392, 0.619608, 0.160784, 1.000000)
+activation_type = 2
+projectile_type = 2
+impact_type = 2
+grapple_type = 0
+construct_type = 0
+reaction_type = 0
+affects_players = false
+self_launch = false
+blast_occlusion = false
+animation = &"MeteorFly"
+alternate_animation = &""
+hover_animation = &""
+alternate_hover_animation = &""
+held_animation = &""
+held_hover_animation = &""
+impact_animation = &"HeroLand"
+blocked_underwater = false
+allowed_stances = PackedInt32Array(0, 1, 2, 3)
+stats = {
+"damage": 6000.0,
+"impact": 9000.0,
+"speed": 200.0,
+"range": 50.0,
+"cooldown": 0.0,
+"radius": 4.0,
+"crater_radius": 6.0,
+"crater_depth": 2.5,
+}

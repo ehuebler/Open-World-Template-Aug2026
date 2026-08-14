@@ -1,0 +1,50 @@
+[gd_resource type="Resource" script_class="AbilityDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/abilities/ability_definition.gd" id="1_definition"]
+[ext_resource type="Script" path="res://game/abilities/nuke.gd" id="2_implementation"]
+[ext_resource type="Texture2D" path="res://assets/runtime/abilities/icons/nuke.svg" id="3_icon"]
+
+[resource]
+script = ExtResource("1_definition")
+ability_id = "nuke"
+title = "Nuke"
+description = "Launch a giant energy core from the right hand. Its host-authoritative detonation tears out a massive crater, ragdolls and hurls everything nearby, and can launch its caster without dealing self-damage."
+implementation = ExtResource("2_implementation")
+icon = ExtResource("3_icon")
+tint = Color(1.000000, 0.478431, 0.184314, 1.000000)
+activation_type = 0
+projectile_type = 4
+impact_type = 5
+grapple_type = 0
+construct_type = 0
+reaction_type = 3
+affects_players = true
+self_launch = true
+blast_occlusion = true
+animation = &"NukeThrow"
+alternate_animation = &""
+hover_animation = &"NukeFloatThrow"
+alternate_hover_animation = &""
+held_animation = &""
+held_hover_animation = &""
+impact_animation = &""
+blocked_underwater = true
+allowed_stances = PackedInt32Array(0, 1, 2, 3)
+stats = {
+"damage": 24000.0,
+"impact": 18000.0,
+"player_damage": 100.0,
+"speed": 90.0,
+"range": 240.0,
+"radius": 110.0,
+"cooldown": 10.0,
+"projectile_radius": 1.6,
+"animation_duration": 0.55,
+"crater_radius": 72.0,
+"crater_depth": 20.0,
+"crater_warp": 0.3,
+"knockback": 85.0,
+"lift": 30.0,
+"self_launch_speed": 68.0,
+"explosion_duration": 1.5,
+}

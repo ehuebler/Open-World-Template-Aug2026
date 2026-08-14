@@ -64,6 +64,8 @@ extends SurfaceAnchor
 ## [member SurfaceAnchor.direction] values rather than their placed positions,
 ## so it does not matter which readies first.
 @export var clear_of: NodePath
+## Further authored sites that use the same clearance and soft return.
+@export var additional_clear_of: Array[NodePath] = []
 @export var keep_back := 30.0
 ## And how far past that the field takes to come back to full thickness, as a
 ## multiple of the gap. A hard edge is worse than no gap at all: bare ground
@@ -353,7 +355,7 @@ var _into_local := Transform3D.IDENTITY
 ## Cosines of the angles the clearance and the far side of its fade subtend, so
 ## the test is a dot product rather than an arc cosine per candidate. The fade's
 ## is the smaller of the two: further round the sphere is a smaller dot.
-var _keep_out := Vector3.ZERO
+var _keep_outs := PackedVector3Array()
 var _keep_cos := 1.0
 var _keep_edge := 1.0
 ## Patch mask per species, one field each so two species do not grow in and out
@@ -2301,8 +2303,7 @@ func _scatter(species_index: int, plant: PlantSpecies, patch: FastNoiseLite,
 		# and not in `_ground` because it is the one rule that is a probability
 		# rather than a yes: everything else about a spot either suits a plant
 		# or does not.
-		if _keep_out != Vector3.ZERO and rng.randf() \
-				> 1.0 - smoothstep(_keep_edge, _keep_cos, at.dot(_keep_out)):
+		if _clearance_rejects(at, rng.randf()):
 			continue
 		var growth := _growth(plant, at)
 		if is_nan(growth.w):
@@ -2636,12 +2637,23 @@ func _direction_in_cell(cell: Vector3i, across: float, down: float) -> Vector3:
 
 
 func _prepare_clearance() -> void:
-	var node := get_node_or_null(clear_of) as SurfaceAnchor
-	if node == null:
-		return
-	_keep_out = node.direction.normalized()
+	_keep_outs.clear()
+	var paths: Array[NodePath] = [clear_of]
+	paths.append_array(additional_clear_of)
+	for path in paths:
+		var node := get_node_or_null(path) as SurfaceAnchor
+		if node != null:
+			_keep_outs.append(node.direction.normalized())
 	_keep_cos = cos(keep_back / _radius)
 	_keep_edge = cos(keep_back * keep_back_fade / _radius)
+
+
+func _clearance_rejects(at: Vector3, random: float) -> bool:
+	var cleared := 0.0
+	for keep_out in _keep_outs:
+		cleared = maxf(cleared,
+			smoothstep(_keep_edge, _keep_cos, at.dot(keep_out)))
+	return random > 1.0 - cleared
 
 
 # --- What the shaders are told ----------------------------------------------

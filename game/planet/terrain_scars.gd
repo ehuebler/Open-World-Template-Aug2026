@@ -24,12 +24,9 @@ extends RefCounted
 ## halfway through reading.
 
 ## Cells per cube-face axis. At the shipped radius one cell spans about sixty
-## metres, so a scar lands in one bucket and a query walks one or two records.
-##
-## Has to stay comfortably larger than the widest mark anything can make, since
-## [method _cells_for] files a scar by its middle and its rim and a footprint
-## wider than a cell would leave the cells in between unfiled. Sixty metres
-## against a six-metre crater is a factor of five.
+## metres, so most marks land in one bucket and a query walks one or two records.
+## A nuke crater is wider than that and is filed across the handful of cells its
+## footprint covers, which [method _cells_for] finds by walking the disc.
 ##
 ## Coarser than this and a player who stands and sweeps a beam over the same
 ## hillside for a while ends up with every mark they have made in one bucket,
@@ -51,11 +48,19 @@ enum Profile {
 }
 
 
+## How far off a circle a rim may wander, as a share of the radius. Bounded
+## because everything that files and invalidates a scar works from its widest
+## reach, and a mark allowed to bulge to several times its stated size would be
+## queried in cells it was never filed under.
+const MAX_WARP := 0.45
+
+
 ## One mark on the ground.
 class Scar extends RefCounted:
 	## Unit direction from the planet centre to the middle of the mark.
 	var direction := Vector3.UP
-	## Metres across the surface from that middle to the edge.
+	## Metres across the surface from that middle to the edge, on the bearings
+	## where the rim sits exactly on its circle. See [member warp].
 	var radius := 1.0
 	## Metres the ground is taken down at the deepest point. May be zero for a
 	## purely visual burn.
@@ -65,8 +70,35 @@ class Scar extends RefCounted:
 	var char := 0.0
 	## What it is blackened toward.
 	var tint := Color(0.05, 0.04, 0.035)
+	## How far the rim wanders off its circle, as a share of [member radius].
+	## Zero is the round mark a fist or a beam leaves. A blast big enough to throw
+	## the ground about does not leave a round hole, and a perfect circle at
+	## seventy metres across reads as a stamp rather than as damage.
+	var warp := 0.0
+	## Which set of lobes this rim wanders on. Two craters with the same warp and
+	## different seeds are different holes; it is carried on the wire so every
+	## peer digs the same one.
+	var seed := 0.0
 	## Buckets this scar was filed under, so eviction can find it again.
 	var cells: Array[Vector3i] = []
+
+	## Derived once when the scar is filed, because all three are wanted per
+	## vertex on the terrain build threads and none of them changes afterwards.
+	## The widest the rim reaches, and the tangent frame bearings are measured in.
+	var outer := 1.0
+	var east := Vector3.RIGHT
+	var north := Vector3.FORWARD
+
+	## Works out everything derived from [member direction], [member radius] and
+	## [member warp]. Called by [method TerrainScars.add]; the frame has to match
+	## the one bearings were authored against, so there is exactly one of it.
+	func settle() -> void:
+		direction = direction.normalized()
+		warp = clampf(warp, 0.0, MAX_WARP)
+		outer = radius * (1.0 + warp)
+		east = direction.cross(Vector3.UP if absf(direction.y) < 0.9
+			else Vector3.RIGHT).normalized()
+		north = direction.cross(east)
 
 	func to_wire() -> Dictionary:
 		return {
@@ -76,6 +108,8 @@ class Scar extends RefCounted:
 			"profile": int(profile),
 			"char": char,
 			"tint": tint,
+			"warp": warp,
+			"seed": seed,
 		}
 
 	static func from_wire(wire: Dictionary) -> Scar:
@@ -86,6 +120,11 @@ class Scar extends RefCounted:
 		scar.profile = int(wire.get("profile", Profile.BOWL)) as Profile
 		scar.char = clampf(float(wire.get("char", 0.0)), 0.0, 1.0)
 		scar.tint = wire.get("tint", Color(0.05, 0.04, 0.035))
+		scar.warp = clampf(float(wire.get("warp", 0.0)), 0.0, MAX_WARP)
+		scar.seed = float(wire.get("seed", 0.0))
+		# Settled here as well as when it is filed, so a caller that only wants
+		# to know how far a received scar reaches can read it straight off.
+		scar.settle()
 		return scar
 
 
@@ -124,9 +163,17 @@ func depth_at(direction: Vector3, spacing := 0.0) -> float:
 		if scar.depth <= 0.0:
 			continue
 		var away := direction.distance_to(scar.direction) * planet_radius
-		if away >= scar.radius:
+		# Rejected on the widest reach first. Working out a bearing is worth it
+		# only for a sample that could be inside the rim somewhere.
+		if away >= scar.outer:
 			continue
-		var cut := scar.depth * _profile_at(scar.profile, away / scar.radius) \
+		var reach := _reach_of(scar, direction)
+		if away >= reach:
+			continue
+		# The fade is judged on the nominal radius rather than the reach at this
+		# bearing, or a mark near the limit of what a mesh can show would fade in
+		# and out around its own rim.
+		var cut := scar.depth * _profile_at(scar.profile, away / reach) \
 			* _resolves(scar.radius, spacing)
 		deepest = maxf(deepest, cut)
 	return deepest
@@ -143,11 +190,14 @@ func tint(direction: Vector3, ground: Color) -> Color:
 		if scar.char <= 0.0:
 			continue
 		var away := direction.distance_to(scar.direction) * planet_radius
-		if away >= scar.radius:
+		if away >= scar.outer:
+			continue
+		var reach := _reach_of(scar, direction)
+		if away >= reach:
 			continue
 		# Squared falloff rather than linear. A burn is dark in the middle and
 		# frays at its edge; a linear ramp reads as a painted disc.
-		var edge := 1.0 - away / scar.radius
+		var edge := 1.0 - away / reach
 		var burn := clampf(scar.char * edge * edge, 0.0, 1.0)
 		# Wetness is preserved. Scorching ground does not make it dry, and
 		# writing alpha here would have the terrain shader treat a burned
@@ -179,7 +229,7 @@ func overlaps(centre: Vector3, arc: float, spacing := 0.0) -> bool:
 		if not resolves(scar.radius, spacing):
 			continue
 		if direction.distance_to(scar.direction) * planet_radius \
-				<= arc + scar.radius:
+				<= arc + scar.outer:
 			return true
 	return false
 
@@ -194,7 +244,7 @@ func resolves(radius: float, spacing: float) -> bool:
 ## Adds one mark and returns it. The caller owns invalidating whatever chunks it
 ## touched; this deliberately knows nothing about the scene.
 func add(scar: Scar) -> Scar:
-	scar.direction = scar.direction.normalized()
+	scar.settle()
 	var buckets := _buckets.duplicate()
 	if _scars.size() >= LIMIT:
 		_unfile(buckets, _scars.pop_front())
@@ -249,6 +299,27 @@ func _resolves(radius: float, spacing: float) -> float:
 	return 1.0 - smoothstep(radius * 0.5, radius * 1.5, spacing)
 
 
+## How far this scar's rim reaches on the bearing of a sample.
+##
+## Lobes rather than noise. Three overlapping harmonics are enough that no two
+## bearings agree, they stay smooth — so the rim still meets the surrounding
+## ground at a tangent instead of in a step — and they cost three sines on a path
+## that runs a few hundred thousand times per chunk, which a noise lookup does
+## not. The frame the bearing is measured in is cached on the scar; see [method
+## Scar.settle].
+func _reach_of(scar: Scar, direction: Vector3) -> float:
+	if scar.warp <= 0.0:
+		return scar.radius
+	var offset := direction - scar.direction * direction.dot(scar.direction)
+	var bearing := atan2(offset.dot(scar.north), offset.dot(scar.east))
+	# Amplitudes sum to one, so the rim stays inside the outer bound everything
+	# else is filed and invalidated against.
+	var lobes := sin(bearing * 3.0 + scar.seed) * 0.60 \
+		+ sin(bearing * 5.0 - scar.seed * 1.7) * 0.28 \
+		+ sin(bearing * 8.0 + scar.seed * 2.9) * 0.12
+	return scar.radius * (1.0 + scar.warp * lobes)
+
+
 ## Shape of the floor, as a share of full depth at a distance from the middle
 ## expressed as a share of the radius.
 func _profile_at(profile: Profile, share: float) -> float:
@@ -291,25 +362,28 @@ func _cell_of(direction: Vector3) -> Vector3i:
 		clampi(int((v * 0.5 + 0.5) * RESOLUTION), 0, RESOLUTION - 1))
 
 
-## Every cell a scar's footprint reaches, found by filing its middle and the
-## eight compass points on its rim. A cell is hundreds of metres across and a
-## scar is a few, so this is nearly always one entry and never many — but it has
-## to be the rim and not just the middle, or a crater straddling a cell boundary
-## would half disappear.
+## Every cell a scar's footprint reaches.
+##
+## The whole disc is walked, not just its rim: a nuke crater is wider than a cell
+## and a ring of samples around its edge can straddle a cell that lies entirely
+## between the middle and the rim, which would leave a square of untouched ground
+## inside the hole. Rings at a third, two thirds and the full outer reach, each of
+## sixteen bearings, cover a footprint several cells across without assuming a
+## size. This runs a few times a second at worst against a per-vertex read, so it
+## is worth being thorough here rather than clever.
 func _cells_for(scar: Scar) -> Array[Vector3i]:
 	var cells: Array[Vector3i] = [_cell_of(scar.direction)]
-	var up := scar.direction
-	var east := up.cross(
-		Vector3.UP if absf(up.y) < 0.9 else Vector3.RIGHT).normalized()
-	var north := up.cross(east)
-	var step := scar.radius / maxf(planet_radius, 1.0)
-	for angle in 8:
-		var turn := TAU * float(angle) / 8.0
-		var rim := (up + (east * cos(turn) + north * sin(turn)) * step) \
-			.normalized()
-		var cell := _cell_of(rim)
-		if not cells.has(cell):
-			cells.append(cell)
+	var step := scar.outer / maxf(planet_radius, 1.0)
+	for ring in 3:
+		var out := step * float(ring + 1) / 3.0
+		for angle in 16:
+			var turn := TAU * float(angle) / 16.0
+			var rim := (scar.direction
+				+ (scar.east * cos(turn) + scar.north * sin(turn)) * out) \
+				.normalized()
+			var cell := _cell_of(rim)
+			if not cells.has(cell):
+				cells.append(cell)
 	return cells
 
 

@@ -1,0 +1,171 @@
+{
+  "schema": "procedural_fauna_asset_manifest",
+  "version": 1,
+  "generator": "assets/source/blender/build_fauna_assets.py",
+  "coordinate_system": {
+    "authoring": "Blender Z-up, metres",
+    "runtime": "glTF/Godot Y-up, metres",
+    "axis_conversion": "Blender (x, y, z) -> glTF/Godot (x, z, -y)",
+    "ground_plane": "runtime Y=0"
+  },
+  "library_contract": {
+    "deterministic_recipes": true,
+    "one_mesh_per_glb": true,
+    "one_primitive_per_mesh": true,
+    "vertex_colour": "COLOR_0",
+    "color_paint_uv": "TEXCOORD_0",
+    "external_color_paint": "one PNG per variant under assets/runtime/biomes/paint",
+    "emission_mask": "PNG alpha, never transparency",
+    "close_and_gameplay_previews_validated": true
+  },
+  "assets": {
+    "aurora_fleece_alpaca": {
+      "name": "aurora_fleece_alpaca",
+      "display_name": "Aurora-Fleece Alpaca",
+      "category": "land_fauna",
+      "form": "alpaca",
+      "seed": 20268133,
+      "generator": "assets/source/blender/build_alpaca.py",
+      "source_sculpt": "assets/source/meshmaker/alpaca.blend",
+      "work_blend": "assets/work/alpaca_rigged.blend",
+      "glb": "assets/runtime/fauna/models/aurora_fleece_alpaca.glb",
+      "color_paint": "assets/runtime/biomes/paint/aurora_fleece_alpaca_paint.png",
+      "close_preview": "assets/previews/fauna/aurora_fleece_alpaca_close.png",
+      "gameplay_distance_preview": "assets/previews/fauna/aurora_fleece_alpaca_gameplay.png",
+      "authored_height": 1.298963,
+      "triangle_count": 7000,
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.4,
+        "height": 1.02,
+        "centre": [
+          0.0,
+          0.51,
+          0.0
+        ]
+      },
+      "color_paint_style": "pale lilac fleece streaks, a broad aurora-blue saddle over the topline, cream face and throat, indigo socks, magenta tail plume, and mip-safe luminous flank rosettes carried in PNG alpha",
+      "emission_style": "flank rosettes, eye ring, and tail plume glow after sunset",
+      "emission_strength": 1.55,
+      "runtime_contract": {
+        "mesh_node": "Character",
+        "vertex_colour": "COLOR_0 semantic region colors",
+        "color_paint_uv": "TEXCOORD_0",
+        "emission_mask": "assets/runtime/biomes/paint/aurora_fleece_alpaca_paint.png alpha; never transparency",
+        "ground_axis": "Godot/glTF +Y",
+        "forward_axis": "Godot local -Z",
+        "skins": 1,
+        "bones": 19,
+        "animations": [
+          "Idle",
+          "Walk",
+          "Run",
+          "Graze",
+          "Bound",
+          "Strafe",
+          "Spit",
+          "HitReact",
+          "Defeat"
+        ]
+      },
+      "file_size_bytes": 1570588,
+      "paint_size_bytes": 124769
+    },
+    "lumaquill_porcupine": {
+      "name": "lumaquill_porcupine",
+      "display_name": "Lumaquill Porcupine",
+      "category": "land_fauna",
+      "form": "porcupine",
+      "seed": 20268131,
+      "glb": "assets/runtime/fauna/models/lumaquill_porcupine.glb",
+      "color_paint": "assets/runtime/biomes/paint/lumaquill_porcupine_paint.png",
+      "close_preview": "assets/previews/fauna/lumaquill_porcupine_close.png",
+      "gameplay_distance_preview": "assets/previews/fauna/lumaquill_porcupine_gameplay.png",
+      "authored_height": 0.72,
+      "triangle_count": 2248,
+      "glb_vertex_count": 3078,
+      "triangle_budget": {
+        "minimum": 1800,
+        "maximum": 5200
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.31,
+        "height": 0.62,
+        "centre": [
+          0.0,
+          0.31,
+          0.0
+        ]
+      },
+      "color_paint_style": "broad turquoise flank bands, magenta quill chevrons, large yellow eyespots, and mip-safe cyan/magenta night marks in PNG alpha",
+      "emission_style": "quill bands and eyes glow cyan-magenta after local sunset",
+      "emission_strength": 1.65,
+      "runtime_contract": {
+        "mesh_node": "lumaquill_porcupine",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "vertex_colour": "COLOR_0 semantic part colors",
+        "color_paint_uv": "TEXCOORD_0",
+        "paint_texture": "assets/runtime/biomes/paint/lumaquill_porcupine_paint.png",
+        "emission_mask": "assets/runtime/biomes/paint/lumaquill_porcupine_paint.png alpha; never transparency",
+        "ground_axis": "Godot/glTF +Y",
+        "forward_axis": "Godot local -Z",
+        "skins": 0,
+        "animations": "procedural runtime walk/run/roll/body-slap presentation"
+      },
+      "file_size_bytes": 150432,
+      "paint_size_bytes": 88206,
+      "close_preview_size_bytes": 178037,
+      "gameplay_preview_size_bytes": 139443
+    },
+    "prism_coil_slinky": {
+      "name": "prism_coil_slinky",
+      "display_name": "Prism-Coil Slinky",
+      "category": "land_fauna",
+      "form": "slinky",
+      "seed": 20268132,
+      "glb": "assets/runtime/fauna/models/prism_coil_slinky.glb",
+      "color_paint": "assets/runtime/biomes/paint/prism_coil_slinky_paint.png",
+      "close_preview": "assets/previews/fauna/prism_coil_slinky_close.png",
+      "gameplay_distance_preview": "assets/previews/fauna/prism_coil_slinky_gameplay.png",
+      "authored_height": 1.7,
+      "triangle_count": 4176,
+      "glb_vertex_count": 6407,
+      "triangle_budget": {
+        "minimum": 2800,
+        "maximum": 6200
+      },
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.72,
+        "height": 1.62,
+        "centre": [
+          0.0,
+          0.81,
+          0.0
+        ]
+      },
+      "color_paint_style": "wide alternating violet/teal coil bands, looping lime helix marks, pink slap pads, and a mip-safe luminous stripe mask in PNG alpha",
+      "emission_style": "teal helix bands, eyes, and slap pads pulse after local sunset",
+      "emission_strength": 1.8,
+      "runtime_contract": {
+        "mesh_node": "prism_coil_slinky",
+        "mesh_count": 1,
+        "primitive_count": 1,
+        "vertex_colour": "COLOR_0 semantic part colors",
+        "color_paint_uv": "TEXCOORD_0",
+        "paint_texture": "assets/runtime/biomes/paint/prism_coil_slinky_paint.png",
+        "emission_mask": "assets/runtime/biomes/paint/prism_coil_slinky_paint.png alpha; never transparency",
+        "ground_axis": "Godot/glTF +Y",
+        "forward_axis": "Godot local -Z",
+        "skins": 0,
+        "animations": "procedural runtime walk/run/roll/body-slap presentation"
+      },
+      "file_size_bytes": 308472,
+      "paint_size_bytes": 82593,
+      "close_preview_size_bytes": 229715,
+      "gameplay_preview_size_bytes": 150123
+    }
+  }
+}

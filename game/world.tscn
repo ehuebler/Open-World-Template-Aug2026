@@ -47,6 +47,10 @@
 [ext_resource type="Script" path="res://game/enemies/bigfoot/bigfoot_site.gd" id="45_bigfoot_site"]
 [ext_resource type="PackedScene" path="res://game/enemies/bigfoot/bigfoot.tscn" id="46_bigfoot"]
 [ext_resource type="Script" path="res://game/planet/night_ground_glow.gd" id="47_night_ground_glow"]
+[ext_resource type="PackedScene" path="res://game/enemies/training_dummy.tscn" id="48_training_dummy"]
+[ext_resource type="PackedScene" path="res://game/fauna/fauna_populations.tscn" id="49_fauna"]
+[ext_resource type="Script" path="res://game/meeps/meep_colonies.gd" id="50_meeps"]
+[ext_resource type="Script" path="res://game/props/ability_test_site.gd" id="51_test_site"]
 
 [sub_resource type="ShaderMaterial" id="SkyMaterial"]
 shader = ExtResource("4_space")
@@ -321,6 +325,12 @@ site = &"meridian"
 enabled = false
 metadata/_custom_type_script = "uid://cxyl1llbkxjek"
 
+; Every Meep settlement, and nothing until somebody presses RELEASE SETTLERS at a
+; ship. Unrelated to the City builders above: those grade a pad and lay authored
+; streets, and a Meep town is built on the ground as found, by its residents.
+[node name="MeepColonies" type="Node3D" parent="Planet"]
+script = ExtResource("50_meeps")
+
 ; The lander, on the shore of what Vacationer's Landing was named for. It is the
 ; town's sign as well as a prop: a ColonyShip is a Landmark, so the waypoint over
 ; it is the same node, and the town's own marker went with the streets.
@@ -341,6 +351,35 @@ tint = Color(0.964706, 0.701961, 0.168627, 1)
 show_beyond = 400.0
 aimed_beyond = 900.0
 metadata/_custom_type_script = "uid://dlrsxm5tm8mfo"
+
+; Two hundred metres from the lander on a surveyed dry shelf: 0.88 m of relief
+; across the 14 m pad and a 2.5-degree slope at full terrain detail. The waypoint
+; is visible from the ship, while the lit mast and ring identify the site after
+; arrival. Dummies settle independently onto the procedural ground and respawn.
+[node name="AbilityTestingSite" type="Node3D" parent="Planet"]
+script = ExtResource("51_test_site")
+direction = Vector3(-0.26689449, -0.12450018, 0.95565003)
+facing = 91.9
+title = "Ability Test Site"
+tint = Color(0.345098, 0.878431, 0.760784, 1)
+show_beyond = 12.0
+aimed_beyond = 20.0
+hide_beyond = 1500.0
+
+[node name="TrainingDummyLeft" parent="Planet/AbilityTestingSite" instance=ExtResource("48_training_dummy")]
+anchor_path = NodePath("..")
+anchor_right_offset = -5.0
+anchor_forward_offset = 0.0
+
+[node name="TrainingDummy" parent="Planet/AbilityTestingSite" instance=ExtResource("48_training_dummy")]
+anchor_path = NodePath("..")
+anchor_right_offset = 0.0
+anchor_forward_offset = 0.0
+
+[node name="TrainingDummyRight" parent="Planet/AbilityTestingSite" instance=ExtResource("48_training_dummy")]
+anchor_path = NodePath("..")
+anchor_right_offset = 5.0
+anchor_forward_offset = 0.0
 
 ; Five ruins of the same panelled alien technology, broken into differently
 ; stretched and buried fragments. Four centres are dry sites spread around the
@@ -421,6 +460,7 @@ species = Array[ExtResource("13_species")]([ExtResource("14_flower")])
 spread = 430.0
 tile_size = 34.0
 clear_of = NodePath("../ColonyShip")
+additional_clear_of = Array[NodePath]([NodePath("../AbilityTestingSite")])
 keep_back = 26.0
 wind_heading = 35.0
 ; Temporarily disabled with the master aerial terrain wash. Ground-level bloom
@@ -460,6 +500,7 @@ material = ExtResource("30_tree_material")
 head_material = ExtResource("32_tree_head_material")
 grass_cover = NodePath("../GlobalGrass")
 clear_of = NodePath("../ColonyShip")
+additional_clear_of = Array[NodePath]([NodePath("../AbilityTestingSite")])
 spread = 900.0
 tree_count = 280
 keep_back = 62.0
@@ -494,6 +535,8 @@ direction = Vector3(-0.2881049, -0.1121179, 0.9510127)
 species = Array[ExtResource("13_species")]([ExtResource("15_grass")])
 global_cover = true
 tile_size = 18.0
+clear_of = NodePath("../AbilityTestingSite")
+keep_back = 18.0
 wind_heading = 35.0
 pending_limit = 1
 applies_per_frame = 1
@@ -566,6 +609,8 @@ glow_light_pulse_speed = 0.16
 ; against the same grass/sand/stone/ice, aridity, frost, height and slope rules
 ; that paint the terrain.
 [node name="BiomePopulations" parent="Planet" instance=ExtResource("34_biome_populations")]
+
+[node name="FaunaPopulations" parent="Planet" instance=ExtResource("49_fauna")]
 
 ; Ethereal night life streams in stable cells around the viewer. Conservative
 ; hover bands plus a four-metre bob keep the motes inside the requested

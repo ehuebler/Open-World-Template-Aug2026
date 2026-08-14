@@ -1,0 +1,82 @@
+[gd_resource type="Resource" script_class="FaunaSpecies" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://game/fauna/fauna_species.gd" id="1_species"]
+[ext_resource type="PackedScene" path="res://assets/runtime/fauna/models/prism_coil_slinky.glb" id="2_model"]
+[ext_resource type="ShaderMaterial" path="res://game/fauna/materials/prism_coil_slinky.tres" id="3_material"]
+[ext_resource type="Texture2D" path="res://assets/runtime/biomes/paint/prism_coil_slinky_paint.png" id="4_paint"]
+
+[resource]
+script = ExtResource("1_species")
+model = ExtResource("2_model")
+material = ExtResource("3_material")
+paint_texture = ExtResource("4_paint")
+species_id = "prism_coil_slinky"
+display_name = "Prism-Coil Slinky"
+enabled = false
+disposition = 2
+move_set = 7
+locomotion = 2
+attack_style = 2
+paint_style = "Wide violet/teal coil bands, looping lime helix marks, pink slap pads, and a mip-safe luminous stripe mask"
+height = 1.7
+height_variation = 0.08
+variant_tint_a = Color(0.9, 0.78, 1.0, 1.0)
+variant_tint_b = Color(0.76, 1.0, 0.92, 1.0)
+saturation = 1.48
+brightness = 1.11
+biome_tint_strength = 0.1
+night_emission_color = Color(0.3, 1.0, 0.78, 1.0)
+night_emission_energy = 2.45
+night_emission_albedo = 0.56
+night_pulse_amount = 0.22
+night_pulse_speed = 0.25
+local_light_color = Color(0.34, 1.0, 0.72, 1.0)
+local_light_energy = 1.8
+local_light_range = 10.5
+local_light_height_share = 0.52
+collision_radius_share = 0.43
+collision_height_share = 0.96
+combat_radius_share = 0.49
+ground_layer = 0
+minimum_ground_claim = 0.0
+above_water = 5.0
+below = 460.0
+minimum_arid = 0.0
+maximum_arid = 1.0
+minimum_frost = 0.0
+maximum_frost = 0.94
+max_slope = 22.0
+steady_over = 2.6
+steady_within = 1.05
+global_population = true
+cell_size = 86.0
+spawn_chance = 0.15
+pack_min = 1
+pack_max = 2
+pack_radius = 7.0
+maximum_instances = 9
+spawn_within = 235.0
+despawn_beyond = 305.0
+random_seed = 20268132
+colony_count = 2
+colony_near = 54.0
+colony_far = 86.0
+health = 170.0
+health_per_metre = 28.0
+toughness = 1
+respawn_delay = 20.0
+walk_speed = 2.2
+run_speed = 7.2
+move_acceleration = 22.0
+turn_speed = 6.0
+wander_radius = 23.0
+wander_pause = 1.7
+notice_range = 21.0
+flee_range = 0.0
+physics_within = 55.0
+attack_damage = 22.0
+attack_range = 2.35
+attack_radius = 1.1
+attack_windup = 0.42
+attack_cooldown = 2.25
+attack_knockback = 10.5

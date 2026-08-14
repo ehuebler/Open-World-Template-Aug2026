@@ -76,6 +76,10 @@ func _rebuild() -> void:
 func _make(index: int, id: String) -> Ability:
 	if not ItemDB.accepts_ability(id):
 		return null
+	var definition := ItemDB.ability_definition(id)
+	if definition == null:
+		push_error("Ability '%s' has no generated definition" % id)
+		return null
 	var path := ItemDB.ability_script(id)
 	if path.is_empty():
 		push_warning("Ability '%s' has no script" % id)
@@ -88,7 +92,7 @@ func _make(index: int, id: String) -> Ability:
 	if ability == null:
 		push_error("Ability '%s' script is not an Ability" % id)
 		return null
-	ability.configure(player, index, id, ItemDB.stats_of(id))
+	ability.configure(player, index, id, definition)
 	return ability
 
 

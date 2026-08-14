@@ -642,6 +642,238 @@ def meteor_fly_pose(t):
 
 
 # --------------------------------------------------------------------------
+# Abilities
+# --------------------------------------------------------------------------
+
+def _starfire_pose(t, active_side):
+    """Quick open-palm cast, authored once and mirrored by active side."""
+    if t < 0.30:
+        share = t / 0.30
+        swing = 8.0 + (-48.0 - 8.0) * share
+        flex = 18.0 + (76.0 - 18.0) * share
+    elif t < 0.66:
+        share = (t - 0.30) / 0.36
+        share = share * share * (3.0 - 2.0 * share)
+        swing = -48.0 + (102.0 + 48.0) * share
+        flex = 76.0 + (8.0 - 76.0) * share
+    else:
+        share = (t - 0.66) / 0.34
+        share = share * share * (3.0 - 2.0 * share)
+        swing = 102.0 + (8.0 - 102.0) * share
+        flex = 8.0 + (18.0 - 8.0) * share
+
+    active_sign = 1.0 if active_side == "Right" else -1.0
+    pulse = math.sin(math.pi * t)
+    pose = {
+        "Spine": rot(("Y", active_sign * 8.0 * pulse)),
+        "Chest": rot(("Y", active_sign * 16.0 * pulse),
+                     ("Z", -active_sign * 5.0 * pulse)),
+        "Head": rot(("Y", -active_sign * 5.0 * pulse)),
+    }
+    for side, sign, _offset in SIDES:
+        if side == active_side:
+            arm_hang(pose, side, sign, out=26.0 + 8.0 * pulse,
+                     swing=swing, flex=flex)
+            pose[side + "Hand"] = rot(("X", -18.0 * pulse))
+        else:
+            arm_hang(pose, side, sign, out=20.0,
+                     swing=20.0 * pulse, flex=48.0 * pulse)
+    return pose
+
+
+def starfire_right_pose(t):
+    return _starfire_pose(t, "Right")
+
+
+def starfire_left_pose(t):
+    return _starfire_pose(t, "Left")
+
+
+def _starfire_float_pose(t, active_side):
+    """The same throw while preserving Float's raised-knee silhouette."""
+    # Float is a two-second loop while this throw is one third of a second. Move
+    # through the matching fraction of its bob so the legs remain alive without
+    # racing through a full hover cycle during one cast.
+    pose = float_pose(t / 6.0)
+    pose.update(_starfire_pose(t, active_side))
+    return pose
+
+
+def starfire_float_right_pose(t):
+    return _starfire_float_pose(t, "Right")
+
+
+def starfire_float_left_pose(t):
+    return _starfire_float_pose(t, "Left")
+
+
+def nuke_throw_pose(t):
+    """Heavy right-hand wind-up and committed palm launch."""
+    if t < 0.42:
+        wind = t / 0.42
+        wind = wind * wind * (3.0 - 2.0 * wind)
+        swing = 12.0 - 80.0 * wind
+        flex = 18.0 + 72.0 * wind
+    elif t < 0.76:
+        fire = (t - 0.42) / 0.34
+        fire = fire * fire * (3.0 - 2.0 * fire)
+        swing = -68.0 + 184.0 * fire
+        flex = 90.0 - 84.0 * fire
+    else:
+        recover = (t - 0.76) / 0.24
+        recover = recover * recover * (3.0 - 2.0 * recover)
+        swing = 116.0 - 104.0 * recover
+        flex = 6.0 + 12.0 * recover
+    pulse = math.sin(math.pi * t)
+    pose = {
+        "Spine": rot(("Y", 12.0 * pulse), ("X", -5.0 * pulse)),
+        "Chest": rot(("Y", 24.0 * pulse), ("X", -8.0 * pulse)),
+        "Head": rot(("Y", -9.0 * pulse), ("X", 4.0 * pulse)),
+        "RightHand": rot(("X", -24.0 * pulse)),
+    }
+    arm_hang(pose, "Right", 1.0, out=24.0 + 12.0 * pulse,
+             swing=swing, flex=flex)
+    arm_hang(pose, "Left", -1.0, out=24.0,
+             swing=28.0 * pulse, flex=58.0 * pulse)
+    return pose
+
+
+def nuke_float_throw_pose(t):
+    pose = float_pose(t / 6.0)
+    pose.update(nuke_throw_pose(t))
+    return pose
+
+
+def lasso_throw_pose(t):
+    """Snap the right hand forward as if casting a web line."""
+    cast = min(t / 0.56, 1.0)
+    cast = cast * cast * (3.0 - 2.0 * cast)
+    recover = max((t - 0.72) / 0.28, 0.0)
+    recover = recover * recover * (3.0 - 2.0 * recover)
+    held = cast * (1.0 - 0.35 * recover)
+    pose = {
+        "Spine": rot(("Y", 9.0 * held)),
+        "Chest": rot(("Y", 17.0 * held), ("X", -4.0 * held)),
+        "Head": rot(("Y", -6.0 * held)),
+        "RightHand": rot(("X", -34.0 * held), ("Z", 12.0 * held)),
+    }
+    arm_hang(pose, "Right", 1.0, out=20.0 + 14.0 * held,
+             swing=112.0 * held, flex=20.0 - 12.0 * held)
+    arm_hang(pose, "Left", -1.0, out=16.0 + 8.0 * held,
+             swing=-18.0 * held, flex=24.0 + 18.0 * held)
+    return pose
+
+
+def lasso_float_throw_pose(t):
+    pose = float_pose(t / 6.0)
+    pose.update(lasso_throw_pose(t))
+    return pose
+
+
+def lasso_hold_pose(t):
+    sway = math.sin(t * TAU)
+    pose = {
+        "Spine": rot(("Y", 8.0 + 3.0 * sway), ("X", -4.0)),
+        "Chest": rot(("Y", 14.0 + 4.0 * sway), ("X", -6.0)),
+        "Head": rot(("Y", -6.0 - 2.0 * sway), ("X", 3.0)),
+        "RightHand": rot(("X", -32.0), ("Z", 10.0)),
+    }
+    arm_hang(pose, "Right", 1.0, out=33.0 + 2.0 * sway,
+             swing=108.0 + 5.0 * sway, flex=12.0)
+    arm_hang(pose, "Left", -1.0, out=25.0 - 2.0 * sway,
+             swing=-20.0, flex=40.0 + 3.0 * sway)
+    return pose
+
+
+def lasso_float_hold_pose(t):
+    pose = float_pose(t)
+    pose.update(lasso_hold_pose(t))
+    return pose
+
+
+def wall_place_pose(t):
+    """Raise both palms and push the barrier into place."""
+    push = math.sin(math.pi * min(t, 1.0))
+    pose = {
+        "Spine": rot(("X", -7.0 * push)),
+        "Chest": rot(("X", -12.0 * push)),
+        "Head": rot(("X", 8.0 * push)),
+        "RightHand": rot(("X", -28.0 * push)),
+        "LeftHand": rot(("X", -28.0 * push)),
+    }
+    for side, sign, _offset in SIDES:
+        arm_hang(pose, side, sign, out=34.0 * push,
+                 swing=96.0 * push, flex=10.0 + 18.0 * push)
+    return pose
+
+
+def wall_float_place_pose(t):
+    pose = float_pose(t / 6.0)
+    pose.update(wall_place_pose(t))
+    return pose
+
+
+def nausica_mark_pose(t):
+    """A short, precise right-hand beam rather than a weapon recoil."""
+    point = math.sin(math.pi * min(t, 1.0))
+    pose = {
+        "Spine": rot(("Y", 6.0 * point)),
+        "Chest": rot(("Y", 11.0 * point), ("X", -3.0 * point)),
+        "Head": rot(("Y", -4.0 * point)),
+        "RightHand": rot(("X", -12.0 * point)),
+    }
+    arm_hang(pose, "Right", 1.0, out=15.0 + 12.0 * point,
+             swing=122.0 * point, flex=8.0)
+    arm_hang(pose, "Left", -1.0, out=15.0,
+             swing=-12.0 * point, flex=20.0)
+    return pose
+
+
+def nausica_float_mark_pose(t):
+    pose = float_pose(t / 6.0)
+    pose.update(nausica_mark_pose(t))
+    return pose
+
+
+def grapple_grab_pose(t):
+    reach = min(t / 0.58, 1.0)
+    reach = reach * reach * (3.0 - 2.0 * reach)
+    pose = {
+        "Hips": {"rot": [("X", -5.0 * reach)],
+                 "loc": (0.0, 0.0, -0.035 * reach)},
+        "Spine": rot(("X", -12.0 * reach)),
+        "Chest": rot(("X", -9.0 * reach)),
+        "Neck": rot(("X", 8.0 * reach)),
+        "Head": rot(("X", 10.0 * reach)),
+    }
+    for side, sign, _offset in SIDES:
+        arm_hang(pose, side, sign, out=22.0 + 9.0 * reach,
+                 swing=96.0 * reach, flex=12.0 + 12.0 * reach)
+    return pose
+
+
+def grapple_carry_pose(t):
+    bob = math.sin(t * TAU)
+    pose = {
+        "Hips": {"rot": [("Z", 2.5 * bob)],
+                 "loc": (0.0, 0.0, 0.018 * bob)},
+        "Spine": rot(("X", -8.0)),
+        "Chest": rot(("X", -6.0)),
+        "Neck": rot(("X", 7.0)),
+        "Head": rot(("X", 9.0), ("Z", -2.5 * bob)),
+        "RightUpperLeg": rot(("X", 20.0 + 3.0 * bob), ("Y", -5.0)),
+        "RightLowerLeg": rot(("X", -38.0)),
+        "LeftUpperLeg": rot(("X", -8.0 - 3.0 * bob), ("Y", 5.0)),
+        "LeftLowerLeg": rot(("X", -18.0)),
+    }
+    for side, sign, offset in SIDES:
+        arm_hang(pose, side, sign, out=30.0,
+                 swing=78.0 + 3.0 * math.sin(t * TAU + offset),
+                 flex=72.0 + 4.0 * bob)
+    return pose
+
+
+# --------------------------------------------------------------------------
 # Water
 # --------------------------------------------------------------------------
 #
@@ -730,6 +962,22 @@ ANIMATIONS = [
     ("Float", 60, True, float_pose),
     ("Fly", 48, True, fly_pose),
     ("MeteorFly", 30, True, meteor_fly_pose),
+    ("StarfireRight", 10, False, starfire_right_pose),
+    ("StarfireLeft", 10, False, starfire_left_pose),
+    ("StarfireFloatRight", 10, False, starfire_float_right_pose),
+    ("StarfireFloatLeft", 10, False, starfire_float_left_pose),
+    ("NukeThrow", 16, False, nuke_throw_pose),
+    ("NukeFloatThrow", 16, False, nuke_float_throw_pose),
+    ("LassoThrow", 9, False, lasso_throw_pose),
+    ("LassoFloatThrow", 9, False, lasso_float_throw_pose),
+    ("LassoHold", 30, True, lasso_hold_pose),
+    ("LassoFloatHold", 30, True, lasso_float_hold_pose),
+    ("WallPlace", 14, False, wall_place_pose),
+    ("WallFloatPlace", 14, False, wall_float_place_pose),
+    ("NausicaMark", 12, False, nausica_mark_pose),
+    ("NausicaFloatMark", 12, False, nausica_float_mark_pose),
+    ("GrappleGrab", 10, False, grapple_grab_pose),
+    ("GrappleCarry", 30, True, grapple_carry_pose),
     ("Tread", 72, True, tread_pose),
     ("Swim", 36, True, swim_pose),
 ]

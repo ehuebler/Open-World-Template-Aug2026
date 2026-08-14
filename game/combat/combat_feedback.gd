@@ -17,9 +17,24 @@ const STATUS_WOBBLE_TIME := 0.5
 const MAX_WOBBLE_ROLL := 0.10
 const WOBBLE_HZ := 3.4
 
+const BLAST_FLASH_SHADER := preload("res://game/combat/blast_flash.gdshader")
+## How long a detonation holds the view inside out. About a second, because that
+## is long enough to read as the world having been wrong for a moment and short
+## enough that nobody starts trying to play through it.
+const BLAST_FLASH_TIME := 1.05
+## Share of that spent on the white wash. The flash is an instant and the negative
+## it leaves behind is the part that lasts.
+const BLAST_BLEACH_SHARE := 0.16
+## Share of it the negative holds at full before easing back.
+const BLAST_INVERT_HOLD := 0.55
+
 var _camera: Camera3D
 var _hud: CanvasLayer
 var _flash: ColorRect
+var _blast: ColorRect
+var _blast_material: ShaderMaterial
+var _blast_strength := 0.0
+var _blast_left := 0.0
 var _numbers: DamageNumberLayer
 var _shake_strength := 0.0
 var _shake_left := 0.0
@@ -43,6 +58,18 @@ func configure(camera: Camera3D, hud: CanvasLayer) -> void:
 		_base_roll = _camera.rotation.z
 	if _hud == null:
 		return
+	# Added before the damage flash and the readouts, and so drawn under them:
+	# what a detonation turns negative should be the world and the reticle over
+	# it, not the numbers telling the player what just happened to them.
+	_blast_material = ShaderMaterial.new()
+	_blast_material.shader = BLAST_FLASH_SHADER
+	_blast = ColorRect.new()
+	_blast.name = "BlastFlash"
+	_blast.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_blast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_blast.material = _blast_material
+	_blast.visible = false
+	_hud.add_child(_blast)
 	_flash = ColorRect.new()
 	_flash.name = "DamageFlash"
 	_flash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -126,6 +153,28 @@ func flora_contact(speed: float) -> void:
 	shake(clampf(inverse_lerp(7.0, 120.0, speed), 0.08, 0.5), 0.12)
 
 
+## Standing inside a detonation: a white wash, then a second of the view held
+## inside out, and a kick to go with it.
+##
+## [param strength] is how much of it this view gets, which the effect works out
+## from how far away it is. Nothing here is authoritative and nothing is sent —
+## the blast already exists on every peer, so every peer's own distance to it is
+## enough to decide what their screen does.
+func blast_flash(strength := 1.0) -> void:
+	var share := clampf(strength, 0.0, 1.0)
+	if share <= 0.0:
+		return
+	_blast_strength = maxf(_blast_strength, share)
+	_blast_left = maxf(_blast_left, BLAST_FLASH_TIME)
+	shake(share * 0.9, DAMAGE_SHAKE_TIME * 1.6)
+	wobble(share * 0.75, STATUS_WOBBLE_TIME)
+
+
+## How long this view is still inside out for. Zero when it is not.
+func blast_flash_remaining() -> float:
+	return _blast_left
+
+
 func shake(strength: float, duration: float) -> void:
 	if strength <= 0.0 or duration <= 0.0 or _camera == null:
 		return
@@ -146,6 +195,9 @@ func _process(delta: float) -> void:
 	_flora_gap_left = maxf(_flora_gap_left - delta, 0.0)
 	if _flash != null and _flash.color.a > 0.0:
 		_flash.color.a = maxf(_flash.color.a - delta * 1.9, 0.0)
+	if _blast_left > 0.0:
+		_blast_left = maxf(_blast_left - delta, 0.0)
+		_drive_blast_flash()
 	if _camera == null:
 		return
 	if _shake_left <= 0.0 and _wobble_left <= 0.0:
@@ -180,6 +232,28 @@ func _process(delta: float) -> void:
 		_wobble_strength = 0.0
 		_wobble_span = 0.0
 		_camera.rotation.z = _base_roll
+
+
+func _drive_blast_flash() -> void:
+	if _blast == null or _blast_material == null:
+		return
+	if _blast_left <= 0.0:
+		_blast_strength = 0.0
+		_blast.visible = false
+		return
+	var gone := 1.0 - _blast_left / BLAST_FLASH_TIME
+	# White first, negative second. Inverting while the core is still white turns
+	# the brightest part of the detonation into a black ball, which is exactly the
+	# opposite of a flash. The two cross over near the end of the wash, then the
+	# negative holds and eases back rather than snapping.
+	var bleach := 1.0 - smoothstep(0.0, BLAST_BLEACH_SHARE, gone)
+	var invert_in := smoothstep(
+		BLAST_BLEACH_SHARE * 0.6, BLAST_BLEACH_SHARE, gone)
+	var invert_out := 1.0 - smoothstep(BLAST_INVERT_HOLD, 1.0, gone)
+	var invert := minf(invert_in, invert_out)
+	_blast.visible = true
+	_blast_material.set_shader_parameter(&"bleach", bleach * _blast_strength)
+	_blast_material.set_shader_parameter(&"invert", invert * _blast_strength)
 
 
 func _show_number(event: DamageNumberEvent, replacement := "") -> void:

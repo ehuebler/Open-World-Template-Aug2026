@@ -50,8 +50,20 @@ func _ready() -> void:
 		controller.ability_in(0) if controller != null else null,
 		controller.ability_in(1) if controller != null else null])
 
+	var arguments := OS.get_cmdline_user_args()
+	if arguments.has("--nausicaa-only"):
+		_player.abilities.set_item(1, "nausicaa")
+		await _wait(4)
+		await _nausicaa_shots()
+		get_tree().quit()
+		return
+	if arguments.has("--new-only"):
+		await _new_ability_shots(world)
+		get_tree().quit()
+		return
 	await _laser_shots()
 	await _meteor_shots()
+	await _new_ability_shots(world)
 	get_tree().quit()
 
 
@@ -154,6 +166,290 @@ func _meteor_shots() -> void:
 	await _dive_shots(here)
 
 
+## Exercises the four catalogue additions through the same in-world path used
+## by play. Each effect gets a gameplay camera view plus a side or aftermath
+## view that makes its shape, collision volume, or terrain result readable.
+func _new_ability_shots(world: GameWorld) -> void:
+	var dummy := world.find_child(
+		"TrainingDummy", true, false) as TrainingDummy
+	var arena := _cover_nearby()
+	_player.abilities.set_item(0, "nuke")
+	_player.abilities.set_item(1, "lasso")
+	await _wait(4)
+	if dummy != null:
+		_place_dummy(dummy, arena)
+		await _lasso_shots(dummy, arena)
+	else:
+		push_error("ability_shot: the training dummy is missing")
+
+	# Everything that wants intact ground goes before the nuke. It leaves a
+	# seventy-metre hole in the middle of the arena, and the shots after it would
+	# otherwise be of a player standing at the bottom of one.
+	_player.abilities.set_item(0, "wall")
+	_player.abilities.set_item(1, "nausicaa")
+	await _wait(4)
+	await _wall_shots()
+	await _nausicaa_shots()
+
+	if dummy != null:
+		_player.abilities.set_item(0, "nuke")
+		await _wait(4)
+		# The long-distance shot is aimed along the horizon. Leaving the dummy
+		# on that line makes it the blast centre and throws it back through every
+		# frame meant to show the cloud. Removing it is more reliable than hiding
+		# it: its respawn routine deliberately restores visibility and collision.
+		dummy.queue_free()
+		await get_tree().process_frame
+		await _nuke_shots(arena)
+		await _nuke_self_launch_shots(arena)
+
+
+func _lasso_shots(dummy: TrainingDummy, arena: Vector3) -> void:
+	_stand_facing(arena, 8.0)
+	_player.set_camera_mode(OnlinePlayer.CameraMode.THIRD_FAR)
+	await _wait(20)
+	await _aim_at(dummy.combat_position())
+	await _ready_in(1)
+	print("ability_shot: lasso dispatched=%s" % _player.activate_ability(1))
+	await _wait(10)
+	print("ability_shot: lasso active=%s target=%s" % [
+		_player.ability_lasso_active(), dummy.is_lassoed()])
+	await _shot("ability_lasso_gameplay")
+	await _side_shot("ability_lasso_close", 2.0, 7.0)
+	await _wait(30)
+	await _shot("ability_lasso_swing")
+	_player.release_ability(1)
+	await _wait(14)
+	await _shot("ability_lasso_released")
+	await _ready_in(1)
+	_player._pitch = 0.48
+	print("ability_shot: lasso miss dispatched=%s" % (
+		_player.activate_ability(1)))
+	await _wait_seconds(0.14)
+	await _shot("ability_lasso_miss")
+	await _wait_seconds(0.5)
+	_player._pitch = 0.0
+	# Let the dummy settle before using it as the Nuke's deterministic collider.
+	await _wait(90)
+
+
+## The whole sequence, from a stand-off. Every stage gets its own frame because
+## they do not look alike and none of them lasts: the white flash and the negative
+## it leaves are gone inside a second, the cloud takes several to stand up, and the
+## second front is still running out along the ground after both.
+func _nuke_shots(arena: Vector3) -> void:
+	# Outside the blast, taken from the authored radius. Any closer and every frame
+	# below is of the caster being thrown by their own detonation rather than of the
+	# detonation — that shot exists, and it is the next one.
+	var reach := float(ItemDB.stats_of("nuke").get("radius", 0.0))
+	_player._clear_ragdoll()
+	_stand_facing(arena, reach + 55.0)
+	_player.set_camera_mode(OnlinePlayer.CameraMode.THIRD_FAR)
+	await _wait(20)
+	# Level along the tangent. Aiming at distant ground on a spherical world
+	# points through the planet and detonates at the caster's feet; level flight
+	# reaches max range a few metres over the surface, close enough to cut it.
+	_player._pitch = 0.0
+	await _ready_in(0)
+	var scars_before := _planet.shape.scars.count()
+	print("ability_shot: nuke dispatched=%s from %.0f m" % [
+		_player.activate_ability(0), reach + 55.0])
+	await _wait(6)
+	await _shot("ability_nuke_projectile")
+	await _side_shot("ability_nuke_projectile_side", 5.0, 10.0)
+	for _frame in 240:
+		await get_tree().process_frame
+		if _planet.shape.scars.count() > scars_before:
+			break
+	print("ability_shot: nuke added crater=%s" % (
+		_planet.shape.scars.count() > scars_before))
+	var scar: TerrainScars.Scar
+	if _planet.shape.scars.count() > scars_before:
+		var scars: Array = _planet.shape.scars.get("_scars")
+		scar = scars.back() as TerrainScars.Scar
+	var impact := arena
+	var crater_reach := float(
+		ItemDB.stats_of("nuke").get("crater_radius", reach * 0.5))
+	if scar != null:
+		impact = _planet.global_transform \
+			* _planet.shape.surface_point(scar.direction)
+		crater_reach = scar.outer
+
+	# The next rendered frame is the white wash. A fraction of a second later it
+	# has yielded to the negative the user sees for the rest of the first second.
+	await _shot("ability_nuke_flash")
+	await _wait_seconds(0.2)
+	await _shot("ability_nuke_invert")
+
+	# Past the one-second screen treatment, so the observer can show the world
+	# effect itself instead of photographing the post-process twice.
+	await _wait_seconds(0.9)
+	await _blast_observer_shot(
+		"ability_nuke_blast", impact, reach, 2.25, 0.55, 0.35)
+	# Far enough along that the cloud has climbed clear of the fireball and the
+	# secondary front has left the first behind.
+	await _wait_seconds(1.4)
+	await _blast_observer_shot(
+		"ability_nuke_mushroom", impact, reach, 2.4, 0.95, 0.72)
+	await _blast_observer_shot(
+		"ability_nuke_shockwave_side", impact, reach, 3.2, 0.35, 0.12)
+
+	# Let the cloud clear and the wide terrain rebuild finish before judging the
+	# hole; otherwise its translucent cap sits over the overhead rim shot.
+	await _wait_seconds(4.8)
+	_player._clear_ragdoll()
+	# The body has just recovered from earlier reaction captures. Keep it out of
+	# this observer frame entirely: the only subject here is the terrain it cut.
+	_player.visible = false
+	await _blast_observer_shot(
+		"ability_nuke_crater", impact, crater_reach, 1.45, 0.55, -0.05)
+	_player.visible = true
+	# From overhead, which is the only view a rim that is not a circle reads from.
+	await _overhead_shot("ability_nuke_crater_rim", impact, crater_reach)
+
+
+## Point blank, which is the only way to reach the self-launch: the blast has to
+## catch its own caster. What this is here to show is that the body goes up with
+## the view. The camera hangs off the capsule and the character hangs off the
+## limp bones, so a launch only one of the two is allowed to keep reads as a
+## camera flying away from a player still standing on the ground — and the two
+## climbs are printed as well as photographed, because a screenshot cannot say
+## how far either of them got.
+func _nuke_self_launch_shots(arena: Vector3) -> void:
+	# Well clear of the crater the last shot dug, which is seventy metres across
+	# and reaches further than that where its rim bulges. Dropped onto a lip whose
+	# collider has not been rebuilt yet the player falls, crashes, and a crashed
+	# player cannot cast at all.
+	# This shot is specifically about starting a fresh self-launch. Do not let a
+	# reaction from any preceding capture leave can_attack false while its body
+	# has already found a standing pose.
+	_player._clear_ragdoll()
+	_stand_facing(arena,
+		float(ItemDB.stats_of("nuke").get("crater_radius", 0.0)) * 2.2)
+	_player.set_camera_mode(OnlinePlayer.CameraMode.THIRD_FAR)
+	await _wait(60)
+	# Down at the ground a couple of metres ahead, so the caster is deep inside
+	# the blast that follows rather than at the edge of it.
+	_player._pitch = -0.6
+	await _wait(10)
+	await _ready_in(0)
+	var from := _player.global_position
+	var up := _planet.up_at(from)
+	var body := _player._ragdoll
+	var body_from := body.centre() if body != null else from
+	print("ability_shot: nuke self stance=%d dispatched=%s" % [
+		_player.stance(), _player.activate_ability(0)])
+	var capsule_climb := 0.0
+	var body_climb := 0.0
+	var caught := false
+	for _frame in 300:
+		await get_tree().process_frame
+		if _player.stance() != OnlinePlayer.Stance.CRASH:
+			continue
+		capsule_climb = maxf(capsule_climb,
+			(_player.global_position - from).dot(up))
+		if body != null and body.limp():
+			body_climb = maxf(body_climb, (body.centre() - body_from).dot(up))
+		# From the side, and well clear of the ground: the whole point is to see
+		# the limp body and the camera that hangs off its collider at the same
+		# height, which the player's own view cannot show.
+		if not caught and capsule_climb > 18.0:
+			caught = true
+			await _side_shot("ability_nuke_self_launch", 4.0, 14.0)
+	print("ability_shot: nuke self-launch capsule=%.1f m body=%.1f m" % [
+		capsule_climb, body_climb])
+	await _shot("ability_nuke_self_landed")
+	_player._clear_ragdoll()
+	await _wait(10)
+
+
+func _wall_shots() -> void:
+	var here := _cover_nearby()
+	_stand_facing(here, 22.0)
+	_player.set_camera_mode(OnlinePlayer.CameraMode.THIRD_FAR)
+	_player._pitch = 0.0
+	await _wait(20)
+	await _ready_in(0)
+	print("ability_shot: wall dispatched=%s" % _player.activate_ability(0))
+	await _wait(10)
+	await _shot("ability_wall_gameplay")
+	await _side_shot("ability_wall_close", 3.0, 10.0)
+	var barriers := get_tree().get_nodes_in_group("ability_barriers")
+	if not barriers.is_empty() and barriers[0] is AbilityBarrier:
+		var barrier := barriers[0] as AbilityBarrier
+		_stand_facing(barrier.global_position, 18.0)
+		await _wait(20)
+		await _shot("ability_wall_distance")
+
+
+func _nausicaa_shots() -> void:
+	var here := _cover_nearby()
+	_stand_facing(here, 22.0)
+	_player.set_camera_mode(OnlinePlayer.CameraMode.THIRD_FAR)
+	# Down far enough that the fourteen-metre beam actually reaches terrain.
+	# Empty air and props are deliberately not paintable.
+	_player._pitch = -0.18
+	await _wait(20)
+	await _ready_in(1)
+	var scars_before := _planet.shape.scars.count()
+	print("ability_shot: nausicaa dispatched=%s" % _player.activate_ability(1))
+	# Sweep the short-lived eye beam laterally. Each accepted landing point is a
+	# separate blue patch, so the fuse order is also the order this arc is drawn.
+	var up := _planet.up_at(_player.global_position)
+	for frame in 24:
+		_player.global_basis = _player.global_basis.rotated(up, deg_to_rad(1.0))
+		await get_tree().process_frame
+		if frame == 6:
+			await _shot("ability_nausicaa_beam")
+	await _side_shot("ability_nausicaa_warning", 4.0, 10.0)
+	for _frame in 120:
+		await get_tree().process_frame
+		if _planet.shape.scars.count() > scars_before:
+			break
+	print("ability_shot: nausicaa began chain=%s" % (
+		_planet.shape.scars.count() > scars_before))
+	await _side_shot("ability_nausicaa_chain", 5.0, 12.0)
+	# The first patch has gone off; leave enough time for the equal fuses on the
+	# later patches to advance the blast all the way to the end of the trail.
+	await _wait_seconds(1.0)
+	await _wait(REBUILD_FRAMES)
+	await _crater_view()
+	await _shot("ability_nausicaa_indent")
+
+
+## Relocates the test target to the same dry patch selected for the camera
+## harness. The authored colony-ship spawn is intentionally coastal; stepping
+## around it for a framing shot can otherwise put a water-blocked ability in
+## the sea.
+func _place_dummy(dummy: TrainingDummy, at: Vector3) -> void:
+	var direction := _planet.to_local(at).normalized()
+	var up := _planet.up_at(at)
+	var forward := -_player.global_basis.z
+	forward -= up * forward.dot(up)
+	if forward.length_squared() < 0.001:
+		forward = up.cross(Vector3.UP if absf(up.y) < 0.9 else Vector3.RIGHT)
+	dummy.global_transform = Transform3D(
+		Basis.looking_at(forward.normalized(), up),
+		_planet.standing_position(direction, 0.0))
+	dummy.velocity = Vector3.ZERO
+	dummy.reset_physics_interpolation()
+
+
+## Sets both halves of third-person aim: yaw lives on the body while pitch
+## lives on the head. This puts the target's combat centre on the crosshair
+## rather than assuming equal eye heights.
+func _aim_at(target: Vector3) -> void:
+	var up := _planet.up_at(_player.global_position)
+	var toward := target - _player.camera.global_position
+	var flat := toward - up * toward.dot(up)
+	if flat.length_squared() > 0.001:
+		_player.global_basis = Basis.looking_at(flat.normalized(), up)
+	if toward.length_squared() > 0.001:
+		_player._pitch = asin(clampf(
+			toward.normalized().dot(up), -1.0, 1.0))
+	await _wait(5)
+
+
 ## The punch thrown out of a fast dive, which is the case the other two do not
 ## reach: flight tops out five times above the punch's own speed, and what
 ## arrives at that speed digs a hole to match.
@@ -243,6 +539,56 @@ func _side_shot(shot_name: String, ahead := 6.0, out := 12.0) -> void:
 	watcher.look_at(eye + along * (ahead * 0.35), up)
 	watcher.current = true
 	await _wait(2)
+	await _shot(shot_name)
+	watcher.queue_free()
+	_player.camera.current = true
+	_player.process_mode = ran
+	await _wait(2)
+
+
+## A camera far enough from a hundred-metre detonation to put the whole thing in
+## frame. The regular side view is framed around the player's hands; using it for
+## the Nuke put the camera underneath the cloud and made its stem a white wall.
+func _blast_observer_shot(shot_name: String, target: Vector3, reach: float,
+		distance_share: float, height_share: float,
+		aim_height_share: float) -> void:
+	var ran := _player.process_mode
+	_player.process_mode = Node.PROCESS_MODE_DISABLED
+	var up := _planet.up_at(target)
+	var side := up.cross(
+		Vector3.UP if absf(up.y) < 0.9 else Vector3.RIGHT).normalized()
+	var watcher := Camera3D.new()
+	add_child(watcher)
+	watcher.global_position = target \
+		+ side * reach * distance_share \
+		+ up * reach * height_share
+	watcher.look_at(target + up * reach * aim_height_share, up)
+	watcher.fov = 62.0
+	watcher.current = true
+	await _wait(4)
+	await _shot(shot_name)
+	watcher.queue_free()
+	_player.camera.current = true
+	_player.process_mode = ran
+	await _wait(2)
+
+
+## Straight down from well above a point, which is the only view the outline of a
+## hole reads from. From the ground a crater is a slope, and a slope cannot say
+## whether the rim it belongs to is a circle.
+func _overhead_shot(shot_name: String, target: Vector3, reach: float) -> void:
+	var ran := _player.process_mode
+	_player.process_mode = Node.PROCESS_MODE_DISABLED
+	var up := _planet.up_at(target)
+	var side := up.cross(
+		Vector3.UP if absf(up.y) < 0.9 else Vector3.RIGHT).normalized()
+	var watcher := Camera3D.new()
+	add_child(watcher)
+	# High enough that the whole footprint is inside the frame.
+	watcher.global_position = target + up * maxf(reach * 2.6, 30.0)
+	watcher.look_at(target, side)
+	watcher.current = true
+	await _wait(4)
 	await _shot(shot_name)
 	watcher.queue_free()
 	_player.camera.current = true
@@ -391,15 +737,22 @@ func _burn_marks() -> int:
 
 
 ## Waits out a cooldown, so a shot is never of an ability that politely refused.
+## Waits for a slot to come off cooldown, bounded in seconds rather than in
+## frames. The budget has to cover the longest cooldown in the catalogue, and a
+## frame count that does so at sixty frames a second falls well short of it at a
+## hundred and ten — which reads as an ability that silently refused to fire.
 func _ready_in(index: int) -> void:
 	var ability := _player.ability_controller().ability_in(index)
 	if ability == null:
 		return
-	for _frame in 900:
+	var left := ability.cooldown() + 4.0
+	while left > 0.0:
 		if ability.can_use():
 			return
 		await get_tree().process_frame
-	print("ability_shot: slot %d never came off cooldown" % index)
+		left -= get_process_delta_time()
+	print("ability_shot: slot %d never came off cooldown, stance=%d" % [
+		index, _player.stance()])
 
 
 ## Somewhere with plants on it, so a beam has something to burn. Searched rather
@@ -464,6 +817,15 @@ func _stand_facing(target: Vector3, away: float) -> void:
 func _wait(frames: int) -> void:
 	for _index in frames:
 		await get_tree().process_frame
+
+
+## A presentation stage is authored in seconds, not in however many frames this
+## machine happened to draw while recording it.
+func _wait_seconds(seconds: float) -> void:
+	var left := maxf(seconds, 0.0)
+	while left > 0.0:
+		await get_tree().process_frame
+		left -= get_process_delta_time()
 
 
 ## Saves a frame and hands it back, so the same view before and after a burn can
