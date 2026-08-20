@@ -9,19 +9,34 @@ extends Node3D
 const PLAYER_SCENE := preload("res://game/player/player.tscn")
 
 ## The title view opens at the light the authored cycle reaches after three
-## minutes: low over the Colony Ship and close to local sunset. Gameplay still
-## begins from phase zero in [method _begin_session].
+## minutes: low over the Colony Ship and close to local sunset.
 const HOME_SUN_ADVANCE_SECONDS := 180.0
+## Phase zero is noon over the Colony Ship. Advancing three quarters of the
+## orbit places that anchor on the morning terminator: 06:00 and sunrise.
+const GAMEPLAY_SUNRISE_PHASE := 0.75
 const DROP_FORWARD_DISTANCE := 1.55
 const DROP_SURFACE_CLEARANCE := 0.08
 ## Slightly wider than the 2.4 m interaction ray to allow for the player's eye,
 ## the pickup's raised centre and a sloping surface, but still an arm's-length
 ## server check rather than trusting that a client ray hit.
 const PICKUP_MAX_DISTANCE := 3.2
+## Specialty panels can remain open for a step beyond the interaction ray, but
+## every transaction is still tied to the completed building that opened it.
+const SPECIALTY_HOUSE_MAX_DISTANCE := 5.0
 ## How often the host tells everyone what has actually broken. Slower than the
 ## damage itself, because this is a correction and not the mechanism: the peers
 ## have already worked it out for themselves.
 const FLORA_CONFIRM_INTERVAL := 0.4
+## A client owns its movement simulation, so a flora contact reaches the host
+## after the corresponding movement packet. At the fastest authored run that
+## can be about ten metres of travel; this margin accepts that lag while still
+## rejecting claims made elsewhere on the planet.
+const FLORA_BIOMASS_MAX_DISTANCE := 32.0
+## Deliberately free city-menu grant. The client sends no amount, so every accepted
+## press is exactly one hundred biomass regardless of the player's carried bank.
+const CITY_BIOMASS_GRANT := 100.0
+const SETTLEMENT_LAUNCHER_ABILITY := "settlement_launcher"
+const BUILDING_ABILITY := "building"
 ## How far from the ship the host will still honour a RELEASE SETTLERS press.
 ## Generous next to the 2.4 m interaction ray, because the ship is 26 m tall and
 ## the panel stays open while the player moves, but still a check that they are
@@ -34,6 +49,9 @@ const RESPAWN_SPACING := 14.0
 ## sandbox. Wide enough that two flight capsules cannot begin intersecting, but
 ## close enough that the party enters the world as one visible group.
 const ONLINE_SANDBOX_SPAWN_SPACING := 4.0
+const SANDBOX_MODE := "sandbox"
+const SANDBOX_SNAPSHOT_VERSION := 1
+const SANDBOX_SAVE_STATE_GROUP := &"sandbox_save_state"
 
 @onready var spawn_points: Node3D = $SpawnPoints
 @onready var celestial_cycle: CelestialCycle = $CelestialCycle
@@ -45,6 +63,10 @@ var _spawned_players: Dictionary = {}
 var _pickups: Dictionary = {}
 var _pickup_nodes: Dictionary = {}
 var _next_pickup_id := 1
+var _shop_request_sequence := 0
+var _last_shop_request_by_peer: Dictionary = {}
+var _settlement_request_sequence := 0
+var _last_settlement_request_by_peer: Dictionary = {}
 var _ability_constructs: Dictionary = {}
 var _next_ability_construct_id := 1
 var _locally_paused := false
@@ -108,6 +130,7 @@ func _exit_tree() -> void:
 		NetworkManager.session_started.disconnect(_begin_session)
 	_pickups.clear()
 	_pickup_nodes.clear()
+	_last_shop_request_by_peer.clear()
 	_ability_constructs.clear()
 	_respawn_sequence.clear()
 	_sandbox_spawn_slots.clear()
@@ -217,10 +240,152 @@ func colony_snapshot() -> Array:
 	return colonies.snapshot() if colonies != null else []
 
 
-func apply_colony_snapshot(snapshot: Array) -> void:
+func apply_colony_snapshot(snapshot: Array,
+		watchers := PackedVector3Array()) -> void:
 	var colonies := meep_colonies()
 	if colonies != null:
-		colonies.apply_snapshot(snapshot)
+		colonies.apply_snapshot(snapshot, watchers)
+
+
+## Planet-space directions of the players a save is about to put back, for
+## [method MeepColonies.apply_snapshot] to judge residency by.
+func _saved_watchers(saved_players: Variant) -> PackedVector3Array:
+	var found := PackedVector3Array()
+	var planet := get_node_or_null("Planet") as Planet
+	if planet == null or not saved_players is Array:
+		return found
+	for entry_variant: Variant in saved_players as Array:
+		if not entry_variant is Dictionary:
+			continue
+		var placed: Variant = (entry_variant as Dictionary).get("transform", null)
+		if not placed is Transform3D or not (placed as Transform3D).is_finite():
+			continue
+		var direction := planet.to_local((placed as Transform3D).origin)
+		if direction.length_squared() < 1.0:
+			continue
+		found.push_back(direction.normalized())
+	return found
+
+
+## One host-owned document containing every durable sandbox system. The same
+## component snapshots used to catch up a late multiplayer joiner are reused
+## here, with the cold-restore-only details (full player, Meeps, fauna, counters,
+## and opt-in scene objects) included alongside them.
+func sandbox_snapshot() -> Dictionary:
+	var players: Array = []
+	var peer_ids := _spawned_players.keys()
+	peer_ids.sort()
+	for peer_value: Variant in peer_ids:
+		var player := _spawned_players.get(int(peer_value)) as OnlinePlayer
+		if is_instance_valid(player):
+			players.append(player.sandbox_snapshot())
+	var fauna := get_node_or_null("Planet/FaunaPopulations") as FaunaSpawner
+	return {
+		"schema_version": SANDBOX_SNAPSHOT_VERSION,
+		"mode": SANDBOX_MODE,
+		"celestial": {
+			"phase": celestial_cycle.phase(),
+			"day_index": celestial_cycle.day_index(),
+		},
+		"counters": {
+			"next_pickup_id": _next_pickup_id,
+			"next_ability_construct_id": _next_ability_construct_id,
+			"respawn_sequence": _respawn_sequence.duplicate(true),
+		},
+		"pickups": pickup_snapshots(),
+		"scars": scar_snapshot(),
+		"flora": flora_snapshot(),
+		"bosses": boss_snapshots(),
+		"ability_constructs": ability_construct_snapshot(),
+		"colonies": colony_snapshot(),
+		"fauna": fauna.sandbox_snapshot() \
+			if fauna != null and fauna.snapshot_ready() else {},
+		"players": players,
+		"scene_objects": _sandbox_scene_object_snapshot(),
+	}
+
+
+func save_sandbox(save_id := "", display_name := "") -> Dictionary:
+	if not _sandbox_save_allowed():
+		return {
+			"ok": false,
+			"message": "Named saves are currently available in single-player Sandbox mode.",
+		}
+	# Traced because a save is one long synchronous frame — the whole planet's colonies,
+	# flora ledger and scars serialized and written — and an exported capture that
+	# happens to contain one should name it rather than leave a multi-second frame
+	# looking like a mystery.
+	var began := Time.get_ticks_usec()
+	var snapshot := sandbox_snapshot()
+	var gathered := Time.get_ticks_usec()
+	RuntimeTelemetry.record_activity(&"save", &"gather_snapshot",
+		gathered - began)
+	var result := SaveManager.overwrite_save(save_id, snapshot) \
+		if not save_id.is_empty() \
+		else SaveManager.create_save(display_name, SANDBOX_MODE, snapshot)
+	RuntimeTelemetry.record_activity(&"save", &"write_file",
+		Time.get_ticks_usec() - gathered)
+	RuntimeTelemetry.mark_event(&"sandbox_save", save_id if not save_id.is_empty()
+		else display_name, {"gather_ms": float(gathered - began) / 1000.0})
+	if bool(result.get("ok", false)):
+		NetworkManager.session_options["save_id"] = String(result.get("id", ""))
+		NetworkManager.session_options["save_name"] = String(
+			result.get("name", display_name))
+	return result
+
+
+func load_sandbox_save(save_id: String) -> Dictionary:
+	if not _sandbox_save_allowed():
+		return {
+			"ok": false,
+			"message": "Named saves are currently available in single-player Sandbox mode.",
+		}
+	var result := SaveManager.load_save(save_id, SANDBOX_MODE)
+	if not bool(result.get("ok", false)):
+		return result
+	set_local_pause(false)
+	var error: Error = NetworkManager.reload_single_player_from_save(save_id)
+	if error != OK:
+		return {
+			"ok": false,
+			"message": "Could not reload the sandbox (%s)." % error_string(error),
+		}
+	return result
+
+
+func active_save_id() -> String:
+	return String(NetworkManager.session_options.get("save_id", "")) \
+		if _sandbox_save_allowed() else ""
+
+
+func _sandbox_save_allowed() -> bool:
+	return NetworkManager.state == NetworkManager.SessionState.IN_GAME \
+		and NetworkManager.is_single_player and NetworkManager.is_host \
+		and String(NetworkManager.session_options.get("mode", "")) == SANDBOX_MODE
+
+
+func _sandbox_scene_object_snapshot() -> Dictionary:
+	var state: Dictionary = {}
+	for value: Variant in get_tree().get_nodes_in_group(
+			SANDBOX_SAVE_STATE_GROUP):
+		var node := value as Node
+		if node == null or not DamageHit.in_same_world(self, node) \
+				or not node.has_method(&"sandbox_snapshot"):
+			continue
+		var snapshot_value: Variant = node.call(&"sandbox_snapshot")
+		if snapshot_value is Dictionary:
+			state[String(get_path_to(node))] = (
+				snapshot_value as Dictionary).duplicate(true)
+	return state
+
+
+func _apply_sandbox_scene_object_snapshot(state: Dictionary) -> void:
+	for path_text: String in state:
+		var node := _relative_world_node(path_text)
+		var snapshot_value: Variant = state[path_text]
+		if node != null and node.has_method(&"apply_sandbox_snapshot") \
+				and snapshot_value is Dictionary:
+			node.call(&"apply_sandbox_snapshot", snapshot_value)
 
 
 func active_ability_wall_count() -> int:
@@ -433,6 +598,82 @@ func _apply_flora_breaks(path: String, keys: PackedInt32Array) -> void:
 		field.call(&"apply_broken_keys", keys)
 
 
+## Called by the body that actually simulated an impact. A remote owner sends
+## only the deterministic field identity; the host derives the sender, confirms
+## and records the break, computes the authored yield, then mutates the player's
+## canonical carried bank.
+func request_flora_biomass(peer_id: int, field: Node,
+		key: PackedInt32Array, visual_height: float, at: Vector3) -> void:
+	var local_id := multiplayer.get_unique_id()
+	if peer_id != local_id or not is_instance_valid(field) \
+			or not DamageHit.in_same_world(self, field) or key.is_empty() \
+			or not is_finite(visual_height) or not at.is_finite():
+		return
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if not is_instance_valid(player):
+		return
+	var path := String(get_path_to(field))
+	if _is_host_authority():
+		_server_flora_biomass(
+			local_id, field, key, visual_height, at, true)
+		return
+	_request_flora_biomass_from_client.rpc_id(
+		1, path, key, visual_height, at)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_flora_biomass_from_client(path: String,
+		key: PackedInt32Array, visual_height: float, at: Vector3) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
+		return
+	var field := _relative_world_node(path)
+	_server_flora_biomass(
+		sender, field, key, visual_height, at, false)
+
+
+func _server_flora_biomass(peer_id: int, field: Node,
+		key: PackedInt32Array, visual_height: float, at: Vector3,
+		already_resolved: bool) -> void:
+	if not _is_host_authority() or not is_instance_valid(field) \
+			or not field.is_in_group(DamageHit.FIELD_GROUP) \
+			or not DamageHit.in_same_world(self, field) \
+			or not at.is_finite() or not is_finite(visual_height):
+		return
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if not is_instance_valid(player) or player.is_dead() \
+			or player.global_position.distance_to(at) \
+				> FLORA_BIOMASS_MAX_DISTANCE:
+		return
+	var amount := 0.0
+	if already_resolved:
+		var value_method := &"impact_biomass_value" \
+			if field.has_method(&"impact_biomass_value") else &"harvest_value"
+		if field.has_method(value_method):
+			var raw := float(field.call(value_method, visual_height))
+			amount = maxf(roundf(raw), 1.0) if raw > 0.0 else 0.0
+	elif field.has_method(&"claim_impact_biomass"):
+		amount = float(field.call(
+			&"claim_impact_biomass", key, visual_height, at))
+	if is_finite(amount) and amount > 0.0:
+		player.credit_biomass(amount, at)
+
+
+## Resolves an untrusted client path without allowing an absolute path or `..`
+## traversal to reach nodes outside this GameWorld.
+func _relative_world_node(path_text: String) -> Node:
+	var path := NodePath(path_text)
+	if path.is_empty() or path.is_absolute():
+		return null
+	for index in path.get_name_count():
+		if path.get_name(index) == &"..":
+			return null
+	return get_node_or_null(path)
+
+
 ## Undoes every break inside a sphere and reports how many plants stood back up.
 ##
 ## The sphere goes over the wire rather than the plants in it: flora is placed
@@ -512,15 +753,147 @@ func _begin_session() -> void:
 		return
 	_session_open = true
 	if multiplayer.is_server():
+		var saved := _selected_sandbox_snapshot()
+		if not saved.is_empty():
+			_begin_saved_sandbox(saved)
+			return
 		# The world is already rendering behind the title screen, but a new game
-		# should begin at the authored noon rather than inherit however long the
-		# player spent in the menu. Joining clients receive this phase below.
-		celestial_cycle.set_phase(0.0)
+		# begins at sunrise over the colony rather than inheriting however long
+		# the player spent in the menu. Joining clients receive this phase below.
+		celestial_cycle.set_phase(GAMEPLAY_SUNRISE_PHASE)
 		celestial_cycle.set_day_index(0)
 		for peer_id in NetworkManager.players:
 			_spawn_player(int(peer_id), NetworkManager.get_player_metadata(int(peer_id)), _spawn_transform(int(peer_id)), true)
 	else:
 		_request_world_state.rpc_id(1)
+
+
+func _selected_sandbox_snapshot() -> Dictionary:
+	if not NetworkManager.is_single_player \
+			or String(NetworkManager.session_options.get("mode", "")) \
+				!= SANDBOX_MODE:
+		return {}
+	var save_id := String(NetworkManager.session_options.get("save_id", ""))
+	if save_id.is_empty():
+		return {}
+	var result := SaveManager.load_save(save_id, SANDBOX_MODE)
+	if not bool(result.get("ok", false)):
+		push_error("Could not load sandbox save '%s': %s" % [
+			save_id, String(result.get("message", "invalid save"))])
+		NetworkManager.session_options.erase("save_id")
+		NetworkManager.session_options.erase("save_name")
+		return {}
+	var snapshot_value: Variant = result.get("snapshot", {})
+	return (snapshot_value as Dictionary).duplicate(true) \
+		if snapshot_value is Dictionary else {}
+
+
+func _begin_saved_sandbox(snapshot: Dictionary) -> void:
+	var celestial_value: Variant = snapshot.get("celestial", {})
+	var celestial_state := celestial_value as Dictionary \
+		if celestial_value is Dictionary else {}
+	var phase := float(celestial_state.get("phase", GAMEPLAY_SUNRISE_PHASE))
+	celestial_cycle.set_phase(
+		clampf(phase, 0.0, 1.0) if is_finite(phase)
+			else GAMEPLAY_SUNRISE_PHASE)
+	celestial_cycle.set_day_index(maxi(
+		int(celestial_state.get("day_index", 0)), 0))
+
+	var counters_value: Variant = snapshot.get("counters", {})
+	var counters := counters_value as Dictionary \
+		if counters_value is Dictionary else {}
+	_next_pickup_id = maxi(int(counters.get("next_pickup_id", 1)), 1)
+	_next_ability_construct_id = maxi(
+		int(counters.get("next_ability_construct_id", 1)), 1)
+	var respawn_value: Variant = counters.get("respawn_sequence", {})
+	_respawn_sequence = (respawn_value as Dictionary).duplicate(true) \
+		if respawn_value is Dictionary else {}
+
+	var scars: Variant = snapshot.get("scars", [])
+	if scars is Array:
+		apply_scar_snapshot(scars as Array)
+	var flora: Variant = snapshot.get("flora", {})
+	if flora is Dictionary:
+		apply_flora_snapshot(flora as Dictionary)
+	var colonies: Variant = snapshot.get("colonies", [])
+	if colonies is Array:
+		# Told where the players will be standing, because the registry decides
+		# which cities to simulate in full from that and the bodies are not
+		# spawned until further down. Without the hint every city on the planet
+		# would be built here and all but the nearest freed a moment later.
+		apply_colony_snapshot(colonies as Array,
+			_saved_watchers(snapshot.get("players", [])))
+	apply_boss_snapshots(snapshot.get("bosses", []))
+	var constructs: Variant = snapshot.get("ability_constructs", [])
+	if constructs is Array:
+		apply_ability_construct_snapshot(constructs as Array)
+	var scene_objects: Variant = snapshot.get("scene_objects", {})
+	if scene_objects is Dictionary:
+		_apply_sandbox_scene_object_snapshot(scene_objects as Dictionary)
+
+	var saved_players: Variant = snapshot.get("players", [])
+	for peer_value: Variant in NetworkManager.players.keys():
+		var peer_id := int(peer_value)
+		var player_state := _saved_player_snapshot(saved_players, peer_id)
+		var metadata := NetworkManager.get_player_metadata(peer_id)
+		var transform := _spawn_transform(peer_id)
+		if not player_state.is_empty():
+			var metadata_value: Variant = player_state.get("metadata", {})
+			if metadata_value is Dictionary:
+				metadata = (metadata_value as Dictionary).duplicate(true)
+			var transform_value: Variant = player_state.get(
+				"transform", transform)
+			if transform_value is Transform3D \
+					and (transform_value as Transform3D).is_finite():
+				transform = transform_value as Transform3D
+			NetworkManager.players[peer_id] = metadata.duplicate(true)
+		_spawn_player(peer_id, metadata, transform, false)
+		var player := _spawned_players.get(peer_id) as OnlinePlayer
+		if player != null and not player_state.is_empty():
+			player.apply_sandbox_snapshot(player_state)
+
+	var pickups: Variant = snapshot.get("pickups", [])
+	if pickups is Array:
+		for pickup_value: Variant in pickups:
+			if not pickup_value is Dictionary:
+				continue
+			var pickup := pickup_value as Dictionary
+			var pickup_id := int(pickup.get("pickup_id", 0))
+			_spawn_pickup_local(
+				pickup_id,
+				String(pickup.get("item_id", "")),
+				pickup.get("transform", Transform3D.IDENTITY))
+			_next_pickup_id = maxi(_next_pickup_id, pickup_id + 1)
+	for construct_value: Variant in _ability_constructs.keys():
+		_next_ability_construct_id = maxi(
+			_next_ability_construct_id, int(construct_value) + 1)
+	call_deferred(&"_finish_saved_sandbox_restore", snapshot.duplicate(true))
+
+
+func _saved_player_snapshot(value: Variant, peer_id: int) -> Dictionary:
+	if not value is Array:
+		return {}
+	var fallback: Dictionary = {}
+	for row_value: Variant in value:
+		if not row_value is Dictionary:
+			continue
+		var row := row_value as Dictionary
+		if fallback.is_empty():
+			fallback = row
+		if int(row.get("peer_id", 0)) == peer_id:
+			return row
+	return fallback
+
+
+func _finish_saved_sandbox_restore(snapshot: Dictionary) -> void:
+	var fauna := get_node_or_null("Planet/FaunaPopulations") as FaunaSpawner
+	for _attempt in 8:
+		if fauna == null or fauna.snapshot_ready():
+			break
+		await get_tree().process_frame
+	var fauna_value: Variant = snapshot.get("fauna", {})
+	if fauna != null and fauna.snapshot_ready() and fauna_value is Dictionary:
+		fauna.apply_sandbox_snapshot(fauna_value as Dictionary)
 
 
 ## What being in a menu costs. Escape used to raise a pause card of the world's
@@ -634,6 +1007,562 @@ func _server_release_settlers(peer_id: int, site: StringName) -> void:
 			> SETTLER_RELEASE_MAX_DISTANCE:
 		return
 	colonies.release_settlers(site)
+
+
+## Transfers carried biomass to the city controlled by the open panel. Clients
+## state only the desired amount; the server derives who asked, verifies that
+## they are still at the ship, and debits its canonical player copy first.
+func request_deposit_biomass(peer_id: int, site: StringName,
+		amount: float) -> void:
+	var local_id := multiplayer.get_unique_id()
+	if peer_id != local_id or not is_finite(amount) or amount <= 0.0:
+		return
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if not is_instance_valid(player):
+		return
+	if _is_host_authority():
+		_server_deposit_biomass(local_id, site, amount)
+		return
+	_request_deposit_biomass_from_client.rpc_id(1, site, amount)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_deposit_biomass_from_client(site: StringName,
+		amount: float) -> void:
+	if not multiplayer.is_server() or not is_finite(amount) or amount <= 0.0:
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
+		return
+	_server_deposit_biomass(sender, site, amount)
+
+
+func _server_deposit_biomass(peer_id: int, site: StringName,
+		amount: float) -> void:
+	if not _is_host_authority() or not is_finite(amount) or amount <= 0.0:
+		return
+	var colonies := meep_colonies()
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if colonies == null or not is_instance_valid(player) or player.is_dead():
+		return
+	var ship := colonies.ship(site)
+	var colony := colonies.colony(site)
+	if ship == null or colony == null or colony.count() <= 0 \
+			or player.global_position.distance_to(ship.global_position) \
+				> SETTLER_RELEASE_MAX_DISTANCE:
+		return
+	var transferred := player.take_biomass(amount)
+	if transferred > 0.0:
+		colonies.deposit_biomass(site, transferred)
+
+
+## Free fixed-size city grant. The client cannot choose an amount and the host still
+## requires a living local player beside this colony's ship.
+func request_add_city_biomass(peer_id: int, site: StringName) -> void:
+	var local_id := multiplayer.get_unique_id()
+	if peer_id != local_id:
+		return
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if not is_instance_valid(player):
+		return
+	if _is_host_authority():
+		_server_add_city_biomass(local_id, site)
+		return
+	_request_add_city_biomass_from_client.rpc_id(1, site)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_add_city_biomass_from_client(site: StringName) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
+		return
+	_server_add_city_biomass(sender, site)
+
+
+func _server_add_city_biomass(peer_id: int, site: StringName) -> void:
+	if not _is_host_authority():
+		return
+	var colonies := meep_colonies()
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if colonies == null or not is_instance_valid(player) or player.is_dead():
+		return
+	var ship := colonies.ship(site)
+	var colony := colonies.colony(site)
+	if ship == null or colony == null or colony.count() <= 0 \
+			or player.global_position.distance_to(ship.global_position) \
+				> SETTLER_RELEASE_MAX_DISTANCE:
+		return
+	colonies.deposit_biomass(site, CITY_BIOMASS_GRANT)
+
+
+## Requests one exact city purchase ID. The request carries neither a price nor a
+## desired resulting level: both are canonical colony state on the host.
+func request_city_purchase(peer_id: int, site: StringName,
+		purchase_id: int) -> void:
+	var local_id := multiplayer.get_unique_id()
+	if peer_id != local_id or not MeepColony.city_purchase_valid(purchase_id) \
+			or MeepColony.is_harvester_rate_purchase(purchase_id):
+		return
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if not is_instance_valid(player):
+		return
+	if _is_host_authority():
+		_server_city_purchase(local_id, site, purchase_id)
+		return
+	_request_city_purchase_from_client.rpc_id(1, site, purchase_id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_city_purchase_from_client(site: StringName,
+		purchase_id: int) -> void:
+	if not multiplayer.is_server() \
+			or not MeepColony.city_purchase_valid(purchase_id) \
+			or MeepColony.is_harvester_rate_purchase(purchase_id):
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
+		return
+	_server_city_purchase(sender, site, purchase_id)
+
+
+func _server_city_purchase(peer_id: int, site: StringName,
+		purchase_id: int) -> void:
+	if not _is_host_authority() \
+			or not MeepColony.city_purchase_valid(purchase_id) \
+			or MeepColony.is_harvester_rate_purchase(purchase_id):
+		return
+	var colonies := meep_colonies()
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if colonies == null or not is_instance_valid(player) or player.is_dead():
+		return
+	var ship := colonies.ship(site)
+	var colony := colonies.colony(site)
+	if ship == null or colony == null or colony.count() <= 0 \
+			or player.global_position.distance_to(ship.global_position) \
+				> SETTLER_RELEASE_MAX_DISTANCE:
+		return
+	var launcher_record: Dictionary = {}
+	if purchase_id == MeepColony.CityPurchase.SEND_SETTLEMENT:
+		if not player.authoritative_progression_ready():
+			return
+		launcher_record = colonies.settlement_launcher_record(site)
+		if launcher_record.is_empty():
+			return
+	var bought := colonies.purchase(site, purchase_id, peer_id)
+	if bought and purchase_id == MeepColony.CityPurchase.SEND_SETTLEMENT:
+		player.authoritative_grant_one_time_ability(
+			SETTLEMENT_LAUNCHER_ABILITY, launcher_record)
+
+
+## Building enters placement only when the host confirms that it is equipped and
+## the owner still has a launch authorization from the selected parent city.
+func request_settlement_ability(peer_id: int, parent: StringName) -> void:
+	var local_id := multiplayer.get_unique_id()
+	if peer_id != local_id or parent == &"":
+		return
+	if _is_host_authority():
+		_server_settlement_ability(local_id, parent)
+		return
+	_request_settlement_ability_from_client.rpc_id(1, parent)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_settlement_ability_from_client(parent: StringName) -> void:
+	if not multiplayer.is_server() or parent == &"":
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(sender):
+		return
+	_server_settlement_ability(sender, parent)
+
+
+func _server_settlement_ability(peer_id: int, parent: StringName) -> void:
+	if not _is_host_authority():
+		return
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if not is_instance_valid(player) \
+			or not player._host_can_cast_ability(BUILDING_ABILITY):
+		return
+	var record := player.one_time_ability_record_matching(
+		SETTLEMENT_LAUNCHER_ABILITY, "parent_site", String(parent))
+	var colonies := meep_colonies()
+	var ship := colonies.ship(parent) if colonies != null else null
+	var colony := colonies.colony(parent) if colonies != null else null
+	if record.is_empty() or ship == null or colony == null:
+		return
+	_notify_settlement_targeting(peer_id, parent)
+
+
+func _notify_settlement_targeting(peer_id: int, site: StringName) -> void:
+	if multiplayer.has_multiplayer_peer():
+		_apply_settlement_targeting.rpc(peer_id, site)
+	else:
+		_apply_settlement_targeting(peer_id, site)
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_settlement_targeting(peer_id: int, site: StringName) -> void:
+	if multiplayer.get_unique_id() != peer_id:
+		return
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if is_instance_valid(player):
+		player.begin_settlement_targeting(site)
+
+
+func request_settlement_launch(peer_id: int, parent: StringName,
+		target_direction: Vector3) -> void:
+	var local_id := multiplayer.get_unique_id()
+	if peer_id != local_id or not target_direction.is_finite():
+		return
+	_settlement_request_sequence += 1
+	if _is_host_authority():
+		_server_settlement_launch(
+			local_id, _settlement_request_sequence, parent, target_direction)
+	else:
+		_request_settlement_launch_from_client.rpc_id(
+			1, _settlement_request_sequence, parent, target_direction)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_settlement_launch_from_client(sequence: int,
+		parent: StringName, target_direction: Vector3) -> void:
+	if not multiplayer.is_server() or not target_direction.is_finite():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not _accept_settlement_request(sender, sequence):
+		return
+	_server_settlement_launch(sender, sequence, parent, target_direction)
+
+
+func _server_settlement_launch(peer_id: int, sequence: int,
+		parent: StringName, target_direction: Vector3) -> void:
+	if not _is_host_authority() \
+			or not _accept_settlement_request(peer_id, sequence, true) \
+			or not target_direction.is_finite() \
+			or absf(target_direction.length() - 1.0) > 0.01:
+		return
+	var colonies := meep_colonies()
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	var parent_ship := colonies.ship(parent) if colonies != null else null
+	var parent_colony := colonies.colony(parent) if colonies != null else null
+	var launcher_record := player.one_time_ability_record_matching(
+		SETTLEMENT_LAUNCHER_ABILITY, "parent_site", String(parent)) \
+			if is_instance_valid(player) else {}
+	if colonies == null or not is_instance_valid(player) or player.is_dead() \
+			or parent_ship == null or parent_colony == null \
+			or not player._host_can_cast_ability(BUILDING_ABILITY) \
+			or launcher_record.is_empty():
+		return
+	var child := colonies.launch_settlement(
+		parent, target_direction, peer_id)
+	if child != &"":
+		player.authoritative_consume_one_time_ability(
+			SETTLEMENT_LAUNCHER_ABILITY, "parent_site", String(parent))
+		if multiplayer.has_multiplayer_peer():
+			_apply_settlement_launch_accepted.rpc(peer_id, child)
+		else:
+			_apply_settlement_launch_accepted(peer_id, child)
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_settlement_launch_accepted(peer_id: int,
+		_child: StringName) -> void:
+	if multiplayer.get_unique_id() != peer_id:
+		return
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	if is_instance_valid(player):
+		player.cancel_settlement_targeting()
+
+
+func settlement_preview_valid(parent: StringName,
+		target_direction: Vector3) -> bool:
+	var colonies := meep_colonies()
+	return colonies != null \
+		and colonies.valid_settlement_landing(parent, target_direction)
+
+
+func request_settlement_rename(peer_id: int, site: StringName,
+		wanted: String) -> void:
+	var local_id := multiplayer.get_unique_id()
+	if peer_id != local_id:
+		return
+	_settlement_request_sequence += 1
+	if _is_host_authority():
+		_server_settlement_rename(
+			local_id, _settlement_request_sequence, site, wanted)
+	else:
+		_request_settlement_rename_from_client.rpc_id(
+			1, _settlement_request_sequence, site, wanted)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_settlement_rename_from_client(sequence: int,
+		site: StringName, wanted: String) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not _accept_settlement_request(sender, sequence):
+		return
+	_server_settlement_rename(sender, sequence, site, wanted)
+
+
+func _server_settlement_rename(peer_id: int, sequence: int,
+		site: StringName, wanted: String) -> void:
+	if not _is_host_authority() \
+			or not _accept_settlement_request(peer_id, sequence, true):
+		return
+	var colonies := meep_colonies()
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	var lander := colonies.ship(site) if colonies != null else null
+	var here := colonies.colony(site) if colonies != null else null
+	if colonies == null or not is_instance_valid(player) or player.is_dead() \
+			or lander == null or here == null or here.parent_site_id == &"" \
+			or player.global_position.distance_to(lander.global_position) \
+				> SETTLER_RELEASE_MAX_DISTANCE:
+		return
+	colonies.rename_settlement(site, wanted)
+
+
+func _accept_settlement_request(peer_id: int, sequence: int,
+		already_checked := false) -> bool:
+	var last := int(_last_settlement_request_by_peer.get(peer_id, 0))
+	if sequence <= last:
+		return already_checked and sequence == last
+	_last_settlement_request_by_peer[peer_id] = sequence
+	return true
+
+
+## Harvester levels deliberately have a separate building-local route. Allowing
+## their append-only IDs through the ship menu would bypass the physical machine
+## and proximity checks that make this interaction authoritative.
+func request_harvester_upgrade(peer_id: int, site: StringName,
+		structure_index: int, purchase_id: int) -> void:
+	var local_id := multiplayer.get_unique_id()
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if peer_id != local_id \
+			or not MeepColony.is_harvester_rate_purchase(purchase_id) \
+			or not is_instance_valid(player):
+		return
+	_shop_request_sequence += 1
+	if _is_host_authority():
+		_server_harvester_upgrade(
+			local_id, site, structure_index, purchase_id)
+	else:
+		_request_harvester_upgrade_from_client.rpc_id(
+			1, _shop_request_sequence, site, structure_index, purchase_id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_harvester_upgrade_from_client(sequence: int,
+		site: StringName, structure_index: int, purchase_id: int) -> void:
+	if not multiplayer.is_server() \
+			or not MeepColony.is_harvester_rate_purchase(purchase_id):
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not _accept_shop_request(sender, sequence):
+		return
+	_server_harvester_upgrade(
+		sender, site, structure_index, purchase_id)
+
+
+func _server_harvester_upgrade(peer_id: int, site: StringName,
+		structure_index: int, purchase_id: int) -> bool:
+	if not MeepColony.is_harvester_rate_purchase(purchase_id):
+		return false
+	var context := _specialty_context(peer_id, site, structure_index,
+		MeepStructures.Kind.BIOMASS_HARVESTER, false)
+	var colony := context.get("colony") as MeepColony
+	return colony.try_city_purchase(purchase_id) if colony != null else false
+
+
+func request_hat_purchase(peer_id: int, site: StringName,
+		structure_index: int, item_id: String) -> void:
+	var local_id := multiplayer.get_unique_id()
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if peer_id != local_id or not item_id in ItemDB.hat_shop_ids() \
+			or not is_instance_valid(player):
+		return
+	player.sync_progression_to_server()
+	player.sync_loadout_to_server()
+	_shop_request_sequence += 1
+	if _is_host_authority():
+		_server_hat_purchase(
+			local_id, site, structure_index, item_id)
+	else:
+		_request_hat_purchase_from_client.rpc_id(
+			1, _shop_request_sequence, site, structure_index, item_id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_hat_purchase_from_client(sequence: int, site: StringName,
+		structure_index: int, item_id: String) -> void:
+	if not multiplayer.is_server() or not item_id in ItemDB.hat_shop_ids():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not _accept_shop_request(sender, sequence):
+		return
+	_server_hat_purchase(sender, site, structure_index, item_id)
+
+
+func _server_hat_purchase(peer_id: int, site: StringName,
+		structure_index: int, item_id: String) -> bool:
+	var context := _specialty_context(
+		peer_id, site, structure_index, MeepStructures.Kind.HAT_HOUSE)
+	var player := context.get("player") as OnlinePlayer
+	var price := ItemDB.hat_price(item_id)
+	if player == null or price < 0:
+		return false
+	# The host ledger is the transaction key. An owned carried hat routes through
+	# the same validated request to equip/stow; an owned dropped hat is never reminted.
+	if player.owns_hat(item_id):
+		return player.authoritative_toggle_hat(item_id) \
+			if player.owns_physical_item(item_id) else true
+	if player.backpack_slot_for(item_id) < 0 or not player.can_spend_gold(price):
+		return false
+	var backpack_index := player.authoritative_grant_backpack(item_id)
+	if backpack_index < 0:
+		return false
+	if not player.authoritative_spend_gold(price):
+		player.authoritative_remove_item("backpack", backpack_index, item_id)
+		return false
+	if not player.authoritative_record_hat_purchase(item_id):
+		player.authoritative_remove_item("backpack", backpack_index, item_id)
+		return false
+	var generation := player.advance_inventory_generation()
+	var transaction_id := _next_pickup_id
+	_next_pickup_id += 1
+	if peer_id != multiplayer.get_unique_id():
+		_grant_pickup.rpc_id(peer_id, transaction_id, item_id,
+			backpack_index, generation)
+	player.publish_authoritative_loadout()
+	player.publish_authoritative_progression()
+	return true
+
+
+func request_ability_house_action(peer_id: int, site: StringName,
+		structure_index: int, ability_id: String, action: int) -> void:
+	var local_id := multiplayer.get_unique_id()
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if peer_id != local_id or not ItemDB.is_ability(ability_id) \
+			or action < 0 or action >= OnlinePlayer.AbilityProgressAction.size() \
+			or not is_instance_valid(player):
+		return
+	player.sync_loadout_to_server()
+	player.sync_progression_to_server()
+	_shop_request_sequence += 1
+	if _is_host_authority():
+		_server_ability_house_action(
+			local_id, site, structure_index, ability_id, action)
+	else:
+		_request_ability_house_action_from_client.rpc_id(
+			1, _shop_request_sequence, site, structure_index,
+			ability_id, action)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_house_action_from_client(sequence: int,
+		site: StringName, structure_index: int,
+		ability_id: String, action: int) -> void:
+	if not multiplayer.is_server() or not ItemDB.is_ability(ability_id) \
+			or action < 0 or action >= OnlinePlayer.AbilityProgressAction.size():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not _accept_shop_request(sender, sequence):
+		return
+	_server_ability_house_action(
+		sender, site, structure_index, ability_id, action)
+
+
+func _server_ability_house_action(peer_id: int, site: StringName,
+		structure_index: int, ability_id: String, action: int) -> bool:
+	var context := _specialty_context(
+		peer_id, site, structure_index, MeepStructures.Kind.ABILITIES_HOUSE)
+	var player := context.get("player") as OnlinePlayer
+	return player.authoritative_ability_action(ability_id, action) \
+		if player != null else false
+
+
+func request_ability_stat_upgrade(peer_id: int, site: StringName,
+		structure_index: int, ability_id: String, stat_id: String) -> void:
+	var local_id := multiplayer.get_unique_id()
+	var player := _spawned_players.get(local_id) as OnlinePlayer
+	if peer_id != local_id \
+			or not ItemDB.ability_stat_valid(ability_id, stat_id) \
+			or not is_instance_valid(player):
+		return
+	player.sync_loadout_to_server()
+	player.sync_progression_to_server()
+	_shop_request_sequence += 1
+	if _is_host_authority():
+		_server_ability_stat_upgrade(
+			local_id, site, structure_index, ability_id, stat_id)
+	else:
+		_request_ability_stat_upgrade_from_client.rpc_id(
+			1, _shop_request_sequence, site, structure_index,
+			ability_id, stat_id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_ability_stat_upgrade_from_client(sequence: int,
+		site: StringName, structure_index: int,
+		ability_id: String, stat_id: String) -> void:
+	if not multiplayer.is_server() \
+			or not ItemDB.ability_stat_valid(ability_id, stat_id):
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if not _accept_shop_request(sender, sequence):
+		return
+	_server_ability_stat_upgrade(
+		sender, site, structure_index, ability_id, stat_id)
+
+
+func _server_ability_stat_upgrade(peer_id: int, site: StringName,
+		structure_index: int, ability_id: String, stat_id: String) -> bool:
+	var context := _specialty_context(
+		peer_id, site, structure_index, MeepStructures.Kind.ABILITIES_HOUSE)
+	var colony := context.get("colony") as MeepColony
+	var player := context.get("player") as OnlinePlayer
+	if colony == null or player == null \
+			or not colony.abilities_house_stats_unlocked():
+		return false
+	return player.authoritative_ability_stat_upgrade(ability_id, stat_id)
+
+
+func _accept_shop_request(peer_id: int, sequence: int) -> bool:
+	if NetworkManager.state != NetworkManager.SessionState.IN_GAME \
+			or not NetworkManager.is_peer_registered(peer_id) \
+			or sequence <= int(_last_shop_request_by_peer.get(peer_id, 0)):
+		return false
+	_last_shop_request_by_peer[peer_id] = sequence
+	return true
+
+
+func _specialty_context(peer_id: int, site: StringName,
+		structure_index: int, expected_kind: int,
+		requires_player_state := true) -> Dictionary:
+	if not _is_host_authority():
+		return {}
+	var colonies := meep_colonies()
+	var player := _spawned_players.get(peer_id) as OnlinePlayer
+	var colony := colonies.colony(site) if colonies != null else null
+	if player == null or colony == null or player.is_dead() \
+			or (requires_player_state \
+				and (not player.authoritative_inventory_ready() \
+					or not player.authoritative_progression_ready())) \
+			or not colony.specialty_interaction_valid(
+				structure_index, expected_kind, player.global_position,
+				SPECIALTY_HOUSE_MAX_DISTANCE):
+		return {}
+	return {
+		"player": player,
+		"colony": colony,
+	}
 
 
 ## Public red-menu entry point. A client sends only the source claim; the server
@@ -989,6 +1918,8 @@ func _despawn_player(peer_id: int) -> void:
 	_respawn_sequence.erase(peer_id)
 	_sandbox_spawn_slots.erase(peer_id)
 	if is_instance_valid(player):
+		if _is_host_authority():
+			player.release_poke_ball_on_departure()
 		player.queue_free()
 
 
@@ -1016,6 +1947,7 @@ func _request_world_state() -> void:
 			"held": player.held_item() if is_instance_valid(player) else "",
 			"body": player.body_id() if is_instance_valid(player) else str(meta.get("body", CharacterDB.DEFAULT_BODY)),
 			"combat": player.combat_snapshot() if is_instance_valid(player) else {},
+			"resources": player.resource_snapshot() if is_instance_valid(player) else {},
 		})
 	# A joining peer loaded this scene later than the host. Send the host's sky
 	# phase with the same snapshot so both see the same day rather than each
@@ -1024,7 +1956,7 @@ func _request_world_state() -> void:
 	# cleared away are as much world state as the sky is.
 	_receive_world_state.rpc_id(
 		sender, snapshots, celestial_cycle.phase(), pickup_snapshots(),
-		scar_snapshot(), flora_snapshot(), bigfoot_snapshot(),
+		scar_snapshot(), flora_snapshot(), boss_snapshots(),
 		celestial_cycle.day_index(), ability_construct_snapshot(),
 		colony_snapshot())
 
@@ -1036,7 +1968,7 @@ func _receive_world_state(
 		pickup_state: Array = [],
 		scar_state: Array = [],
 		flora_state: Dictionary = {},
-		boss_state: Dictionary = {},
+		boss_state: Variant = {},
 		day_number := 0,
 		ability_construct_state: Array = [],
 		colony_state: Array = []
@@ -1046,7 +1978,7 @@ func _receive_world_state(
 	celestial_cycle.set_day_index(int(day_number))
 	apply_scar_snapshot(scar_state)
 	apply_flora_snapshot(flora_state)
-	apply_bigfoot_snapshot(boss_state)
+	apply_boss_snapshots(boss_state)
 	apply_ability_construct_snapshot(ability_construct_state)
 	apply_colony_snapshot(colony_state)
 	for snapshot_variant in snapshots:
@@ -1071,6 +2003,9 @@ func _receive_world_state(
 			var combat_state: Variant = snapshot.get("combat", null)
 			if combat_state is Dictionary:
 				player.apply_combat_snapshot(combat_state)
+			var resource_state: Variant = snapshot.get("resources", null)
+			if resource_state is Dictionary:
+				player.apply_resource_snapshot(resource_state)
 	for pickup_variant in pickup_state:
 		if not pickup_variant is Dictionary:
 			continue
@@ -1155,6 +2090,52 @@ func _planet_facing_basis(origin: Vector3, centre: Vector3, up_hint: Vector3,
 		var hint := Vector3.UP if absf(forward.y) < 0.9 else Vector3.RIGHT
 		up_hint = hint - forward * hint.dot(forward)
 	return _upright_basis(forward, up_hint.normalized())
+
+
+## Every arena boss is deterministic scene content, so a late join needs state
+## rather than a spawn packet. Paths distinguish multiple bosses of the same
+## script and remain stable across peers loading the same world scene.
+func boss_snapshots() -> Array:
+	var rows: Array = []
+	for boss_variant: Variant in get_tree().get_nodes_in_group(&"bosses"):
+		var boss := boss_variant as Node
+		if boss == null or not DamageHit.in_same_world(self, boss) \
+				or not boss.has_method(&"boss_snapshot"):
+			continue
+		var wire := (boss.call(&"boss_snapshot") as Dictionary).duplicate(true)
+		wire["node_path"] = String(get_path_to(boss))
+		rows.append(wire)
+	return rows
+
+
+func apply_boss_snapshots(state: Variant) -> void:
+	# Compatibility with hosts from the single-boss protocol and focused tests
+	# that still pass Bigfoot's dictionary directly.
+	if state is Dictionary:
+		apply_bigfoot_snapshot(state)
+		return
+	if not state is Array:
+		return
+	for wire_variant: Variant in state:
+		if not wire_variant is Dictionary:
+			continue
+		var wire := wire_variant as Dictionary
+		var boss: Node
+		var path := NodePath(String(wire.get("node_path", "")))
+		if not path.is_empty():
+			boss = get_node_or_null(path)
+		if boss == null:
+			var wanted := String(wire.get("boss_id", ""))
+			for candidate_variant: Variant in get_tree().get_nodes_in_group(&"bosses"):
+				var candidate := candidate_variant as Node
+				if candidate == null or not DamageHit.in_same_world(self, candidate) \
+						or not candidate.has_method(&"boss_id"):
+					continue
+				if String(candidate.call(&"boss_id")) == wanted:
+					boss = candidate
+					break
+		if boss != null and boss.has_method(&"apply_boss_snapshot"):
+			boss.call(&"apply_boss_snapshot", wire)
 
 
 func bigfoot_snapshot() -> Dictionary:

@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "id": "bigfoot",
+  "class_name": "BigfootBoss",
+  "display_name": "Bigfoot",
+  "description": "A host-authoritative forest guardian that sprints through cover, controls the sky with a roar, and chains heavy close-range attacks.",
+  "asset": {
+    "source": "res://assets/source/meshmaker/bigfoot.blend",
+    "runtime_glb": "res://assets/runtime/characters/bigfoot.glb",
+    "builder": "res://assets/source/blender/build_bigfoot.py"
+  },
+  "controller": {
+    "mode": "custom",
+    "scene": "res://game/enemies/bigfoot/bigfoot.tscn",
+    "script": "res://game/enemies/bigfoot/bigfoot.gd"
+  },
+  "health": 10000.0,
+  "arena": {
+    "radius": 200.0,
+    "detection_radius": 190.0,
+    "reset_delay": 5.0,
+    "distance_mode": "surface_arc"
+  },
+  "combat": {
+    "radius": 0.72,
+    "center_height": 1.58
+  },
+  "collision": {
+    "shape": "capsule",
+    "radius": 0.72,
+    "height": 3.16,
+    "offset": [
+      0.0,
+      1.58,
+      0.0
+    ]
+  },
+  "animations": {
+    "rest": "Idle",
+    "walk": "Walk",
+    "run": "Run",
+    "roar": "Roar",
+    "meteor": {
+      "windup": "MeteorWindup",
+      "travel": "MeteorFly",
+      "impact": "MeteorImpact"
+    },
+    "punch": "Punch",
+    "grab": "Grab",
+    "throw": "Throw",
+    "hit_react": "HitReact",
+    "defeat": "Defeat"
+  },
+  "moves": [
+    {
+      "id": "roar",
+      "behavior": "custom:bigfoot_roar",
+      "animations": {
+        "active": "Roar"
+      }
+    },
+    {
+      "id": "meteor",
+      "behavior": "custom:bigfoot_meteor",
+      "animations": {
+        "windup": "MeteorWindup",
+        "travel": "MeteorFly",
+        "impact": "MeteorImpact"
+      }
+    },
+    {
+      "id": "punch",
+      "behavior": "custom:bigfoot_punch",
+      "animations": {
+        "strike": "Punch"
+      }
+    },
+    {
+      "id": "grab",
+      "behavior": "custom:bigfoot_grab_throw",
+      "animations": {
+        "capture": "Grab",
+        "throw": "Throw"
+      }
+    },
+    {
+      "id": "rock",
+      "behavior": "custom:bigfoot_rock_throw",
+      "animations": {
+        "throw": "Throw"
+      }
+    }
+  ],
+  "pretriggers": [
+    "arena_entry"
+  ],
+  "location": {
+    "mode": "planet_surface",
+    "direction": [
+      -0.959298134,
+      0.271219909,
+      0.078657165
+    ],
+    "facing": 0.0,
+    "clearance": 0.0
+  },
+  "waypoint": {
+    "enabled": true,
+    "title": "Bigfoot",
+    "tint": "#f06a43",
+    "show_beyond": 0.0,
+    "aimed_beyond": 0.0,
+    "hide_beyond": 0.0
+  },
+  "material": "res://game/enemies/bigfoot/bigfoot_surface.tres",
+  "tags": [
+    "boss",
+    "forest",
+    "ground"
+  ],
+  "extensions": {
+    "site_node_name": "BigfootTerritory",
+    "boss_node_name": "Bigfoot",
+    "site_script": "res://game/enemies/bigfoot/bigfoot_site.gd"
+  }
+}

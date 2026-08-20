@@ -272,6 +272,21 @@ func _run_home_new_game_flow() -> void:
 	await _wait(0.25)
 	_report_home_mode_settings("duels")
 	await _capture("menu_home_duels_settings")
+	back = _home.find_child("NewGameBack", true, false) as Button
+	if back == null:
+		push_error("_menu_shot: Duels settings Back button is missing")
+		return
+	back.pressed.emit()
+	await _wait(0.15)
+	var sandbox := _home.find_child(
+		"HomeMode_sandbox", true, false) as Button
+	if sandbox == null:
+		push_error("_menu_shot: Sandbox mode card is missing")
+		return
+	sandbox.pressed.emit()
+	await _wait(0.25)
+	_report_home_mode_settings("sandbox")
+	await _capture("menu_home_sandbox_saves")
 	_home._pick_mode(false)
 	await _wait(0.1)
 
@@ -289,7 +304,11 @@ func _report_home_mode_settings(mode_id: String) -> void:
 	var correct_options := (
 		_home.find_child("HomeDuelsOptions", true, false) != null
 		if mode_id == "duels"
-		else _home.find_child("HomeStandardModeSettings", true, false) != null
+		else (
+			_home.find_child("HomeSandboxSavePicker", true, false) != null
+			if mode_id == "sandbox"
+			else _home.find_child(
+				"HomeStandardModeSettings", true, false) != null)
 	)
 	print("_menu_shot: home %s settings start_right=%s options=%s" % [
 		mode_id, start_is_right, correct_options
@@ -485,19 +504,20 @@ func _run_handover() -> void:
 
 
 ## Optional visual-only path for the in-game shell. Behavioral coverage belongs
-## to _menu_test; this path reports geometry and saves two representative frames.
+## to _menu_test; this path reports geometry and saves representative frames.
 func _run_ingame_red() -> void:
 	_home.show_view(HomeScreen.View.HOME)
 	await _wait(HomeScreen.MOVE_TIME + 0.4)
-	_home.start_new_game()
+	_home.start_new_game("sandbox")
 	await _wait(HomeScreen.HANDOVER_TIME + 0.5)
 	var player := _world.local_player()
 	if player == null:
 		push_error("_menu_shot: --ingame-red did not spawn a local player")
 		return
-	if _world.celestial_cycle == null \
-			or _world.celestial_cycle.phase() > 0.01:
-		push_error("_menu_shot: New Game did not reset the sunset menu to full daylight")
+	if _world.celestial_cycle == null or absf(
+			_world.celestial_cycle.phase()
+				- GameWorld.GAMEPLAY_SUNRISE_PHASE) > 0.01:
+		push_error("_menu_shot: New Game did not reset the menu sunset to sunrise")
 	player._open_game_menu(GameMenu.Tab.HERO)
 	await _wait(0.25)
 	var menu := _game_menu(player)
@@ -510,6 +530,14 @@ func _run_ingame_red() -> void:
 	await _wait(0.25)
 	_report_red_bounds(menu, "Apparel")
 	await _capture("menu_ingame_apparel")
+	menu.show_tab(GameMenu.Tab.SAVE)
+	await _wait(0.25)
+	_report_red_bounds(menu, "Save")
+	await _capture("menu_ingame_save")
+	menu.show_tab(GameMenu.Tab.LOAD)
+	await _wait(0.25)
+	_report_red_bounds(menu, "Load")
+	await _capture("menu_ingame_load")
 	menu.close()
 	await get_tree().process_frame
 

@@ -1,0 +1,186 @@
+{
+  "schema": "meep_asset_manifest",
+  "version": 1,
+  "generator": "assets/source/blender/build_meep.py",
+  "source": {
+    "blend": "assets/source/meshmaker/meep.blend",
+    "sha256": "0370bf52f9f7d2b54ad8b4a587f255dd38411f1082c96198d0187fe5f286044c",
+    "immutable": true
+  },
+  "work_blend": "assets/work/meep_rigged.blend",
+  "skeletal_reference": {
+    "glb": "assets/runtime/meeps/models/meep.glb",
+    "mesh_node": "Character",
+    "vertices_after_corner_splits": 3759,
+    "triangles": 2800,
+    "skins": 1,
+    "bones": [
+      "Root",
+      "Hips",
+      "Spine",
+      "Chest",
+      "UpperChest",
+      "Neck",
+      "Head",
+      "LeftShoulder",
+      "LeftUpperArm",
+      "LeftLowerArm",
+      "LeftHand",
+      "RightShoulder",
+      "RightUpperArm",
+      "RightLowerArm",
+      "RightHand",
+      "LeftUpperLeg",
+      "LeftLowerLeg",
+      "LeftFoot",
+      "LeftToes",
+      "RightUpperLeg",
+      "RightLowerLeg",
+      "RightFoot",
+      "RightToes"
+    ],
+    "actions": [
+      {
+        "name": "Idle",
+        "fps": 30,
+        "stored_cycle_frames": 90,
+        "duplicate_loop_endpoint_frame": 91,
+        "in_place": true
+      },
+      {
+        "name": "Walk",
+        "fps": 30,
+        "stored_cycle_frames": 30,
+        "duplicate_loop_endpoint_frame": 31,
+        "in_place": true
+      },
+      {
+        "name": "Run",
+        "fps": 30,
+        "stored_cycle_frames": 20,
+        "duplicate_loop_endpoint_frame": 21,
+        "in_place": true
+      },
+      {
+        "name": "Build",
+        "fps": 30,
+        "stored_cycle_frames": 30,
+        "duplicate_loop_endpoint_frame": 31,
+        "in_place": true
+      }
+    ]
+  },
+  "appearance": {
+    "color_paint": "assets/runtime/biomes/paint/meep_paint.png",
+    "paint_size": [
+      256,
+      256
+    ],
+    "color_paint_style": "broad sage body bands, a cream face and belly bib, teal wrist and ankle rings, deep-sage lower limbs, and large cyan cheek glyphs whose mip-safe centres provide the PNG-alpha night-emission mask",
+    "emission_style": "paired cyan cheek glyphs and the centre of each teal cuff glow softly after local sunset",
+    "emission_strength": 1.45,
+    "runtime_material": "game/meeps/meep_surface.tres",
+    "material_policy": "GLBs retain COLOR_0, TEXCOORD_0 and TEXCOORD_1 but do not embed duplicate paint; apply the runtime material override",
+    "vertex_colour": "COLOR_0 semantic region colors",
+    "color_paint_uv": "TEXCOORD_0 / PaintUV",
+    "vat_vertex_id": "TEXCOORD_1 / VAT_ID",
+    "emission_mask": "paint PNG alpha; never transparency"
+  },
+  "geometry": {
+    "authored_height": 1.200758,
+    "bounds_blender": {
+      "minimum": [
+        -0.500725,
+        -0.181089,
+        -0.000911
+      ],
+      "maximum": [
+        0.497504,
+        0.182737,
+        1.199847
+      ]
+    },
+    "source_vertices": 1356,
+    "triangles": 2800,
+    "triangle_budget": {
+      "minimum": 2400,
+      "maximum": 3200
+    },
+    "maximum_skin_influences": 4,
+    "ground_axis": "Godot/glTF +Y",
+    "forward_axis": "Godot local -Z"
+  },
+  "vat": {
+    "representation": "one independently validated VAT set per clip",
+    "clips": {
+      "Idle": {
+        "glb": "assets/runtime/vat/meep_idle_vat.glb",
+        "positions": "assets/runtime/vat/meep_idle_vat.exr",
+        "metadata": "assets/runtime/vat/meep_idle_vat.json",
+        "source_vertices": 1356,
+        "glb_vertices_after_corner_splits": 3759,
+        "triangles": 2800,
+        "frames": 90,
+        "texture_dimensions": [
+          1356,
+          90
+        ],
+        "loop_endpoint_error": 0.0
+      },
+      "Walk": {
+        "glb": "assets/runtime/vat/meep_walk_vat.glb",
+        "positions": "assets/runtime/vat/meep_walk_vat.exr",
+        "metadata": "assets/runtime/vat/meep_walk_vat.json",
+        "source_vertices": 1356,
+        "glb_vertices_after_corner_splits": 3759,
+        "triangles": 2800,
+        "frames": 30,
+        "texture_dimensions": [
+          1356,
+          30
+        ],
+        "loop_endpoint_error": 0.0
+      },
+      "Run": {
+        "glb": "assets/runtime/vat/meep_run_vat.glb",
+        "positions": "assets/runtime/vat/meep_run_vat.exr",
+        "metadata": "assets/runtime/vat/meep_run_vat.json",
+        "source_vertices": 1356,
+        "glb_vertices_after_corner_splits": 3759,
+        "triangles": 2800,
+        "frames": 20,
+        "texture_dimensions": [
+          1356,
+          20
+        ],
+        "loop_endpoint_error": 0.0
+      },
+      "Build": {
+        "glb": "assets/runtime/vat/meep_build_vat.glb",
+        "positions": "assets/runtime/vat/meep_build_vat.exr",
+        "metadata": "assets/runtime/vat/meep_build_vat.json",
+        "source_vertices": 1356,
+        "glb_vertices_after_corner_splits": 3759,
+        "triangles": 2800,
+        "frames": 30,
+        "texture_dimensions": [
+          1356,
+          30
+        ],
+        "loop_endpoint_error": 0.0
+      }
+    },
+    "normal_animation": "static base-frame normals; production VAT is intended for population-distance MultiMeshes, while the skeletal reference retains evaluated normals for close inspection"
+  },
+  "previews": {
+    "close": "assets/previews/meeps/meep_close.png",
+    "build": "assets/previews/meeps/meep_build.png",
+    "gameplay": "assets/previews/meeps/meep_gameplay.png"
+  },
+  "runtime_resources": {
+    "idle": "game/meeps/meep_idle_vat.tres",
+    "walk": "game/meeps/meep_walk_vat.tres",
+    "run": "game/meeps/meep_run_vat.tres",
+    "build": "game/meeps/meep_build_vat.tres"
+  }
+}

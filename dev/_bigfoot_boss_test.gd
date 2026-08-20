@@ -4,11 +4,15 @@ extends Node
 ##
 ##     godot --headless --path . dev/_bigfoot_boss_test.tscn
 
+const WORLD_SCENE := preload("res://game/world.tscn")
 const BOSS_SCENE := preload("res://game/enemies/bigfoot/bigfoot.tscn")
 const ROCK := preload("res://game/enemies/bigfoot/bigfoot_rock.gd")
 const ROAR_WAVE := preload("res://game/enemies/bigfoot/bigfoot_roar_wave.gd")
 const TEST_CYCLE := preload("res://dev/_multiplayer_test_cycle.gd")
+const BOSS_DEFINITION_REGRESSION := preload(
+	"res://dev/_boss_definition_regression.gd")
 
+const SITE_DIRECTION := Vector3(-0.959298134, 0.271219909, 0.078657165)
 const RESET_DEBOUNCE := BigfootBoss.RESET_DEBOUNCE
 ## Three seconds of patrol, watched on the physics clock.
 const PATROL_FRAMES := 180
@@ -194,6 +198,7 @@ func _ready() -> void:
 	NetworkManager.is_single_player = true
 	NetworkManager.is_host = true
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
+	_check_authored_world()
 	var world := _make_world("World")
 	var planet := Planet.new()
 	planet.name = "Planet"
@@ -217,6 +222,7 @@ func _ready() -> void:
 	await get_tree().process_frame
 	boss.call(&"_capture_spawn")
 
+	_check_definition_contract(boss)
 	_check_combatant(boss, player)
 	await _check_player_grapple(boss, player)
 	_check_camera_rim(boss)
@@ -269,6 +275,38 @@ func _make_world(world_name: String) -> GameWorld:
 	world.add_child(cycle)
 	world.set_physics_process(false)
 	return world
+
+
+func _check_authored_world() -> void:
+	var authored := WORLD_SCENE.instantiate()
+	var failures := BOSS_DEFINITION_REGRESSION.validate_authored_director(authored)
+	var message := "detached authored BossDirector preserves all three bosses"
+	if not failures.is_empty():
+		message += ": " + "; ".join(failures)
+	_expect(failures.is_empty(), message)
+	authored.free()
+
+
+func _check_definition_contract(boss: CharacterBody3D) -> void:
+	var failures := BOSS_DEFINITION_REGRESSION.validate("bigfoot", boss, {
+		"node_name": "Bigfoot",
+		"display_name": "Bigfoot",
+		"max_health": 10_000.0,
+		"arena_radius": 200.0,
+		"detection_radius": 190.0,
+		"reset_delay": 5.0,
+		"arena_distance_mode": &"surface_arc",
+		"location": {
+			"mode": &"planet_surface",
+			"direction": SITE_DIRECTION,
+			"facing": 0.0,
+			"clearance": 0.0,
+		},
+	})
+	var message := "shared catalog/runtime contract matches Bigfoot"
+	if not failures.is_empty():
+		message += ": " + "; ".join(failures)
+	_expect(failures.is_empty(), message)
 
 
 func _check_combatant(boss: CharacterBody3D, player: TestPlayer) -> void:
@@ -704,6 +742,11 @@ func _check_footing(boss: CharacterBody3D, planet: Planet) -> void:
 func _check_tree_avoidance(boss: CharacterBody3D, planet: Planet) -> void:
 	boss.call(&"_reset_arena")
 	boss.set_physics_process(false)
+	# The preceding footing fixture deliberately moved the body off its authored
+	# radial height. Ground it before deriving the obstacle frame so the first
+	# test step cannot snap underneath an otherwise valid trunk.
+	boss.call(&"_snap_to_ground")
+	boss.velocity = Vector3.ZERO
 	var start := boss.global_transform
 	var forward := start.basis.x.normalized()
 	var up := start.basis.y.normalized()

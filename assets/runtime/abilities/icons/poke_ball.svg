@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <clipPath id="ball">
+      <circle cx="64" cy="64" r="48"/>
+    </clipPath>
+    <radialGradient id="shine" cx="36%" cy="28%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".72"/>
+      <stop offset=".5" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="64" cy="64" r="58" fill="#171c25"/>
+  <g clip-path="url(#ball)">
+    <rect x="16" y="16" width="96" height="48" fill="#ef3d43"/>
+    <rect x="16" y="64" width="96" height="48" fill="#f4f7fb"/>
+    <rect x="12" y="58" width="104" height="12" fill="#151922"/>
+    <circle cx="64" cy="64" r="47" fill="url(#shine)"/>
+  </g>
+  <circle cx="64" cy="64" r="48" fill="none" stroke="#0d1118" stroke-width="6"/>
+  <circle cx="64" cy="64" r="16" fill="#151922"/>
+  <circle cx="64" cy="64" r="9" fill="#f8fbff" stroke="#aeb9c8" stroke-width="3"/>
+</svg>

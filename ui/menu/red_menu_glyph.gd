@@ -29,6 +29,8 @@ enum Glyph {
 	EXIT,
 	EMPTY_X,
 	STATS,
+	SAVE,
+	LOAD,
 }
 
 @export var glyph: Glyph = Glyph.HERO:
@@ -123,6 +125,10 @@ func _draw() -> void:
 			_draw_empty()
 		Glyph.STATS:
 			_draw_stats()
+		Glyph.SAVE:
+			_draw_save()
+		Glyph.LOAD:
+			_draw_load()
 
 
 func _draw_hero() -> void:
@@ -430,6 +436,29 @@ func _draw_stats() -> void:
 	_filled_rect(Rect2(21.0, 55.0, 13.0, 29.0), _ink())
 	_filled_rect(Rect2(44.0, 36.0, 13.0, 48.0), _ink())
 	_filled_rect(Rect2(67.0, 18.0, 13.0, 66.0), _ink())
+
+
+func _draw_save() -> void:
+	_outline_rect(Rect2(17.0, 13.0, 66.0, 74.0), 5.0, _ink())
+	_outline_rect(Rect2(30.0, 17.0, 40.0, 25.0), 4.0, _ink())
+	_filled_rect(Rect2(58.0, 20.0, 7.0, 17.0), _ink())
+	_outline_rect(Rect2(29.0, 57.0, 42.0, 25.0), 4.0, _ink())
+
+
+func _draw_load() -> void:
+	_stroke(PackedVector2Array([
+		Vector2(50.0, 13.0),
+		Vector2(50.0, 62.0),
+	]), 8.0, _ink())
+	_polygon(PackedVector2Array([
+		Vector2(50.0, 75.0),
+		Vector2(27.0, 51.0),
+		Vector2(73.0, 51.0),
+	]), _ink())
+	_stroke(PackedVector2Array([
+		Vector2(18.0, 84.0),
+		Vector2(82.0, 84.0),
+	]), 7.0, _ink())
 
 
 func _ink() -> Color:

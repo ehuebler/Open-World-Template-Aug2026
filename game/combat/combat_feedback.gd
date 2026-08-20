@@ -10,6 +10,9 @@ const DAMAGE_SHAKE_TIME := 0.28
 const STATUS_SHAKE_TIME := 0.22
 const FLORA_SHAKE_GAP := 0.07
 const MAX_SHAKE_OFFSET := 0.035
+## World-owned actors can be hurt without the local player causing the hit. Their
+## numbers are useful only while the player can actually witness the target.
+const WORLD_DAMAGE_NUMBER_RANGE := 300.0
 ## A roar arrives as pressure rather than as an impact, so it rolls the view
 ## instead of rattling it. Kept short and well under a tenth of a turn: this
 ## reads as being knocked off balance, and anything longer reads as a bug.
@@ -141,6 +144,32 @@ func outgoing_damage(amount: float, at: Vector3, target_peer := 0,
 	event.world_position = at
 	event.target_peer = target_peer
 	event.critical = critical
+	_show_number(event)
+
+
+## Damage to an actor not owned by this HUD, such as a Meep struck by wildlife.
+## Unlike personal incoming damage, an offscreen world event is discarded instead
+## of appearing at screen centre.
+func world_damage(event: DamageNumberEvent) -> void:
+	if event == null or event.amount <= 0.0 or _camera == null \
+			or event.world_position == Vector3.ZERO \
+			or _camera.is_position_behind(event.world_position) \
+			or _camera.global_position.distance_squared_to(event.world_position) \
+				> WORLD_DAMAGE_NUMBER_RANGE * WORLD_DAMAGE_NUMBER_RANGE:
+		return
+	_show_number(event)
+
+
+## A resource pickup uses the familiar rising combat-number language without
+## pretending to be damage: a plus prefix and a saturated green make the gain
+## readable while the player is still moving through the plant.
+func biomass_gained(amount: float, at: Vector3) -> void:
+	if amount <= 0.0:
+		return
+	var event := DamageNumberEvent.new()
+	event.amount = amount
+	event.world_position = at
+	event.reward = true
 	_show_number(event)
 
 

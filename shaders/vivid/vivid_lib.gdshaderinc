@@ -50,6 +50,11 @@ global uniform float region_chroma;
 // cubemap.
 global uniform float air_chroma;
 
+// Player-selected replacement for the shared light-green camera rim. It arrives
+// as an explicitly linear vec3 because shader globals do not reliably honour
+// `source_color`. Unique authored species/boss rims retain their identity.
+global uniform vec3 camera_rim_user_color;
+
 // The polar cap. `frost_axis` is north in world space; the two cosines are the
 // cap's outer and inner edges, written by Planet out of PlanetShape so the CPU
 // and the GPU cannot disagree about where the arctic starts. Do not set these by
@@ -111,6 +116,18 @@ float vivid_camera_rim(
 		normalize(world_normal), normalize(view_direction)), 0.0, 1.0);
 	return smoothstep(
 		dark_edge, max(light_edge, dark_edge + 0.001), facing);
+}
+
+
+// The shared green is a marker for the user-selectable outline. Unique authored
+// rim colours remain untouched, while characters, ordinary flora/fauna and
+// Bigfoot all follow the Gameplay color wheel immediately through one global.
+vec3 vivid_camera_rim_colour(vec3 authored_colour) {
+	vec3 shared_green = vec3(0.0331048, 1.0, 0.2957);
+	float uses_shared_colour = 1.0 - step(
+		0.02, distance(authored_colour, shared_green));
+	return mix(
+		authored_colour, camera_rim_user_color, uses_shared_colour);
 }
 
 

@@ -49,10 +49,6 @@ RIM_STRENGTH = 1.25
 RIM_RAMP_DARK = 0.68
 RIM_RAMP_LIGHT = 0.84
 
-REQUIRED_CLIPS = (
-    "Idle", "Walk", "Run", "Roar", "MeteorWindup", "MeteorFly",
-    "MeteorImpact", "Punch", "Grab", "Throw", "HitReact", "Defeat",
-)
 REQUIRED_BONES = (
     "Root", "Hips", "Spine", "Chest", "UpperChest", "Neck", "Head",
     "LeftShoulder", "LeftUpperArm", "LeftLowerArm", "LeftHand",
@@ -174,6 +170,15 @@ def load_sibling(filename: str, suffix: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+REQUIRED_CLIPS = load_sibling(
+    "boss_manifest.py", "_bigfoot_manifest").required_clips(
+        "bigfoot",
+        recipe_path=__file__,
+        source_path=SRC_BLEND,
+        runtime_path=OUT_GLB,
+    )
 
 
 def activate(obj: bpy.types.Object) -> None:

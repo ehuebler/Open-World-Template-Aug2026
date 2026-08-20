@@ -2,7 +2,7 @@
 class_name AbilityCatalog
 extends RefCounted
 
-const ORDER := ["laser_eyes", "meteor_punch", "starfire", "grapple", "nuke", "lasso", "wall", "nausicaa"]
+const ORDER := ["laser_eyes", "meteor_punch", "starfire", "grapple", "nuke", "lasso", "wall", "nausicaa", "poke_ball", "hero_punch", "building", "settlement_launcher"]
 const PATHS := {
 	"laser_eyes": "res://game/abilities/definitions/laser_eyes.tres",
 	"meteor_punch": "res://game/abilities/definitions/meteor_punch.tres",
@@ -12,6 +12,10 @@ const PATHS := {
 	"lasso": "res://game/abilities/definitions/lasso.tres",
 	"wall": "res://game/abilities/definitions/wall.tres",
 	"nausicaa": "res://game/abilities/definitions/nausicaa.tres",
+	"poke_ball": "res://game/abilities/definitions/poke_ball.tres",
+	"hero_punch": "res://game/abilities/definitions/hero_punch.tres",
+	"building": "res://game/abilities/definitions/building.tres",
+	"settlement_launcher": "res://game/abilities/definitions/settlement_launcher.tres",
 }
 
 static var _cache: Dictionary = {}

@@ -2,7 +2,7 @@ class_name PlayerStats
 extends RefCounted
 
 ## What the player is made of, as numbers a menu can list and other systems can
-## read: two of them today, health and speed.
+## read: health, speed, and carried resources.
 ##
 ## This exists as its own object rather than as more fields on [OnlinePlayer]
 ## because the inventory screen has to *enumerate* stats — draw a row per stat
@@ -43,10 +43,30 @@ const STATS := {
 		"unit": " m/s",
 		"precision": 1,
 	},
+	"biomass": {
+		"title": "Biomass",
+		"description": "Organic material you carry and can contribute to a city.",
+		"base": 0.0,
+		"minimum": 0.0,
+		"maximum": 999999.0,
+		"unit": "",
+		"precision": 0,
+	},
+	"gold": {
+		"title": "Gold",
+		"description": "Currency carried for specialty-house purchases.",
+		"base": 0.0,
+		"minimum": 0.0,
+		"maximum": 999999999.0,
+		"unit": " gold",
+		"precision": 0,
+	},
 }
 
 const HEALTH := &"health"
 const SPEED := &"speed"
+const BIOMASS := &"biomass"
+const GOLD := &"gold"
 
 ## Emitted for one stat when its base changes, so a screen can redraw one row
 ## rather than rebuilding its whole list.

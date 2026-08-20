@@ -183,6 +183,7 @@ var _menu: HBoxContainer
 var _picking_mode := false
 var _selected_home_mode := ""
 var _selected_home_duels_mode := "battle"
+var _selected_home_save_id := ""
 var _mode_panel: PanelContainer
 var _mode_content: VBoxContainer
 var _back: Button
@@ -199,9 +200,11 @@ var _handover_at := 0.0
 var _handover_target: OnlinePlayer
 var _body_from := Basis.IDENTITY
 var _awaiting_player := false
-## Raised while the invisible pre-game warm-up is running. The menu remains
-## unchanged, but a second New Game must not start another warm-up beside it.
+## Raised while the invisible pre-game warm-up is running. The overlay is
+## already gone by then; this only stops a second New Game from warming up
+## beside the first.
 var _warming := false
+var _overlay_dismissed := false
 var _edit_button: Button
 var _name_row: HBoxContainer
 var _name_field: LineEdit
@@ -743,6 +746,8 @@ func _build_mode_settings() -> void:
 			duel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 			duel_row.add_child(duel)
 		settings.add_child(duel_row)
+	elif _selected_home_mode == "sandbox":
+		settings.add_child(_build_sandbox_save_selector())
 	else:
 		var standard := PanelContainer.new()
 		standard.name = "HomeStandardModeSettings"
@@ -774,7 +779,8 @@ func _build_mode_settings() -> void:
 		func() -> void:
 			start_new_game(
 				_selected_home_mode,
-				_selected_home_duels_mode if _selected_home_mode == "duels" else ""
+				_selected_home_duels_mode if _selected_home_mode == "duels" else "",
+				_selected_home_save_id if _selected_home_mode == "sandbox" else ""
 			),
 		true
 	)
@@ -782,6 +788,63 @@ func _build_mode_settings() -> void:
 	start.custom_minimum_size = Vector2(220.0, 0.0)
 	start.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	row.add_child(start)
+
+
+func _build_sandbox_save_selector() -> Control:
+	var panel := PanelContainer.new()
+	panel.name = "HomeSandboxSaveSettings"
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_theme_stylebox_override(
+		&"panel",
+		_home_style(
+			Color(0.0, 0.13, 0.035, 0.78),
+			Color(HOME_GREEN, 0.88),
+			1,
+			8.0))
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override(&"separation", 6)
+	var heading := _home_label("SANDBOX WORLD //", 13, HOME_GREEN_TEXT)
+	column.add_child(heading)
+
+	var picker := OptionButton.new()
+	picker.name = "HomeSandboxSavePicker"
+	picker.custom_minimum_size.y = 38.0
+	picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	picker.add_item("NEW SANDBOX")
+	picker.set_item_metadata(0, "")
+	var saves := SaveManager.list_saves("sandbox")
+	var selected_index := 0
+	for metadata: Dictionary in saves:
+		var index := picker.item_count
+		var save_id := String(metadata.get("id", ""))
+		picker.add_item(String(metadata.get("name", "Sandbox")).to_upper())
+		picker.set_item_metadata(index, save_id)
+		if save_id == _selected_home_save_id:
+			selected_index = index
+	if selected_index == 0:
+		_selected_home_save_id = ""
+	picker.select(selected_index)
+	_style_home_button(picker, false)
+	column.add_child(picker)
+
+	var detail := _home_label("", 11, HOME_RED_MUTED, true)
+	detail.name = "HomeSandboxSaveSummary"
+	detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	detail.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	column.add_child(detail)
+	var update := func(index: int) -> void:
+		_selected_home_save_id = String(picker.get_item_metadata(index))
+		detail.text = (
+			"START A FRESH WORLD\nUSE SAVE IN-GAME TO CREATE A NAMED SNAPSHOT"
+			if _selected_home_save_id.is_empty()
+			else "LOAD THIS WORLD BEFORE START\nPLAYER, MEEPS, FAUNA, BUILDINGS, AND DAMAGE")
+	update.call(selected_index)
+	picker.item_selected.connect(update)
+	panel.add_child(column)
+	return panel
 
 
 func _mode_record(mode_id: String) -> Dictionary:
@@ -807,6 +870,8 @@ func _pick_mode(picking: bool) -> void:
 
 func _select_home_mode(mode_id: String) -> void:
 	_selected_home_mode = NetworkManager.sanitize_game_mode(mode_id)
+	if _selected_home_mode != "sandbox":
+		_selected_home_save_id = ""
 	if _selected_home_mode == "duels":
 		_selected_home_duels_mode = NetworkManager.sanitize_duels_mode(
 			_selected_home_duels_mode
@@ -1497,20 +1562,38 @@ func _on_steam_invite_received(
 # --- Handing over ------------------------------------------------------------
 
 
-func start_new_game(game_mode := "story", duels_mode := "") -> void:
+func start_new_game(game_mode := "story", duels_mode := "",
+		save_id := "") -> void:
 	if _handover_target != null or _awaiting_player or _warming:
 		return
 	# The player starts exactly where the character they have been looking at was
 	# standing, facing the way it was facing. Anything else would be a jump on the
 	# frame the real body replaces the preview.
-	CharacterDB.save_look(_look)
-	_world().override_local_spawn(_preview.global_transform)
-	_world().override_local_look(_look)
+	var selected_mode := NetworkManager.sanitize_game_mode(String(game_mode))
+	var requested_save := String(save_id)
+	var selected_save := ""
+	if selected_mode == "sandbox" and not requested_save.is_empty():
+		if not SaveManager.save_exists(requested_save, "sandbox"):
+			var missing_message := SaveManager.last_error
+			if missing_message.is_empty():
+				missing_message = "That save is no longer available."
+			_set_notice(missing_message, true)
+			return
+		selected_save = requested_save
+	if selected_save.is_empty():
+		CharacterDB.save_look(_look)
+		_world().override_local_spawn(_preview.global_transform)
+		_world().override_local_look(_look)
+	# The bottom menu belongs to choosing, not to the wait that follows. Hide it
+	# on the click rather than after warm-up and session start, which is a beat
+	# later and leaves START GAME sitting on the camera handover.
+	_dismiss_overlay()
 	# Before the session rather than after it, because the point is to be holding
 	# the player still while this happens. Once a session exists the world is
 	# theirs and every millisecond of it is a frame they are flying in.
 	await _warm_up()
-	NetworkManager.start_single_player(str(game_mode), str(duels_mode))
+	NetworkManager.start_single_player(
+		selected_mode, str(duels_mode), selected_save)
 
 
 ## Pays for the descent in advance without replacing the menu with a loading
@@ -1534,8 +1617,15 @@ func _on_session_started() -> void:
 
 
 func _dismiss_overlay() -> void:
+	if _overlay_dismissed:
+		return
+	_overlay_dismissed = true
 	_menu.visible = false
 	_back.visible = false
+	if _mode_panel != null:
+		_mode_panel.visible = false
+	if is_instance_valid(_name_row):
+		_name_row.visible = false
 	# The framed artwork is a sibling of the lobby panel, so removing the panel
 	# does not remove it. Hide it at session start instead of leaving it over the
 	# camera handover until this HomeScreen is finally freed.

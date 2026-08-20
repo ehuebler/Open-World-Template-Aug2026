@@ -74,6 +74,18 @@ extends SurfaceAnchor
 ## grown that way.
 @export_range(1.0, 4.0) var keep_back_fade := 2.1
 
+@export_group("Harvest")
+## Biomass paid per metre of an exact plant deliberately harvested by a colony.
+## Zero opts the whole field out. This is intentionally authored on the field rather
+## than inferred from species names: LandingFlowers may feed a settlement while
+## GlobalGrass, distant filler, reefs and monumental biome growths remain untouched.
+@export var harvest_yield := 0.0
+## Biomass paid per metre when a player physically breaks an instance. This is
+## separate from colony eligibility: a biome shrub may reward the player who
+## reaches and rams it without making its whole planet-wide field a Meep timber
+## source. Only species with authored impact collision can trigger it.
+@export var impact_biomass_yield := 1.0
+
 @export_group("Weather")
 ## Degrees the wind blows toward, measured about this node's own up. Published
 ## as a world direction for every plant on the planet, not just this field: one
@@ -178,6 +190,10 @@ const LOCAL_FACE := 6
 ## Glowing spots remembered per tile. Six lights serve the whole field, so a
 ## tile only has to offer a few well-spread candidates for the nearest of them.
 const GLOW_ANCHORS := 6
+## Completed Meep road networks expose a deterministic footprint through this group.
+## It is intentionally separate from damage: paving removes distant filler as well as
+## near plants, and newly streamed tiles must arrive already clear.
+const ROAD_CLEARANCE_GROUP := &"flora_road_clearance_sources"
 ## Shared metadata contract read by OnlinePlayer after move_and_slide. The
 ## collider itself owns the stable streamed-instance identity; no per-plant
 ## script or node is needed.
@@ -207,6 +223,16 @@ const REPLANT_SETTLE := 0.4
 ## stand for a camera move smaller than this cannot change a visible rank, but
 ## doing it in every one of the planet's cover fields every frame is measurable.
 const DRESS_STEP := 0.75
+## Viewer speed, in metres per second, at which the dressing step has doubled.
+##
+## The step is a staleness budget in metres, and it was written for somebody
+## walking. Flying, 0.75 m is reached every frame, so the whole point of spreading
+## the walk over [constant DRESS_SLICES] is lost precisely when the field is at its
+## largest. Every threshold a dressing decision turns on — thinning, mesh swap,
+## shadow, collision — is tens of metres wide, so trading metres of staleness for
+## frames is a good trade right up to the cap below.
+const DRESS_SPEED_REFERENCE := 14.0
+const DRESS_STEP_MAX := 6.0
 ## Passes a field takes to walk all of its tiles.
 ##
 ## Dressing is triggered by distance rather than by time, so spreading it costs
@@ -221,6 +247,13 @@ const DRESS_STEP := 0.75
 ## milliseconds of a seventeen millisecond frame, and nearly all of it was spent
 ## re-deciding tiles hundreds of metres away that had not changed.
 const DRESS_SLICES := 4
+## A tile whose dressing has to be worked out from scratch. See
+## [member Tile.dressed].
+const DRESSED_UNKNOWN := 0
+## Every species draws nothing on this tile, and none of its shapes are streamed.
+const DRESSED_HIDDEN := 1
+## Every species draws all it holds, with the near mesh, shadows and collision.
+const DRESSED_FULL := 2
 ## Tiles a field may hold before its squares are grown to suit its reach.
 ##
 ## A tile is never free. It is a dictionary entry, a survey candidate, a worker
@@ -262,6 +295,26 @@ const TILE_BUDGET := 180
 ## standing moves, so approaching a tile grows plants in between the ones there
 ## rather than replacing the lot.
 const DETAIL_BANDS: Array[float] = [0.0, 0.0625, 0.125, 0.25, 0.5, 1.0]
+## Cells [method survey_harvestable] keeps roots for. A settlement's claim covers
+## a few dozen; this leaves room for every town that is currently simulated in full
+## to hold its own meadow, and is a hard ceiling rather than the working bound —
+## [constant SURVEY_KEEP_SECONDS] is what normally decides how much is held.
+const SURVEY_CELL_LIMIT := 320
+## Seconds a surveyed cell is kept after the last town asked about it. A town that
+## stops asking has either been distilled or has finished clearing its claim, and
+## either way its meadow is several tens of kilobytes that nothing reads.
+const SURVEY_KEEP_SECONDS := 45.0
+## Surveys in flight at once. Sowing the visible field is the pool's real job, so
+## the offline economy queues behind it a handful of cells at a time.
+const SURVEY_TASK_LIMIT := 4
+## Seconds between passes of [method _forget_unreachable_ledgers]. Long, because
+## nothing goes wrong from being late.
+const FORGET_INTERVAL := 20.0
+## Ledger pruning is deliberately incremental. A settled field can retain tens of
+## thousands of deterministic harvest keys; walking all of them on one frame caused
+## the separate 200–250 ms hitch visible in long performance captures.
+const FORGET_TARGETS_PER_STEP := 256
+const FORGET_DAMAGE_CELLS_PER_STEP := 2
 
 ## One square of ground and everything growing on it.
 ## One damage volume reduced to what the per-plant loop needs, and put into this
@@ -274,6 +327,18 @@ class Sweep extends RefCounted:
 	var to_world := Transform3D.IDENTITY
 	var into_local := Basis.IDENTITY
 	var centre := Vector3.ZERO
+
+
+## One cell's harvestable plants as [method survey_harvestable] needs them, which
+## is a root and a height per plant and nothing else. A tenth of a [Tile] and no
+## scene cost at all, so a settlement can keep a working knowledge of its own
+## meadow while the meadow is not being drawn.
+class CellSurvey extends RefCounted:
+	var species_index := PackedInt32Array()
+	var instance := PackedInt32Array()
+	## In this node's own space, matching [member Tile.roots].
+	var root := PackedVector3Array()
+	var height := PackedFloat32Array()
 
 
 class Tile extends RefCounted:
@@ -308,9 +373,9 @@ class Tile extends RefCounted:
 	## hands out a copy through the rendering server, and an ability asking a
 	## dozen stands "is anything of yours inside this volume" paid a millisecond
 	## in round trips to find out that almost none of them were. Nothing ever
-	## moves a plant that is already standing — breaking one zeroes its basis and
-	## leaves its origin alone — so this stays true until the tile is re-sown,
-	## which rebuilds it.
+	## moves a plant that is already standing — breaking one micro-scales its
+	## basis and leaves its origin alone — so this stays true until the tile is
+	## re-sown, which rebuilds it.
 	var roots: Array[PackedVector3Array] = []
 	## A handful of well-separated spots on this tile where the glow mask is
 	## strong, in this node's local space, picked while the tile was being sown.
@@ -325,6 +390,10 @@ class Tile extends RefCounted:
 	## Species owning each point, so a mixed reef casts the colour of the coral
 	## actually rooted there rather than one field-wide tint.
 	var glow_species := PackedInt32Array()
+	## Instance owning each glow point. A harvested emissive plant must stop
+	## lending its pooled light to otherwise bare ground; position alone cannot
+	## answer that after its visual transform has been hidden.
+	var glow_instances := PackedInt32Array()
 	## Share of each species' full density this tile was last sown at, in the
 	## same order as [member species]. Read back when deciding how much of the
 	## buffer to show, because a tile sown at an eighth is already thinned and
@@ -338,6 +407,16 @@ class Tile extends RefCounted:
 	var fresh := true
 	var queued := false
 	var grown := false
+	## Which end of the thinning curve the last dressing pass left this tile on,
+	## if it was plainly on one. A tile past every species' draw reach shows
+	## nothing, and one inside every species' near thresholds shows everything at
+	## full detail with shadows and collision; between those two the curve, the
+	## mesh swap and the shape streaming all have to be re-evaluated.
+	##
+	## Standing in a town most of a field's tiles are settled at one end or the
+	## other and stay there, so remembering which end turns their share of a pass
+	## into a single distance compare. See [constant DRESSED_UNKNOWN].
+	var dressed := DRESSED_UNKNOWN
 
 ## The one set of walker positions, shared by every field on the planet: they
 ## are published as global shader parameters, so the second field to do it a
@@ -352,6 +431,7 @@ var _centre := Vector3.UP
 var _east := Vector3.RIGHT
 var _north := Vector3.FORWARD
 var _into_local := Transform3D.IDENTITY
+var _into_host := Transform3D.IDENTITY
 ## Cosines of the angles the clearance and the far side of its fade subtend, so
 ## the test is a dot product rather than an arc cosine per candidate. The fade's
 ## is the smaller of the two: further round the sphere is a smaller dot.
@@ -378,15 +458,48 @@ var _tiles := {}
 ## thousand tiles between them — for every tick it lasts.
 var _tile_list: Array[Tile] = []
 var _tile_list_stale := true
+## Metres one instance of each species can reach from its own root. See
+## [method _instance_reach]; zero means it has not been worked out yet.
+var _instance_reaches := PackedFloat32Array()
+## Every distance a dressing decision turns on, in species order, and the flora
+## range they were resolved at. See [method _settle_dress_bounds].
+var _dress_hide_at := PackedFloat32Array()
+var _dress_full_at := PackedFloat32Array()
+var _dress_shadow_at := PackedFloat32Array()
+var _dress_distant_at := PackedFloat32Array()
+var _dress_collide_at := PackedFloat32Array()
+## The two distances outside which every species on this field agrees.
+var _dress_hide_beyond := 0.0
+var _dress_settled_within := 0.0
+var _dress_bounds_for := -1.0
 ## Session-local state over deterministic placement. Keys are tile cells, then
 ## species indices, then instance indices; the value is the ability damage that
 ## instance is carrying, or [constant BROKEN]. It deliberately survives ordinary
 ## tile retirement so a plant cannot regrow, or un-burn, by walking away and
 ## back.
 var _instance_damage: Dictionary = {}
+## Centimetre-quantized world root to stable tile/species/instance identity. Filled by
+## [method standing_near] and [method survey_harvestable]. The key remains after the tile
+## retires, allowing an offscreen Meep to mark that deterministic instance broken; when
+## the tile returns, [_apply_broken_instances] keeps it absent.
+var _harvest_targets: Dictionary = {}
+## Cell to [CellSurvey], plus the workers filling them. See
+## [method survey_harvestable]. Deliberately not cleared with the tiles: the point
+## of it is to outlive them.
+var _surveys := {}
+var _survey_filling := {}
+var _survey_tasks := {}
+## Cell to the second a town last consulted it, for [constant SURVEY_KEEP_SECONDS].
+var _survey_used := {}
+## Cells the height field rules out, so a settlement on a cliff edge does not
+## re-dispatch the same barren ring every twelve seconds.
+var _survey_barren := {}
 ## Breaks not yet reported, in the flattened form [method broken_keys] uses.
 ## Drained by the world a few times a second; see [method drain_new_breaks].
 var _new_breaks := PackedInt32Array()
+## Plants this field has lost since it loaded, counting each one once. Only read by
+## the performance recorder; see [method breaks_recorded].
+var _breaks_recorded := 0
 ## Tallest plant this field can grow, in metres. Only used to widen the cheap
 ## per-tile rejection in [method apply_damage] so a beam level with a canopy is
 ## not discarded because the tile's centre is on the ground far below it.
@@ -415,10 +528,20 @@ var _dispatch_needed := true
 ## survey rebuilds the order.
 var _dispatch_from := 0
 var _since_survey := INF
+var _since_forget := 0.0
+var _forget_active := false
+var _forget_target_keys: Array = []
+var _forget_target_cursor := 0
+var _forget_damage_cells: Array = []
+var _forget_damage_cursor := 0
 var _surveyed_at := Vector3.INF
 ## Last eye position whose thinning, LOD, shadow and collision rings were
 ## applied. New stands invalidate it so they are dressed on their first frame.
 var _dressed_at := Vector3.INF
+## Where the viewer was last frame and how fast it is moving, smoothed. See
+## [constant DRESS_SPEED_REFERENCE].
+var _eye_at := Vector3.INF
+var _eye_speed := 0.0
 ## Which of [constant DRESS_SLICES] the next dressing pass walks, and the slice
 ## the next new tile is handed. Tiles are dealt round robin as they are created
 ## so that neighbours, which arrive together, do not all land in one pass.
@@ -471,6 +594,7 @@ func _ready() -> void:
 	_east = _centre.cross(Vector3.UP if absf(_centre.y) < 0.9 else Vector3.RIGHT).normalized()
 	_north = _centre.cross(_east)
 	_into_local = global_transform.affine_inverse() * host.global_transform
+	_into_host = _into_local.affine_inverse()
 	_prepare_clearance()
 	# One entry per species and in the same order, nulls included: everything
 	# downstream indexes the two arrays together.
@@ -575,6 +699,15 @@ func _replant() -> void:
 	for task in _pending:
 		WorkerThreadPool.wait_for_task_completion(task)
 	_pending.clear()
+	for task: int in _survey_tasks.values():
+		WorkerThreadPool.wait_for_task_completion(task)
+	_survey_tasks.clear()
+	_survey_filling.clear()
+	# Cell and instance identity are both functions of the tile size, so the
+	# offline roots are as invalid as the standing ones for the reason below.
+	_surveys.clear()
+	_survey_used.clear()
+	_survey_barren.clear()
 	_finished.clear()
 	for tile: Tile in _tiles.values():
 		for stand in tile.stands:
@@ -590,6 +723,12 @@ func _replant() -> void:
 	# identity. Keeping the old overlay would hide unrelated plants in the new
 	# layout; this is the one streaming operation that intentionally resets it.
 	_instance_damage.clear()
+	_forget_active = false
+	_forget_target_keys.clear()
+	_forget_target_cursor = 0
+	_forget_damage_cells.clear()
+	_forget_damage_cursor = 0
+	_since_forget = 0.0
 	_wanted.clear()
 	_dispatch_needed = true
 	_dispatch_from = 0
@@ -598,6 +737,8 @@ func _replant() -> void:
 	_tallest = 0.0
 	_height_margin = 0.0
 	_dressed_at = Vector3.INF
+	_eye_at = Vector3.INF
+	_eye_speed = 0.0
 	_resize_tiles()
 	if global_cover:
 		_grid = SphericalCoverGrid.new(_radius, _tile)
@@ -620,6 +761,10 @@ func _exit_tree() -> void:
 	for task in _pending:
 		WorkerThreadPool.wait_for_task_completion(task)
 	_pending.clear()
+	for task: int in _survey_tasks.values():
+		WorkerThreadPool.wait_for_task_completion(task)
+	_survey_tasks.clear()
+	_survey_filling.clear()
 	if _aerial_glow_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(_aerial_glow_task)
 		_aerial_glow_task = -1
@@ -704,6 +849,512 @@ func standing() -> Array[Transform3D]:
 	return found
 
 
+## Harvestable, currently known plants rooted inside a world-space sphere.
+##
+## Unlike [method standing], this is gameplay-facing and therefore remembers each
+## result's stable deterministic identity. A localized field can be surveyed while the
+## colony ship is being watched, retire its tiles later, and still accept the exact
+## harvest offscreen into the persistent damage ledger.
+func standing_near(centre: Vector3, radius: float) -> PackedVector4Array:
+	var found := PackedVector4Array()
+	if harvest_yield <= 0.0 or radius <= 0.0 or not centre.is_finite():
+		return found
+	var reach := radius * radius
+	var host := planet_host()
+	var sources := _road_clearance_sources()
+	for tile: Tile in _tiles.values():
+		_harvest_from_tile(tile, centre, reach, found, sources, host)
+	return found
+
+
+## One streamed tile's harvestable plants, appended to [param found] and recorded
+## in the identity map. Shared by [method standing_near] and
+## [method survey_harvestable] so a plant has one description whichever asked.
+##
+## [param sources] is the planet's whole road set and [param host] its planet, both
+## resolved by the caller. Finding them per tile meant a group query and two
+## ancestor walks for every square of a claim, and narrowing them per plant meant a
+## call across two scripts for every blade of grass in a town.
+func _harvest_from_tile(tile: Tile, centre: Vector3, reach: float,
+		found: PackedVector4Array, sources: Array[Node], host: Planet) -> void:
+	var road_sources := _road_sources_near(tile.at, _tile * 0.71, sources)
+	var paved := host != null and not road_sources.is_empty()
+	for species_index in tile.stands.size():
+		var plant := species[species_index] as PlantSpecies
+		var stand := tile.stands[species_index] as MultiMeshInstance3D
+		if plant == null or stand == null or species_index >= tile.roots.size():
+			continue
+		var roots: PackedVector3Array = tile.roots[species_index]
+		var buffer := _rows_of(tile, species_index, stand.multimesh)
+		var count := mini(roots.size(), stand.multimesh.instance_count)
+		var cleared := PackedByteArray()
+		if paved and plant.takes_ability_damage():
+			var directions := PackedVector3Array()
+			directions.resize(count)
+			for instance_index in count:
+				directions[instance_index] = (
+					_into_host * roots[instance_index]).normalized()
+			cleared = _road_cleared_mask(directions, road_sources, host)
+		for instance_index in count:
+			if not cleared.is_empty() and cleared[instance_index] != 0:
+				continue
+			if _is_broken(tile.cell, species_index, instance_index):
+				continue
+			var root := to_global(roots[instance_index])
+			if root.distance_squared_to(centre) > reach:
+				continue
+			var visual_height := _instance_height(
+				buffer, instance_index, plant)
+			found.push_back(Vector4(root.x, root.y, root.z, visual_height))
+			_harvest_targets[_harvest_key(root)] = PackedInt32Array([
+				tile.cell.x, tile.cell.y, tile.cell.z,
+				species_index, instance_index])
+
+
+## Per species, how many instances of a streamed tile [method _harvest_from_tile]
+## just offered. The survey covering the same cell is the full-density sow of it,
+## so these are exactly the instances it must not offer a second time.
+func _tile_reported_counts(tile: Tile) -> PackedInt32Array:
+	var counts := PackedInt32Array()
+	if tile == null:
+		return counts
+	counts.resize(tile.stands.size())
+	for species_index in tile.stands.size():
+		var stand := tile.stands[species_index] as MultiMeshInstance3D
+		if stand == null or stand.multimesh == null \
+				or species_index >= tile.roots.size():
+			continue
+		counts[species_index] = mini(
+			(tile.roots[species_index] as PackedVector3Array).size(),
+			stand.multimesh.instance_count)
+	return counts
+
+
+func harvest_value(visual_height: float) -> float:
+	return maxf(harvest_yield, 0.0) * maxf(visual_height, 0.0)
+
+
+func impact_biomass_value(visual_height: float) -> float:
+	var per_metre := harvest_yield if harvest_yield > 0.0 \
+		else impact_biomass_yield
+	return maxf(per_metre, 0.0) * maxf(visual_height, 0.0)
+
+
+## Removes the exact instance previously returned by [method standing_near].
+##
+## The stable key is sufficient even after streaming retired its tile. In that case the
+## ledger is changed now and deterministic resowing hides the instance before it can
+## reappear; a loaded tile is also patched immediately so the flower visibly vanishes
+## on the same frame the Meep finishes.
+func harvest_at(root: Vector3, radius: float, strength: float) -> bool:
+	if harvest_yield <= 0.0 or radius <= 0.0 or not root.is_finite():
+		return false
+	var token := _harvest_token(root, radius)
+	if token.size() < 5:
+		return false
+	var cell := Vector3i(token[0], token[1], token[2])
+	var species_index := token[3]
+	var instance_index := token[4]
+	if species_index < 0 or species_index >= species.size() \
+			or instance_index < 0 \
+			or _is_broken(cell, species_index, instance_index):
+		return false
+	var plant := species[species_index] as PlantSpecies
+	if plant == null:
+		return false
+	if plant.takes_ability_damage() \
+			and _road_clears_world(root, _road_clearance_sources()):
+		return false
+	var visual_height := plant.height
+	var effect_at := root
+	var up := Vector3.UP
+	var tint := glow_light_color if not glow_light_use_region_color \
+		else Color(0.34, 0.52, 0.18, 1.0)
+	var tile := _tiles.get(cell) as Tile
+	if tile != null and species_index < tile.stands.size():
+		var stand := tile.stands[species_index] as MultiMeshInstance3D
+		if stand != null and instance_index < stand.multimesh.instance_count:
+			var buffer := _rows_of(tile, species_index, stand.multimesh)
+			var stood := stand.global_transform \
+				* _instance_transform(buffer, instance_index)
+			visual_height = _instance_height(buffer, instance_index, plant)
+			effect_at = stood.origin
+			up = stood.basis.y.normalized()
+			tint = _break_tint(plant, buffer, instance_index)
+			_hide_instance(buffer, instance_index)
+			tile.rows[species_index] = buffer
+			stand.multimesh.buffer = buffer
+			_disable_collider(tile, species_index, instance_index)
+	if up == Vector3.UP:
+		var host := planet_host()
+		if host != null:
+			up = (effect_at - host.global_position).normalized()
+	_mark_broken(cell, species_index, instance_index)
+	_harvest_targets.erase(_harvest_key(root))
+	_play_break_effect(effect_at, up, maxf(strength, 0.0), visual_height,
+		tint, plant.break_effect)
+	return true
+
+
+## Harvestable plants inside a world-space sphere, streamed or not.
+##
+## [method standing_near] can only see tiles the viewer is standing next to, which
+## quietly made a settlement's economy a function of where the camera was: walk
+## away, its tiles retire, its timber list empties, mining stops paying and
+## cloning can never afford anything. Placement is deterministic, so the plants
+## are knowable from the seed alone.
+##
+## This resows the covered cells in memory at full density — no buffer upload, no
+## MultiMesh, no node, no collider — on the same worker pool the visible tiles are
+## grown on. The answer is the union of every streamed tile and every surveyed
+## cell, which is what makes it strictly better than [method standing_near] rather
+## than merely different: a town founded under the player's feet reads its meadow
+## on the frame it is founded, exactly as it always did, and the surveys landing
+## over the next few seconds only widen that. The two agree on identity because a
+## streamed tile at any detail band is a prefix of the full-density sow — see
+## [method _scatter] — so instance N means the same plant either way.
+##
+## The damage ledger is consulted on the way out rather than baked in, so a plant
+## felled since the survey was taken does not come back.
+func survey_harvestable(centre: Vector3, radius: float) -> PackedVector4Array:
+	return survey_harvestable_slice(
+		centre, radius, 0, 0)["found"] as PackedVector4Array
+
+
+## One time-bounded slice of [method survey_harvestable].
+##
+## A claim covers a few hundred squares and a grown one holds tens of thousands of
+## plants, so reading all of it took thirty-nine milliseconds inside a single settler
+## tick — the worst frame a settled town produced, once a minute per town, whether or
+## not anyone was near it.
+##
+## [param from] is where in the sphere's cover to resume, and the returned `next` is
+## where to resume after this call, or -1 when the sphere is finished. The cover is a
+## pure function of the sphere, so the same arguments walk the same squares in the same
+## order across however many calls it takes. A [param budget_usec] of zero means read
+## it all now, which is what [method survey_harvestable] asks for.
+##
+## Callers accumulate `found` across the slices themselves. Publishing a half-read
+## list is the one thing a resumable survey must not make easy: the town addresses
+## its timber by slot number.
+func survey_harvestable_slice(centre: Vector3, radius: float, from: int,
+		budget_usec: int) -> Dictionary:
+	var found := PackedVector4Array()
+	if harvest_yield <= 0.0 or radius <= 0.0 or not centre.is_finite() \
+			or _shape == null or species.is_empty():
+		return {"found": found, "next": -1}
+	_collect_surveys()
+	var cells := _cells_covering(centre, radius)
+	var reach := radius * radius
+	var now := Time.get_ticks_msec()
+	var host := planet_host()
+	var sources := _road_clearance_sources()
+	var began := Time.get_ticks_usec() if budget_usec > 0 else 0
+	var at := maxi(from, 0)
+	while at < cells.size():
+		_harvest_from_cell(cells[at], centre, reach, now, found, sources, host)
+		at += 1
+		if began > 0 and at < cells.size() \
+				and Time.get_ticks_usec() - began >= budget_usec:
+			return {"found": found, "next": at}
+	return {"found": found, "next": -1}
+
+
+## Everything harvestable in one square, from its streamed tile if it has one and
+## from the in-memory survey of the same square for the rest.
+func _harvest_from_cell(cell: Vector3i, centre: Vector3, reach: float,
+		now: int, found: PackedVector4Array, sources: Array[Node],
+		host: Planet) -> void:
+	var tile := _tiles.get(cell) as Tile
+	if tile != null:
+		_harvest_from_tile(tile, centre, reach, found, sources, host)
+	var survey := _surveys.get(cell) as CellSurvey
+	if survey == null:
+		_request_survey(cell)
+		return
+	_survey_used[cell] = now
+	var already := _tile_reported_counts(tile)
+	# Narrowed to the roads that reach this square, once, rather than asking
+	# every road on the planet about the whole claim.
+	var road_sources := _road_sources_near(
+		tile.at if tile != null else _ground_point(cell),
+		_tile * 0.71, sources)
+	var paved := host != null and not road_sources.is_empty()
+	# Asked once for the whole square. Only the plants this pass would otherwise
+	# report are worth asking about, so the ones the tile has already offered and
+	# the species no road can clear are left out of the question.
+	var cleared := PackedByteArray()
+	if paved:
+		var directions := PackedVector3Array()
+		directions.resize(survey.root.size())
+		for slot in survey.root.size():
+			var of_species := survey.species_index[slot]
+			if of_species < already.size() \
+					and survey.instance[slot] < already[of_species]:
+				continue
+			var clearable := species[of_species] as PlantSpecies
+			if clearable == null or not clearable.takes_ability_damage():
+				continue
+			directions[slot] = (_into_host * survey.root[slot]).normalized()
+		cleared = _road_cleared_mask(directions, road_sources, host)
+	for slot in survey.root.size():
+		var species_index := survey.species_index[slot]
+		var instance_index := survey.instance[slot]
+		if _is_broken(cell, species_index, instance_index):
+			continue
+		# Whatever the tile already offered. Its buffer is the prefix of this
+		# survey, so a plant it grew has been reported once already, with the
+		# height it is actually standing at.
+		if species_index < already.size() \
+				and instance_index < already[species_index]:
+			continue
+		if not cleared.is_empty() and cleared[slot] != 0:
+			continue
+		var root := to_global(survey.root[slot])
+		if root.distance_squared_to(centre) > reach:
+			continue
+		found.push_back(
+			Vector4(root.x, root.y, root.z, survey.height[slot]))
+		_harvest_targets[_harvest_key(root)] = PackedInt32Array([
+			cell.x, cell.y, cell.z, species_index, instance_index])
+
+
+## Moves finished surveys onto the main thread's side of the fence.
+##
+## The worker owns its [CellSurvey] outright until its task completes, so there is
+## nothing to lock: this only reparents the finished ones into the cache.
+func _collect_surveys() -> void:
+	if _survey_tasks.is_empty():
+		return
+	for cell: Vector3i in _survey_tasks.keys():
+		var task := int(_survey_tasks[cell])
+		if not WorkerThreadPool.is_task_completed(task):
+			continue
+		WorkerThreadPool.wait_for_task_completion(task)
+		_survey_tasks.erase(cell)
+		var survey := _survey_filling.get(cell) as CellSurvey
+		_survey_filling.erase(cell)
+		if survey == null:
+			continue
+		if _surveys.size() >= SURVEY_CELL_LIMIT:
+			_forget_stale_surveys(0.0)
+		_surveys[cell] = survey
+		_survey_used[cell] = Time.get_ticks_msec()
+
+
+## Trims one bounded slice of the two ledgers that deliberately outlive their tiles.
+##
+## Both exist because a plant must stay felled and an offscreen Meep must still be
+## able to name the plant it is cutting, so neither can be cleared with the tiles.
+## Neither had an upper bound either, and a long session spent walking the planet
+## grows both without limit — which costs memory, and costs
+## [method _harvest_token] a linear scan of every plant ever surveyed each time a
+## Meep finishes a chop.
+##
+## The bound is reach rather than distance: an entry matters while its cell is
+## either streamed or surveyed, and both of those sets are already capped. Breaks
+## are the one thing worth keeping past that, since forgetting one regrows a plant
+## somebody cut down; scorching is cosmetic and goes with the rest.
+func _forget_unreachable_ledgers() -> void:
+	if not _forget_active:
+		_forget_stale_surveys(SURVEY_KEEP_SECONDS)
+		_forget_target_keys = _harvest_targets.keys()
+		_forget_target_cursor = 0
+		_forget_damage_cells = _instance_damage.keys()
+		_forget_damage_cursor = 0
+		_forget_active = true
+
+	var target_end := mini(
+		_forget_target_cursor + FORGET_TARGETS_PER_STEP,
+		_forget_target_keys.size())
+	while _forget_target_cursor < target_end:
+		var key_value: Variant = _forget_target_keys[_forget_target_cursor]
+		_forget_target_cursor += 1
+		if not key_value is Vector3i:
+			continue
+		var key := key_value as Vector3i
+		var target := _harvest_targets.get(
+			key, PackedInt32Array()) as PackedInt32Array
+		if target.size() < 3:
+			continue
+		var cell := Vector3i(target[0], target[1], target[2])
+		if not _tiles.has(cell) and not _surveys.has(cell):
+			_harvest_targets.erase(key)
+
+	var damage_end := mini(
+		_forget_damage_cursor + FORGET_DAMAGE_CELLS_PER_STEP,
+		_forget_damage_cells.size())
+	while _forget_damage_cursor < damage_end:
+		var cell_value: Variant = _forget_damage_cells[_forget_damage_cursor]
+		_forget_damage_cursor += 1
+		if not cell_value is Vector3i:
+			continue
+		var cell := cell_value as Vector3i
+		if _tiles.has(cell) or _surveys.has(cell):
+			continue
+		var per_species := _instance_damage.get(cell, {}) as Dictionary
+		for species_key: Variant in per_species.keys():
+			var indices := per_species.get(species_key, {}) as Dictionary
+			for instance_key: Variant in indices.keys():
+				if float(indices[instance_key]) != BROKEN:
+					indices.erase(instance_key)
+			if indices.is_empty():
+				per_species.erase(species_key)
+		if per_species.is_empty():
+			_instance_damage.erase(cell)
+
+	if _forget_target_cursor < _forget_target_keys.size() \
+			or _forget_damage_cursor < _forget_damage_cells.size():
+		return
+	_forget_active = false
+	_forget_target_keys.clear()
+	_forget_target_cursor = 0
+	_forget_damage_cells.clear()
+	_forget_damage_cursor = 0
+	_since_forget = 0.0
+
+
+## Drops surveyed meadows no town has asked about for [param keep] seconds. A cell
+## costs tens of kilobytes and is re-derivable from the seed, so holding one for a
+## town that has been distilled — or has finished clearing its claim — is pure
+## overhead. Called with zero to make room when the hard ceiling is reached.
+func _forget_stale_surveys(keep: float) -> void:
+	var now := Time.get_ticks_msec()
+	for cell: Vector3i in _surveys.keys():
+		var used := float(_survey_used.get(cell, 0)) * 0.001
+		if float(now) * 0.001 - used < keep:
+			continue
+		_surveys.erase(cell)
+		_survey_used.erase(cell)
+
+
+func _request_survey(cell: Vector3i) -> void:
+	if _survey_tasks.has(cell) or _survey_barren.has(cell):
+		return
+	if _survey_tasks.size() >= SURVEY_TASK_LIMIT:
+		return
+	if not _cell_may_grow(cell):
+		_survey_barren[cell] = true
+		return
+	var survey := CellSurvey.new()
+	_survey_filling[cell] = survey
+	_survey_tasks[cell] = WorkerThreadPool.add_task(
+		_survey_cell.bind(cell, survey), true,
+		"GroundCover harvest survey")
+
+
+## Grows one cell's harvestable plants without building anything.
+##
+## Runs on a worker. [method _scatter] is reused rather than reimplemented
+## precisely because the answer has to agree with what the visible tile grows:
+## the candidate sequence, the patch mask, the clearance and the height
+## variation are all part of which plant is instance N, and a second copy of
+## that arithmetic would drift from this one at the first tuning change. It
+## writes only into [param survey] and reads only what sowing already reads off
+## this node from a worker.
+func _survey_cell(cell: Vector3i, survey: CellSurvey) -> void:
+	var points := PackedVector3Array()
+	var levels := PackedFloat32Array()
+	var owners := PackedInt32Array()
+	var instances := PackedInt32Array()
+	for species_index in species.size():
+		var plant := species[species_index] as PlantSpecies
+		if plant == null or plant.height <= 0.0:
+			continue
+		var buffer := _scatter(species_index, plant, _patches[species_index],
+			_glows[species_index], cell, 1.0, points, levels, owners,
+			instances)
+		var grown := buffer.size() / STRIDE
+		for instance_index in grown:
+			var at := instance_index * STRIDE
+			survey.species_index.append(species_index)
+			survey.instance.append(instance_index)
+			survey.root.append(
+				Vector3(buffer[at + 3], buffer[at + 7], buffer[at + 11]))
+			survey.height.append(
+				_instance_height(buffer, instance_index, plant))
+
+
+## The last broad cover named, kept because a resumable survey repeats the identical
+## question on every slice: a claim-sized sphere is a couple of thousand projections and
+## was most of what one slice of the woods cost. The stamp carries the field's own shape
+## as well as the sphere, so a settings change that resizes the squares cannot be
+## answered from a cover built for the old ones. The planet does not move, which is what
+## lets a world-space centre be a key at all.
+var _cover_cells: Array[Vector3i] = []
+var _cover_stamp := PackedFloat32Array()
+## Half-width, in squares, above which a cover is worth remembering. A damage volume is
+## a couple of metres across and would only evict the survey that needs the memory.
+const COVER_MEMO_SPAN := 6
+
+
+## Tile cells a world-space sphere touches, by walking the sphere's own tangent
+## square. The same construction [method _survey_global] uses, centred on the
+## caller rather than on the viewer.
+func _cells_covering(centre: Vector3, radius: float) -> Array[Vector3i]:
+	var cells: Array[Vector3i] = []
+	var host := planet_host()
+	if host == null or _tile <= 0.0:
+		return cells
+	var span := int(ceil(radius / _tile)) + 1
+	var worth_keeping := span > COVER_MEMO_SPAN
+	var stamp := PackedFloat32Array()
+	if worth_keeping:
+		stamp = PackedFloat32Array([centre.x, centre.y, centre.z, radius,
+			_tile, _radius, spread])
+		if stamp == _cover_stamp:
+			return _cover_cells
+	var up := host.to_local(centre).normalized()
+	var east := up.cross(
+		Vector3.UP if absf(up.y) < 0.9 else Vector3.RIGHT).normalized()
+	var north := up.cross(east)
+	var edge := spread / _tile
+	var seen := {}
+	for x in range(-span, span + 1):
+		for y in range(-span, span + 1):
+			var offset := Vector2(float(x), float(y)) * _tile
+			if offset.length() > radius + _tile:
+				continue
+			var at := (up
+				+ (east * offset.x + north * offset.y) / _radius).normalized()
+			var cell := _cell_for(at)
+			if seen.has(cell):
+				continue
+			seen[cell] = true
+			if not global_cover and Vector2(float(cell.y) + 0.5,
+					float(cell.z) + 0.5).length() > edge:
+				continue
+			cells.append(cell)
+	if worth_keeping:
+		_cover_stamp = stamp
+		_cover_cells = cells
+	return cells
+
+
+func _harvest_key(root: Vector3) -> Vector3i:
+	return Vector3i(
+		roundi(root.x * 100.0),
+		roundi(root.y * 100.0),
+		roundi(root.z * 100.0))
+
+
+func _harvest_token(root: Vector3, radius: float) -> PackedInt32Array:
+	var key := _harvest_key(root)
+	var exact: Variant = _harvest_targets.get(key, null)
+	if exact is PackedInt32Array:
+		return exact as PackedInt32Array
+	var best := PackedInt32Array()
+	var best_distance := roundi(radius * 100.0)
+	best_distance *= best_distance
+	for candidate_variant: Variant in _harvest_targets:
+		var candidate := candidate_variant as Vector3i
+		var distance := (candidate - key).length_squared()
+		if distance <= best_distance:
+			best_distance = distance
+			best = _harvest_targets[candidate] as PackedInt32Array
+	return best
+
+
 ## The same diagnostic view as [method standing], grouped by species. Keeping
 ## identity here lets biome harnesses prove that a loaded object is outside a
 ## forbidden climate rather than mistaking a visible object beyond the biome
@@ -735,13 +1386,49 @@ static var phase_cost := {}
 
 
 ## Charges the time since [param from] to a phase and returns the new mark.
+##
+## Also a recorder row, because the shared total answers "what do the planet's
+## fields cost" and only a row answers "which of these phases was the twenty
+## milliseconds". The rows sit inside the whole-callback row for the field, which
+## the recorder accounts for separately.
 static func _charge(phase: StringName, from: int) -> int:
 	var now := Time.get_ticks_usec()
 	phase_cost[phase] = int(phase_cost.get(phase, 0)) + (now - from)
+	RuntimeTelemetry.record_activity(&"flora_phase", phase, now - from)
 	return now
 
 
+## Compact streaming state for the performance flight recorder.
+##
+## Counts only ledgers already maintained by the field. Iterating every standing
+## plant here would make the observer one of the causes it is trying to identify.
+func statistics() -> Dictionary:
+	return {
+		"tiles": _tiles.size(),
+		"pending_tiles": _pending.size(),
+		"finished_tiles": _finished.size(),
+		"wanted_tiles": _wanted.size(),
+		"survey_cells": _surveys.size(),
+		"survey_tasks": _survey_tasks.size(),
+		"damage_cells": _instance_damage.size(),
+		"harvest_targets": _harvest_targets.size(),
+		"prune_backlog": maxi(
+			_forget_target_keys.size() - _forget_target_cursor, 0),
+		"glow_lights": _glow_lights.size(),
+	}
+
+
 func _process(delta: float) -> void:
+	if not RuntimeTelemetry.deep_enabled():
+		_stream(delta)
+		return
+	var began := Time.get_ticks_usec()
+	_stream(delta)
+	RuntimeTelemetry.record_process_step(
+		&"flora", &"field_process", Time.get_ticks_usec() - began)
+
+
+func _stream(delta: float) -> void:
 	_finish_aerial_glow()
 	if _replant_in >= 0.0:
 		_replant_in -= delta
@@ -755,6 +1442,7 @@ func _process(delta: float) -> void:
 
 	_since_survey += delta
 	_since_lights += delta
+	_since_forget += delta
 	# Both throttled and movement-driven. The previous OR surveyed every field on
 	# its timer while the viewer stood still, even though the answer cannot
 	# change; four independent cover fields then produced a steady cadence of
@@ -762,18 +1450,29 @@ func _process(delta: float) -> void:
 	# next ring before a walking viewer reaches it.
 	var moved_to_new_ground := _surveyed_at.distance_squared_to(eye) \
 		> _tile * _tile * 0.1
-	var clock := Time.get_ticks_usec()
-	if _since_survey > survey_interval and moved_to_new_ground:
-		_since_survey = 0.0
-		_surveyed_at = eye
-		_survey(eye)
-	clock = _charge(&"survey", clock)
-	_dispatch()
-	clock = _charge(&"dispatch", clock)
-	_apply()
-	clock = _charge(&"apply", clock)
-	_dress(eye)
-	_charge(&"dress", clock)
+	_track_viewer_speed(eye, delta)
+	# The planet's flora budget, not this field's. Nothing here is lost by waiting a
+	# frame: the survey timer keeps running, the wanted set keeps standing and the
+	# grown tiles keep their last dressing, so a field whose turn has not come does
+	# exactly the same work when it does come round. See [FloraBudget].
+	if FloraBudget.claim(get_instance_id(), _viewer_reach(eye)):
+		var started := Time.get_ticks_usec()
+		var clock := started
+		if _forget_active or _since_forget > FORGET_INTERVAL:
+			_forget_unreachable_ledgers()
+		clock = _charge(&"prune", clock)
+		if _since_survey > survey_interval and moved_to_new_ground:
+			_since_survey = 0.0
+			_surveyed_at = eye
+			_survey(eye)
+		clock = _charge(&"survey", clock)
+		_dispatch()
+		clock = _charge(&"dispatch", clock)
+		_apply()
+		clock = _charge(&"apply", clock)
+		_dress(eye)
+		_charge(&"dress", clock)
+		FloraBudget.spend(get_instance_id(), Time.get_ticks_usec() - started)
 	if _since_lights > 0.7:
 		_since_lights = 0.0
 		_place_glow_lights(eye)
@@ -892,12 +1591,13 @@ func _build_aerial_glow_image() -> void:
 				var glow_points := PackedVector3Array()
 				var glow_levels := PackedFloat32Array()
 				var glow_species := PackedInt32Array()
+				var glow_instances := PackedInt32Array()
 				# At full density regardless of what the streamed tiles are
 				# sown at: this mask is the field as it would be if the viewer
 				# stood everywhere at once, and it is built once.
 				var buffer := _scatter(species_index, plant,
 					_patches[species_index], _glows[species_index], cell, 1.0,
-					glow_points, glow_levels, glow_species)
+					glow_points, glow_levels, glow_species, glow_instances)
 				var instances := buffer.size() / STRIDE
 				for instance in instances:
 					var base := instance * STRIDE
@@ -1197,6 +1897,218 @@ func _apply() -> void:
 		applied += 1
 
 
+## Removes already-streamed instances now covered by a completed Meep road, starting
+## at tile [param from] and stopping once [param budget_usec] is spent. A budget of
+## zero walks every tile.
+##
+## This is derived presentation state, not damage: no biomass is awarded, no break key
+## is replicated, and distant grass follows the same rule as a harvestable flower.
+## Deliberately unbreakable landmark species retain their authored protection. The road
+## network calls this after construction or snapshot application; [_raise] applies the
+## same query before future tiles become visible.
+##
+## Resumable because a city returning from its ledger restores its streets, then their
+## widths, then their surfaces, and the paving that appears is the whole town at once.
+## Hiding every plant standing under it took 130 ms in a single field, held on the main
+## thread inside a deferred call. The work is per-tile and order-free, so the caller
+## walks a slice per frame instead.
+##
+## Returns how many plants were hidden and the tile to resume at, which is -1 once
+## the whole field has been covered.
+func refresh_road_clearance_slice(source: Node, from: int,
+		budget_usec: int) -> Dictionary:
+	var tiles := _all_tiles()
+	var start := clampi(from, 0, tiles.size())
+	var sources := _road_clearance_sources(source)
+	if sources.is_empty() or start >= tiles.size():
+		return {"hidden": 0, "next": -1}
+	var began := Time.get_ticks_usec()
+	var host := planet_host()
+	# A road reporting a finished segment says which patch of planet it just paved.
+	# Rejecting a tile, and then a plant, against that patch is a dot product;
+	# asking the road itself is a call across two scripts, and there are tens of
+	# thousands of plants standing in a grown town.
+	var scope: Dictionary = {}
+	if source != null and source.has_method(&"flora_clearance_scope"):
+		scope = source.call(&"flora_clearance_scope") as Dictionary
+	var focus: Vector3 = scope.get("centre", Vector3.ZERO)
+	var root_cos := float(scope.get("cos_reach", -1.0))
+	var planet_radius := float(scope.get("radius", 0.0))
+	var scoped := host != null and planet_radius > 1.0 \
+		and focus.length_squared() > 0.5
+	var tile_cos := -1.0
+	if scoped:
+		tile_cos = cos(minf(acos(clampf(root_cos, -1.0, 1.0))
+			+ _tile * 0.71 / planet_radius, PI))
+	var hidden := 0
+	var next := -1
+	for slot in range(start, tiles.size()):
+		# Checked per tile rather than per plant: a tile is the unit of work, and a
+		# town's paving reaches most of them without hiding anything at all.
+		if budget_usec > 0 and slot > start \
+				and Time.get_ticks_usec() - began >= budget_usec:
+			next = slot
+			break
+		var tile := tiles[slot]
+		if scoped and host.to_local(tile.at).normalized().dot(focus) < tile_cos:
+			continue
+		var nearby := _road_sources_near(tile.at, _tile * 0.71, sources)
+		if nearby.is_empty():
+			continue
+		for species_index in tile.stands.size():
+			var stand := tile.stands[species_index] as MultiMeshInstance3D
+			var plant := species[species_index] as PlantSpecies
+			if stand == null or plant == null or not plant.takes_ability_damage() \
+					or species_index >= tile.roots.size():
+				continue
+			var roots: PackedVector3Array = tile.roots[species_index]
+			var buffer := _rows_of(tile, species_index, stand.multimesh)
+			var count := mini(roots.size(), stand.multimesh.instance_count)
+			var directions := PackedVector3Array()
+			directions.resize(count)
+			for instance_index in count:
+				if _instance_hidden(buffer, instance_index):
+					continue
+				var direction := (_into_host * roots[instance_index]).normalized()
+				if scoped and direction.dot(focus) < root_cos:
+					continue
+				directions[instance_index] = direction
+			var cleared := _road_cleared_mask(directions, nearby, host)
+			var changed := false
+			for instance_index in count:
+				if cleared[instance_index] == 0:
+					continue
+				_hide_instance(buffer, instance_index)
+				_disable_collider(tile, species_index, instance_index)
+				hidden += 1
+				changed = true
+			if changed:
+				tile.rows[species_index] = buffer
+				stand.multimesh.buffer = buffer
+	RuntimeTelemetry.record_activity(&"flora", &"road_clearance",
+		Time.get_ticks_usec() - began, float(hidden))
+	return {"hidden": hidden, "next": next}
+
+
+func _road_clearance_sources(only: Node = null) -> Array[Node]:
+	var found: Array[Node] = []
+	if not is_inside_tree():
+		return found
+	if only != null:
+		if is_instance_valid(only) and only.is_inside_tree() \
+				and only.has_method(&"clears_flora_direction") \
+				and DamageHit.in_same_world(self, only):
+			found.push_back(only)
+		return found
+	for source_variant: Variant in get_tree().get_nodes_in_group(
+			ROAD_CLEARANCE_GROUP):
+		var source := source_variant as Node
+		if source != null and source.has_method(&"clears_flora_direction") \
+				and DamageHit.in_same_world(self, source):
+			found.push_back(source)
+	return found
+
+
+func _road_sources_near(world_point: Vector3, extra_radius: float,
+		sources: Array[Node]) -> Array[Node]:
+	var nearby: Array[Node] = []
+	var host := planet_host()
+	if host == null:
+		return nearby
+	for source in sources:
+		if not source.has_method(&"flora_clearance_reaches") \
+				or bool(source.call(&"flora_clearance_reaches",
+					world_point, extra_radius, host)):
+			nearby.push_back(source)
+	return nearby
+
+
+func _road_clears_root(root: Vector3, sources: Array[Node]) -> bool:
+	var host := planet_host()
+	if host == null or sources.is_empty():
+		return false
+	return _road_clears_direction(
+		(_into_host * root).normalized(), sources, host)
+
+
+func _road_clears_direction(direction: Vector3, sources: Array[Node],
+		host: Planet) -> bool:
+	for source in sources:
+		if bool(source.call(&"clears_flora_direction", direction, host)):
+			return true
+	return false
+
+
+func _road_clears_world(root: Vector3, sources: Array[Node]) -> bool:
+	var host := planet_host()
+	if host == null or sources.is_empty():
+		return false
+	var relative := host.to_local(root)
+	if relative.length_squared() < 0.5:
+		return false
+	var direction := relative.normalized()
+	for source in sources:
+		if bool(source.call(&"clears_flora_direction", direction, host)):
+			return true
+	return false
+
+
+## One byte per entry of [param directions], set where a finished road covers it.
+##
+## A whole tile's worth of plants asked about in one call per road. See
+## [method MeepRoads.clear_flora_directions]. A zero direction is never covered, which
+## is how a caller excludes a plant it has already decided about. Anything in the road
+## group without the batched form is still asked a plant at a time.
+func _road_cleared_mask(directions: PackedVector3Array, sources: Array[Node],
+		host: Planet) -> PackedByteArray:
+	var mask := PackedByteArray()
+	if host == null or sources.is_empty() or directions.is_empty():
+		return mask
+	mask.resize(directions.size())
+	for source in sources:
+		if source.has_method(&"clear_flora_directions"):
+			mask = source.call(
+				&"clear_flora_directions", directions, mask, host)
+			continue
+		for slot in directions.size():
+			if mask[slot] != 0 or directions[slot].length_squared() < 0.5:
+				continue
+			if bool(source.call(
+					&"clears_flora_direction", directions[slot], host)):
+				mask[slot] = 1
+	return mask
+
+
+## [param host] is the field's planet, resolved by the caller: this runs once for
+## every plant of a newly streamed tile, and walking up to the planet again for each
+## of them was most of what raising a tile in a paved town cost.
+func _apply_road_clearance(buffer: PackedFloat32Array, plant: PlantSpecies,
+		sources: Array[Node], host: Planet) -> PackedFloat32Array:
+	if plant == null or not plant.takes_ability_damage() or sources.is_empty() \
+			or host == null:
+		return buffer
+	var count := buffer.size() / STRIDE
+	if count <= 0:
+		return buffer
+	var directions := PackedVector3Array()
+	directions.resize(count)
+	var asked := 0
+	for instance_index in count:
+		if _instance_hidden(buffer, instance_index):
+			continue
+		var row := instance_index * STRIDE
+		directions[instance_index] = (_into_host * Vector3(
+			buffer[row + 3], buffer[row + 7], buffer[row + 11])).normalized()
+		asked += 1
+	if asked == 0:
+		return buffer
+	var cleared := _road_cleared_mask(directions, sources, host)
+	for instance_index in count:
+		if cleared[instance_index] != 0:
+			_hide_instance(buffer, instance_index)
+	return buffer
+
+
 ## Turns a grown tile's buffers into the nodes that draw them.
 func _raise(tile: Tile) -> void:
 	# A tile is raised again every time approaching it earns a finer sow, and
@@ -1217,8 +2129,15 @@ func _raise(tile: Tile) -> void:
 	tile.rows.resize(species.size())
 	# Whatever pass this tile belongs to, it cannot wait for it: until it is
 	# dressed it is drawing every plant it holds and has no shadow or collision
-	# decision made about it.
+	# decision made about it. A re-sown tile is in that state again however
+	# settled the last pass found it, so the shortcut has to be given up with it.
 	tile.fresh = true
+	tile.dressed = DRESSED_UNKNOWN
+	var clock := Time.get_ticks_usec()
+	var host := planet_host()
+	var road_sources := _road_sources_near(
+		tile.at, _tile * 0.71, _road_clearance_sources())
+	clock = _charge(&"raise_sources", clock)
 	for index in species.size():
 		var plant := species[index] as PlantSpecies
 		var buffer := tile.buffers[index] as PackedFloat32Array
@@ -1232,16 +2151,46 @@ func _raise(tile: Tile) -> void:
 				tile.stands[index] = null
 			continue
 		var count := buffer.size() / STRIDE
-		var multimesh := MultiMesh.new()
-		multimesh.transform_format = MultiMesh.TRANSFORM_3D
-		multimesh.use_colors = true
-		multimesh.use_custom_data = true
-		multimesh.instance_count = count
+		buffer = _apply_road_clearance(buffer, plant, road_sources, host)
+		clock = _charge(&"raise_clearance", clock)
 		buffer = _apply_broken_instances(tile.cell, index, buffer)
-		multimesh.buffer = buffer
+		clock = _charge(&"raise_broken", clock)
 		tile.rows[index] = buffer
-		tile.roots[index] = _roots_of(buffer, count)
-		multimesh.mesh = plant.near_mesh()
+		var roots := _roots_of(buffer, count)
+		tile.roots[index] = roots
+		clock = _charge(&"raise_roots", clock)
+		var near := plant.near_mesh()
+		# Reused where the tile already had one, for the same reason the node below
+		# is: a re-sow at a finer band is as common as walking towards a tile, and a
+		# fresh MultiMesh is a fresh allocation on the rendering server.
+		var multimesh := stand.multimesh if stand != null else null
+		if multimesh == null:
+			multimesh = MultiMesh.new()
+			multimesh.transform_format = MultiMesh.TRANSFORM_3D
+			multimesh.use_colors = true
+			multimesh.use_custom_data = true
+		if multimesh.mesh != near:
+			# Emptied before the swap. Handing a different mesh to a MultiMesh that
+			# still holds instances makes the rendering server read the whole instance
+			# buffer back off the GPU to derive new bounds, and that pipeline stall
+			# measured two and a half milliseconds for one tile of grass — the single
+			# most expensive thing raising a tile did. What it holds is set below.
+			multimesh.instance_count = 0
+			multimesh.mesh = near
+			clock = _charge(&"raise_mesh", clock)
+		# Given its bounds rather than left to derive them, which it would do by
+		# transforming the mesh's box by every instance it holds. The stand is one
+		# tile's worth of one species, so its extent is the roots it was sown with
+		# grown by how much room one plant can take up.
+		multimesh.custom_aabb = _stand_bounds(roots, _instance_reach(index, plant))
+		if multimesh.instance_count != count:
+			multimesh.instance_count = count
+		clock = _charge(&"raise_count", clock)
+		multimesh.buffer = buffer
+		# The tile is drawing everything it holds until [method _dress] decides
+		# otherwise, which [member Tile.fresh] above has already asked for.
+		multimesh.visible_instance_count = -1
+		clock = _charge(&"raise_upload", clock)
 		if stand == null:
 			stand = MultiMeshInstance3D.new()
 			# GeometryInstance3D defaults to casting. Set the species'
@@ -1266,11 +2215,13 @@ func _raise(tile: Tile) -> void:
 			# between you and the world.
 			add_child(stand, false, Node.INTERNAL_MODE_BACK)
 			tile.stands[index] = stand
-		# Reused where one is already standing. Re-sowing a tile at a finer
-		# band happens as often as walking towards one, and building a node and
-		# a rendering-server instance for a tile that already had both was the
-		# single largest part of what applying a tile cost.
-		stand.multimesh = multimesh
+		# Only where the stand did not already hold it. Re-sowing a tile at a
+		# finer band happens as often as walking towards one, and building a
+		# node and a rendering-server instance for a tile that already had both
+		# was the single largest part of what applying a tile cost.
+		if stand.multimesh != multimesh:
+			stand.multimesh = multimesh
+		clock = _charge(&"raise_stand", clock)
 	tile.buffers.clear()
 	_dressed_at = Vector3.INF
 
@@ -1279,12 +2230,19 @@ func _raise(tile: Tile) -> void:
 ## with, and whether it is worth a shadow. Everything here is per tile and per
 ## species — a few hundred numbers — and nothing is per plant.
 func _dress(eye: Vector3) -> void:
+	var step := clampf(
+		DRESS_STEP * (1.0 + _eye_speed / DRESS_SPEED_REFERENCE),
+		DRESS_STEP, DRESS_STEP_MAX)
 	if _dressed_at.is_finite() \
-			and _dressed_at.distance_squared_to(eye) < DRESS_STEP * DRESS_STEP:
+			and _dressed_at.distance_squared_to(eye) < step * step:
 		return
 	_dressed_at = eye
 	_dress_slice = (_dress_slice + 1) % DRESS_SLICES
-	for tile: Tile in _tiles.values():
+	_settle_dress_bounds()
+	# The cached list, not the dictionary. Walking the dictionary allocates an array
+	# of every tile the field holds and hashes its way through it, and this is the
+	# other caller that reads all of them several times a second.
+	for tile: Tile in _all_tiles():
 		if tile.slice != _dress_slice and not tile.fresh:
 			continue
 		tile.fresh = false
@@ -1293,11 +2251,27 @@ func _dress(eye: Vector3) -> void:
 		# has to be at least as generous as the one the shader evaluates per
 		# plant, and the nearest plant in the tile is nearer than its centre.
 		var nearest := maxf(tile.away - _tile * 0.71, 0.0)
+		# A tile the last pass settled at one end of the curve, and which is still
+		# past every threshold that end is defined by, cannot have changed: there
+		# is no per-species decision left to make and re-making them all is the
+		# bulk of what a pass over a large field costs. Only the ring of tiles
+		# actually inside the fade has to be worked out again.
+		if tile.dressed == DRESSED_HIDDEN:
+			if nearest >= _dress_hide_beyond:
+				continue
+		elif tile.dressed == DRESSED_FULL and tile.away < _dress_settled_within:
+			continue
+		# Recorded from the distances rather than from what the loop below decided,
+		# so that the state and the test that trusts it cannot drift apart.
+		tile.dressed = DRESSED_UNKNOWN
+		if nearest >= _dress_hide_beyond:
+			tile.dressed = DRESSED_HIDDEN
+		elif tile.away < _dress_settled_within:
+			tile.dressed = DRESSED_FULL
 		for index in tile.stands.size():
 			var stand := tile.stands[index] as MultiMeshInstance3D
 			if stand == null:
 				continue
-			var plant := species[index] as PlantSpecies
 			var multimesh := stand.multimesh
 			# Divided by the band the tile was sown at, because that share of
 			# the thinning has already been taken: a tile holding an eighth of
@@ -1307,41 +2281,163 @@ func _dress(eye: Vector3) -> void:
 			# Nearer than the thinning begins, every plant the tile holds is
 			# drawn; past the fade nothing is. Only the band between the two
 			# needs the curve, and while flying most of a field is outside it.
-			var showing := multimesh.instance_count
+			var held := multimesh.instance_count
+			var showing := held
 			# Past the far edge of the fade rather than the reach itself: the
 			# curve is still handing out the far share at the reach and only
 			# reaches zero twelve per cent beyond it.
-			if nearest >= plant.draw_reach() * 1.12:
+			if nearest >= _dress_hide_at[index]:
 				showing = 0
-			elif nearest > plant.full_within():
-				showing = clampi(int(plant.keep_at(nearest)
-						/ maxf(detail, 0.0001)
-						* float(multimesh.instance_count)),
-					0, multimesh.instance_count)
+			elif nearest > _dress_full_at[index]:
+				showing = clampi(int((species[index] as PlantSpecies)
+						.keep_at(nearest) / maxf(detail, 0.0001) * float(held)),
+					0, held)
 			if multimesh.visible_instance_count != showing:
 				multimesh.visible_instance_count = showing
 			var wanted_visible := showing > 0
 			if stand.visible != wanted_visible:
 				stand.visible = wanted_visible
-			_dress_collision(tile, index, plant, stand,
-				wanted_visible and nearest < plant.collision_within)
+			# Most cover has no physics at all, so the streaming call is made only
+			# for a species that wants shapes or a tile still holding some.
+			if _dress_collide_at[index] > 0.0 or tile.collisions[index] != null:
+				_dress_collision(tile, index, species[index] as PlantSpecies,
+					stand, wanted_visible and nearest < _dress_collide_at[index])
 			if showing == 0:
 				continue
 			# Compared against what the stand is already holding rather than
 			# against a remembered flag, so several species on one tile each
 			# swap at their own distance.
-			var distant := tile.away > plant.distant_beyond
+			var plant := species[index] as PlantSpecies
+			var distant := tile.away > _dress_distant_at[index]
 			var wanted := plant.distant_mesh() if distant else plant.near_mesh()
 			if multimesh.mesh != wanted:
-				multimesh.mesh = wanted
+				_swap_mesh(multimesh, wanted,
+					tile.rows[index] as PackedFloat32Array)
 			var wanted_material := plant.far_material() if distant else plant.near_material()
 			if stand.material_override != wanted_material:
 				stand.material_override = wanted_material
 			var casting := GeometryInstance3D.SHADOW_CASTING_SETTING_ON \
-				if tile.away < plant.shadow_within \
+				if tile.away < _dress_shadow_at[index] \
 				else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			if stand.cast_shadow != casting:
 				stand.cast_shadow = casting
+
+
+## Resolves every distance a dressing decision turns on, per species, plus the two
+## distances outside which the whole field agrees.
+##
+## A dressing pass asks each species on each tile where it stands against its
+## thinning curve, its mesh swap, its shadow cut-off and its collision ring. Those
+## four numbers are properties of the species and the flora-range setting, not of
+## the tile, but they were being fetched through accessors once per species per
+## tile — and a pass over a field is thousands of those. Read from here they are a
+## packed float each.
+##
+## The two whole-field bounds let a tile plainly past every reach, or plainly
+## inside every near threshold, skip its species loop altogether. Thresholds a
+## species does not really have are left out of them: a plant exported without a
+## distant level draws the same mesh with the same material on both sides of its
+## swap distance, and one that never casts is off at every distance, so neither is
+## a distance at which anything happens.
+func _settle_dress_bounds() -> void:
+	var count := species.size()
+	if _dress_hide_at.size() == count \
+			and is_equal_approx(_dress_bounds_for, PlantSpecies.view_range):
+		return
+	_dress_bounds_for = PlantSpecies.view_range
+	_dress_hide_at.resize(count)
+	_dress_full_at.resize(count)
+	_dress_shadow_at.resize(count)
+	_dress_distant_at.resize(count)
+	_dress_collide_at.resize(count)
+	_dress_hide_beyond = 0.0
+	var settled := INF
+	for index in count:
+		var plant := species[index] as PlantSpecies
+		if plant == null:
+			_dress_hide_at[index] = 0.0
+			_dress_full_at[index] = 0.0
+			_dress_shadow_at[index] = 0.0
+			_dress_distant_at[index] = INF
+			_dress_collide_at[index] = 0.0
+			continue
+		var hide_at := plant.draw_reach() * 1.12
+		_dress_hide_at[index] = hide_at
+		_dress_full_at[index] = plant.full_within()
+		_dress_shadow_at[index] = plant.shadow_within
+		# A species with no second level swaps to the same mesh and the same
+		# material, so it has no swap distance and the near branch is always right.
+		var swaps := plant.distant_mesh() != plant.near_mesh() \
+			or plant.far_material() != plant.near_material()
+		_dress_distant_at[index] = plant.distant_beyond if swaps else INF
+		_dress_collide_at[index] = plant.collision_within \
+			if plant.collision_enabled else 0.0
+		_dress_hide_beyond = maxf(_dress_hide_beyond, hide_at)
+		settled = minf(settled, _dress_full_at[index])
+		if swaps:
+			settled = minf(settled, plant.distant_beyond)
+		if plant.shadow_within > 0.0:
+			settled = minf(settled, plant.shadow_within)
+		if plant.collision_enabled:
+			settled = minf(settled, plant.collision_within)
+	_dress_settled_within = settled if is_finite(settled) else 0.0
+
+
+## How fast the viewer is moving, smoothed over about a fifth of a second so that
+## one long frame or one teleport does not read as a permanent sprint.
+func _track_viewer_speed(eye: Vector3, delta: float) -> void:
+	if not _eye_at.is_finite() or delta <= 0.0:
+		_eye_at = eye
+		return
+	var moved := _eye_at.distance_to(eye) / delta
+	_eye_at = eye
+	# A jump — a spawn, a respawn, a save being loaded — is not travel.
+	if moved > 400.0:
+		return
+	_eye_speed = lerpf(_eye_speed, moved, 0.25)
+
+
+## Metres from the viewer to the nearest ground this field covers, which is what
+## [FloraBudget] ranks fields by. Zero for a field that covers the whole planet:
+## there is always some of it underfoot.
+func _viewer_reach(eye: Vector3) -> float:
+	if global_cover:
+		return 0.0
+	var host := planet_host()
+	if host == null:
+		return 0.0
+	return maxf(eye.distance_to(
+		host.to_global(_centre * _radius)) - spread, 0.0)
+
+
+## True when a volume of this size, centred here, cannot reach a localized field's own
+## circle of ground.
+##
+## Measured across the surface rather than through the world, because a meadow's anchor
+## sits at the sphere's radius while its plants stand on terrain that can be a hundred
+## metres above or below it: a straight-line test would refuse real damage on a
+## mountainside. The tangential offset understates arc length, which is the safe
+## direction to be wrong in — a field kept is only a field that answers for itself.
+func _outside_field(middle: Vector3, gross: float) -> bool:
+	if global_cover or _radius <= 0.0:
+		return false
+	var host := planet_host()
+	if host == null:
+		return false
+	var up := host.to_local(middle)
+	if not up.is_finite() or up.length_squared() < 0.001:
+		return false
+	up = up.normalized()
+	var reach := spread + gross
+	# A field broad enough for this to be a whole-planet question is not one this
+	# test can answer.
+	if reach >= _radius:
+		return false
+	var facing := _centre.dot(up)
+	if facing <= 0.0:
+		return true
+	var offset := (up - _centre * facing) * _radius
+	return offset.length_squared() > reach * reach
 
 
 ## Adds physics only to the ring of cover a player could currently touch.
@@ -1367,7 +2463,8 @@ func _dress_collision(tile: Tile, index: int, plant: PlantSpecies,
 	var buffer := _rows_of(tile, index, multimesh)
 	var mesh_shape := plant.mesh_collision_shape()
 	for plant_index in multimesh.instance_count:
-		if _is_broken(tile.cell, index, plant_index):
+		if _is_broken(tile.cell, index, plant_index) \
+				or _instance_hidden(buffer, plant_index):
 			continue
 		var stood := _instance_transform(buffer, plant_index)
 		var visual_height := plant.authored_height() * stood.basis.y.length()
@@ -1481,13 +2578,61 @@ func resolve_flora_impact(collider: CollisionShape3D, impact_speed: float,
 		_break_tint(plant, buffer, instance_index),
 		plant.break_effect)
 	answer["broken"] = true
+	var reward := impact_biomass_value(visual_height)
+	if reward > 0.0:
+		answer["biomass"] = maxf(roundf(reward), 1.0)
+		answer["biomass_key"] = PackedInt32Array([
+			cell.x, cell.y, cell.z, species_index, instance_index])
+		answer["biomass_height"] = visual_height
 	return answer
+
+
+## Host-side confirmation for an impact first simulated by a remote owner. The
+## field may not have this tile streamed on the host, so the deterministic key
+## is recorded directly in the persistent break ledger. Bounds, species, local
+## tile distance, and authored height limits are still checked before it pays.
+func claim_impact_biomass(key: PackedInt32Array, claimed_height: float,
+		at: Vector3) -> float:
+	if key.size() != 5 or not is_finite(claimed_height) or not at.is_finite() \
+			or _grid == null \
+			or (harvest_yield <= 0.0 and impact_biomass_yield <= 0.0):
+		return 0.0
+	var cell := Vector3i(key[0], key[1], key[2])
+	var species_index := key[3]
+	var instance_index := key[4]
+	if species_index < 0 or species_index >= species.size() \
+			or instance_index < 0 or _is_broken(
+				cell, species_index, instance_index):
+		return 0.0
+	var plant := species[species_index] as PlantSpecies
+	if plant == null or (plant.impact_mode != PlantSpecies.ImpactMode.BREAKABLE
+			and plant.impact_mode != PlantSpecies.ImpactMode.MUSHROOM_BOUNCE):
+		return 0.0
+	var area := _grid.area(cell) if global_cover else _tile * _tile
+	var clump := maxi(plant.clump_count, 1)
+	var maximum_instances := maxi(
+		ceili(maxf(plant.per_square_metre, 0.0) * area / float(clump)) + 1,
+		0) * clump
+	if instance_index >= maximum_instances:
+		return 0.0
+	var low := plant.height * (1.0 - plant.height_variation)
+	var high := plant.height * (1.0 + plant.height_variation)
+	var visual_height := clampf(claimed_height, maxf(low, 0.01), maxf(high, 0.01))
+	if _ground_point(cell).distance_to(at) > _tile * 0.8 + visual_height + 6.0:
+		return 0.0
+	var reward := impact_biomass_value(visual_height)
+	if reward <= 0.0:
+		return 0.0
+	_mark_broken(cell, species_index, instance_index)
+	_hide_broken_now(cell, species_index, instance_index)
+	return maxf(roundf(reward), 1.0)
 
 
 func _mark_broken(cell: Vector3i, species_index: int,
 		instance_index: int) -> void:
 	if _is_broken(cell, species_index, instance_index):
 		return
+	_breaks_recorded += 1
 	_record_damage(cell, species_index, instance_index, BROKEN)
 	_new_breaks.append_array(PackedInt32Array([cell.x, cell.y, cell.z,
 		species_index, instance_index]))
@@ -1583,6 +2728,14 @@ func apply_damage(hit: DamageHit) -> float:
 		return 0.0
 	if hit.min_plant_height > 0.0 and _tallest < hit.min_plant_height:
 		return 0.0
+	var middle := (hit.origin + hit.toward) * 0.5
+	var tile_bound := _tile * 0.71
+	var gross := hit.extent() + tile_bound + _tallest
+	# A meadow on the far side of the planet is offered this volume like every other
+	# field, and answering with its own circle costs one projection rather than a
+	# transform inverse, a sweep and a walk of the cells the volume covers.
+	if _outside_field(middle, gross):
+		return 0.0
 	var absorbed := 0.0
 	var sweep := Sweep.new()
 	sweep.to_world = global_transform
@@ -1593,19 +2746,13 @@ func apply_damage(hit: DamageHit) -> float:
 	sweep.radius = hit.radius
 	var host := planet_host()
 	sweep.centre = host.global_position if host != null else Vector3.ZERO
-	var tile_bound := _tile * 0.71
 	# The volume reduced to a sphere, so a tile nowhere near it is turned away
 	# without the capsule arithmetic. Every field is offered every volume and
 	# between them they hold a few thousand streamed tiles, so this comparison
 	# runs more often than anything else an ability does — which is also why it
 	# reads the flat list rather than looking every tile up by its cell.
-	var middle := (hit.origin + hit.toward) * 0.5
-	var gross := hit.extent() + tile_bound + _tallest
 	var gross_squared := gross * gross
-	if _tile_list_stale:
-		_tile_list.assign(_tiles.values())
-		_tile_list_stale = false
-	for tile in _tile_list:
+	for tile in _tiles_reached(middle, gross):
 		if tile.at.distance_squared_to(middle) >= gross_squared:
 			continue
 		if not hit.reaches(tile.at, tile_bound + _tallest):
@@ -1633,10 +2780,103 @@ func apply_damage(hit: DamageHit) -> float:
 	return absorbed
 
 
+## Every tile a volume of this size, centred here, could possibly touch.
+##
+## A building footprint, a road cell, a charging animal's horn and most abilities are
+## all a few metres across, and they are offered to every field on the planet — a few
+## thousand streamed tiles between them — for every tick they last. Naming the squares
+## the volume covers is a couple of dozen cell lookups; rejecting every tile in the
+## field one at a time was the most-run loop in the game.
+##
+## Falls back to the flat list once a volume is broad enough that enumerating its
+## squares would be the larger job, which is what a planet-wide effect is.
+func _tiles_reached(middle: Vector3, gross: float) -> Array[Tile]:
+	_all_tiles()
+	if _tile <= 0.0:
+		return _tile_list
+	var span := int(ceil(gross / _tile)) + 1
+	var across := span * 2 + 1
+	if across * across >= _tile_list.size():
+		return _tile_list
+	var near: Array[Tile] = []
+	for cell in _cells_covering(middle, gross):
+		var tile := _tiles.get(cell) as Tile
+		if tile != null:
+			near.push_back(tile)
+	return near
+
+
+## Every tile this field holds, as a list, rebuilt only when the set changed.
+func _all_tiles() -> Array[Tile]:
+	if _tile_list_stale:
+		_tile_list.assign(_tiles.values())
+		_tile_list_stale = false
+	return _tile_list
+
+
 ## Tallest any plant of this species grows, which is the only part of it the
 ## rejection tests need to know.
 func _standing_height(plant: PlantSpecies) -> float:
 	return plant.height * (1.0 + plant.height_variation)
+
+
+## How far from its own root one instance of this species can reach, in metres.
+##
+## A ball rather than the authored box, because every instance is turned to stand on
+## the sphere and given a random yaw, so no axis of the box stays where it was
+## authored. Cached per species: it depends on the mesh and the growth range alone.
+func _instance_reach(index: int, plant: PlantSpecies) -> float:
+	if index < _instance_reaches.size() and _instance_reaches[index] > 0.0:
+		return _instance_reaches[index]
+	var reach := _standing_height(plant)
+	var mesh := plant.near_mesh()
+	if mesh != null:
+		var box := mesh.get_aabb()
+		var authored := 0.0
+		for corner in 8:
+			authored = maxf(authored, box.get_endpoint(corner).length())
+		reach = maxf(reach, authored * _standing_height(plant)
+			/ maxf(plant.authored_height(), 0.001))
+	if _instance_reaches.size() < species.size():
+		_instance_reaches.resize(species.size())
+	if index < _instance_reaches.size():
+		_instance_reaches[index] = reach
+	return reach
+
+
+## Changes which mesh a standing stand draws, at the cost of an upload instead of a
+## stall. See the note at the swap in [method _raise]: a MultiMesh asked for a
+## different mesh while it holds instances reads all of them back off the GPU, so it
+## is emptied first and refilled from the rows the tile is already keeping.
+func _swap_mesh(multimesh: MultiMesh, mesh: Mesh,
+		rows: PackedFloat32Array) -> void:
+	if multimesh == null or multimesh.mesh == mesh:
+		return
+	var count := multimesh.instance_count
+	if count <= 0 or rows.size() != count * STRIDE:
+		multimesh.mesh = mesh
+		return
+	var showing := multimesh.visible_instance_count
+	multimesh.instance_count = 0
+	multimesh.mesh = mesh
+	multimesh.instance_count = count
+	multimesh.buffer = rows
+	multimesh.visible_instance_count = showing
+
+
+## The box one stand occupies: where its plants are rooted, grown by how much room
+## one of them can take up around its root. See the call site in [method _raise] for
+## why a MultiMesh is better off being told this than working it out.
+func _stand_bounds(roots: PackedVector3Array, reach: float) -> AABB:
+	if roots.is_empty():
+		return AABB()
+	var low := roots[0]
+	var high := low
+	for root in roots:
+		low = low.min(root)
+		high = high.max(root)
+	var margin := Vector3.ONE * maxf(reach, 0.01)
+	return AABB(low - margin, high - low + margin * 2.0)
 
 
 func _damage_stand(hit: DamageHit, sweep: Sweep, tile: Tile, index: int,
@@ -1747,6 +2987,8 @@ func _damage_stand(hit: DamageHit, sweep: Sweep, tile: Tile, index: int,
 	var absorbed := 0.0
 	var touched := false
 	for instance_index in candidates:
+		if _instance_hidden(buffer, instance_index):
+			continue
 		var root := roots[instance_index]
 		var row := instance_index * STRIDE
 		var tall := Vector3(buffer[row + 1], buffer[row + 5],
@@ -1892,6 +3134,17 @@ func drain_new_breaks() -> PackedInt32Array:
 	return keys
 
 
+## Running total of plants this field has lost, which [DamageHit] samples either side
+## of a volume so that a traced hit reports how many plants it took down.
+##
+## What a clearing volume costs is the number of plants inside it, and the recorder
+## was previously quoting the damage the volume poured in — hundreds of millions of it,
+## because felling damage is deliberately absurd. A count is the number that tells you
+## whether a five-millisecond footprint clear was two hundred plants or two.
+func breaks_recorded() -> int:
+	return _breaks_recorded
+
+
 ## Every instance this field has lost, flattened for the wire: cell x, y, z,
 ## species index and instance index, five entries per plant. The host sends this
 ## to a late joiner so they arrive in a world with the same gaps in it.
@@ -2030,10 +3283,25 @@ func _instance_transform(buffer: PackedFloat32Array,
 		Vector3(buffer[at + 3], buffer[at + 7], buffer[at + 11]))
 
 
+func _instance_hidden(buffer: PackedFloat32Array, instance_index: int) -> bool:
+	var at := instance_index * STRIDE
+	return Vector3(buffer[at + 1], buffer[at + 5],
+		buffer[at + 9]).length_squared() < 0.00000001
+
+
 func _hide_instance(buffer: PackedFloat32Array, instance_index: int) -> void:
 	var at := instance_index * STRIDE
+	# A singular zero basis can survive in a MultiMesh as a degenerate fragment
+	# at the root. Emissive flowers then pulse that fragment against the terrain,
+	# which reads as the ground itself flashing. A five-decimal scale is visually
+	# absent but remains a valid transform, matching FlowerTreeField's hide path.
 	for offset in [0, 1, 2, 4, 5, 6, 8, 9, 10]:
-		buffer[at + offset] = 0.0
+		buffer[at + offset] *= 0.00001
+	# Alpha is the scorch channel; zero makes v_char one and therefore shuts off
+	# every emission term even if a driver ever rasterises the microscopic mesh.
+	buffer[at + COLOR + 3] = 0.0
+	# Night-emissive GroundCover uses custom Z as its per-instance glow mask.
+	buffer[at + RANK + 2] = 0.0
 
 
 func _break_tint(plant: PlantSpecies, buffer: PackedFloat32Array,
@@ -2059,11 +3327,68 @@ func _break_tint(plant: PlantSpecies, buffer: PackedFloat32Array,
 			return Color(0.34, 0.52, 0.18, 1.0)
 
 
+## Remembered rather than looked up, because this runs once per broken plant and a
+## building landing in grass breaks hundreds of them in one frame. The group query
+## alone was most of what clearing a footprint cost.
+var _break_effects: Node
+
+
 func _play_break_effect(at: Vector3, up: Vector3, speed: float, size: float,
 		tint: Color, preset: int) -> void:
-	var effects := get_tree().get_first_node_in_group(&"impact_break_effects")
-	if effects != null and effects.has_method(&"play_break"):
-		effects.call(&"play_break", at, up, speed, size, tint, preset)
+	if not is_instance_valid(_break_effects) \
+			or not _break_effects.is_inside_tree():
+		_break_effects = get_tree().get_first_node_in_group(
+			&"impact_break_effects")
+		if _break_effects != null \
+				and not _break_effects.has_method(&"play_break"):
+			_break_effects = null
+	if _break_effects == null:
+		return
+	_break_effects.call(&"play_break", at, up, speed, size, tint, preset)
+
+
+## Every remembered glow anchor on the nearby tiles, in world space, with the level
+## and species each was recorded with. Three parallel arrays under `points`, `levels`
+## and `species`.
+##
+## Flat rather than per tile because a tile is tens of metres across: sorting tiles
+## alone gave the light to whichever patch the scatter happened to record first, and
+## the glowing flowers a player was standing in routinely lost to ones behind them.
+## A tile holds at most GLOW_ANCHORS points, so this stays a list of tens.
+##
+## A tile a worker owns is passed over entirely, and the four arrays of a tile that is
+## read are agreed on one length. [method _sow] runs on the pool and replaces them one
+## at a time, so a re-sown tile offers the previous pass's anchors right up until the
+## moment it offers fewer of them — which crashed here on an index the array had held
+## a moment earlier.
+func _glow_anchors() -> Dictionary:
+	var points := PackedVector3Array()
+	var levels := PackedFloat32Array()
+	var source_species := PackedInt32Array()
+	var road_sources := _road_clearance_sources()
+	for tile: Tile in _all_tiles():
+		if tile.queued or tile.glow_points.is_empty() \
+				or tile.away > glow_light_range * 5.0:
+			continue
+		var anchors := tile.glow_points
+		var glows := tile.glow_levels
+		var kinds := tile.glow_species
+		var instances := tile.glow_instances
+		var held := mini(anchors.size(),
+			mini(glows.size(), mini(kinds.size(), instances.size())))
+		for index in held:
+			var kind := kinds[index]
+			if kind < 0 or kind >= species.size() \
+					or _is_broken(tile.cell, kind, instances[index]):
+				continue
+			var glow_plant := species[kind] as PlantSpecies
+			if glow_plant != null and glow_plant.takes_ability_damage() \
+					and _road_clears_root(anchors[index], road_sources):
+				continue
+			points.append(to_global(anchors[index]))
+			levels.append(glows[index])
+			source_species.append(kind)
+	return {"points": points, "levels": levels, "species": source_species}
 
 
 ## Chooses which glowing patches near the viewer are worth one of the pooled
@@ -2096,22 +3421,10 @@ func _place_glow_lights(eye: Vector3) -> void:
 		_glow_colors[index] = Color.WHITE
 	if wanted == 0:
 		return
-	# Every remembered anchor on the nearby tiles, ordered by how far it is from
-	# the viewer rather than by which tile it belongs to. Sorting tiles alone
-	# was not enough: a tile is tens of metres across, so the patch that got the
-	# light was whichever the scatter happened to record first, and the glowing
-	# flowers a player was standing in routinely lost to ones behind them.
-	# A tile holds at most GLOW_ANCHORS points, so this stays a list of tens.
-	var points := PackedVector3Array()
-	var levels := PackedFloat32Array()
-	var source_species := PackedInt32Array()
-	for tile: Tile in _tiles.values():
-		if tile.glow_points.is_empty() or tile.away > glow_light_range * 5.0:
-			continue
-		for index in tile.glow_points.size():
-			points.append(to_global(tile.glow_points[index]))
-			levels.append(tile.glow_levels[index])
-			source_species.append(tile.glow_species[index])
+	var anchors := _glow_anchors()
+	var points := anchors["points"] as PackedVector3Array
+	var levels := anchors["levels"] as PackedFloat32Array
+	var source_species := anchors["species"] as PackedInt32Array
 	var order: Array[int] = []
 	for index in points.size():
 		order.append(index)
@@ -2248,23 +3561,27 @@ func _sow(tile: Tile) -> void:
 	var points := PackedVector3Array()
 	var levels := PackedFloat32Array()
 	var light_species := PackedInt32Array()
+	var light_instances := PackedInt32Array()
 	for index in species.size():
 		var plant := species[index] as PlantSpecies
 		var detail := tile.detail[index] if index < tile.detail.size() else 1.0
 		buffers.append(PackedFloat32Array() if plant == null or detail <= 0.0
 			else _scatter(index, plant, _patches[index], _glows[index],
-				tile.cell, detail, points, levels, light_species))
+				tile.cell, detail, points, levels, light_species,
+				light_instances))
 	tile.buffers = buffers
 	tile.glow_points = points
 	tile.glow_levels = levels
 	tile.glow_species = light_species
+	tile.glow_instances = light_instances
 
 
 func _scatter(species_index: int, plant: PlantSpecies, patch: FastNoiseLite,
 		glow_noise: FastNoiseLite, cell: Vector3i, detail: float,
 		glow_points: PackedVector3Array,
 		glow_levels: PackedFloat32Array,
-		glow_species: PackedInt32Array) -> PackedFloat32Array:
+		glow_species: PackedInt32Array,
+		glow_instances: PackedInt32Array) -> PackedFloat32Array:
 	var rng := RandomNumberGenerator.new()
 	# The tile's own seed, so a tile grows the same whichever order the field is
 	# walked in and whichever peer is walking it.
@@ -2378,8 +3695,9 @@ func _scatter(species_index: int, plant: PlantSpecies, patch: FastNoiseLite,
 			var cast_level := 1.0 if all_instances_cast else glow
 			if cast_level > 0.55:
 				_remember_glow(glow_points, glow_levels, glow_species,
+					glow_instances,
 					stood.origin, cast_level, plant.glow_patch_size,
-					species_index)
+					species_index, grown)
 			_write(buffer, grown, stood, rng, tint, glow,
 				plant.glowing_patches > 0.0)
 			grown += 1
@@ -2406,8 +3724,9 @@ func _scatter(species_index: int, plant: PlantSpecies, patch: FastNoiseLite,
 ## the source: a nearby blue coral must not be collapsed into an earlier pink
 ## candidate merely because their branches share a tile.
 func _remember_glow(points: PackedVector3Array, levels: PackedFloat32Array,
-		owners: PackedInt32Array, at: Vector3, level: float, apart: float,
-		species_index: int) -> void:
+		owners: PackedInt32Array, instances: PackedInt32Array,
+		at: Vector3, level: float, apart: float,
+		species_index: int, instance_index: int) -> void:
 	var spacing := maxf(apart * 0.6, 1.0)
 	var held := 0
 	for index in points.size():
@@ -2419,12 +3738,14 @@ func _remember_glow(points: PackedVector3Array, levels: PackedFloat32Array,
 			if level > levels[index]:
 				points[index] = at
 				levels[index] = level
+				instances[index] = instance_index
 			return
 	if held >= GLOW_ANCHORS:
 		return
 	points.append(at)
 	levels.append(level)
 	owners.append(species_index)
+	instances.append(instance_index)
 
 
 func _write(buffer: PackedFloat32Array, index: int, stood: Transform3D,
@@ -2612,7 +3933,11 @@ func _terrain_claims(at: Vector3, height: float, normal: Vector3,
 ## metre at the corners and costs the field nothing.
 func _cell_of(at: Vector3) -> Vector3i:
 	var host := planet_host()
-	var up := (host.to_local(at)).normalized()
+	return _cell_for((host.to_local(at)).normalized())
+
+
+## The same, for a direction already in the planet's space.
+func _cell_for(up: Vector3) -> Vector3i:
 	if global_cover:
 		return _grid.key_for(up)
 	var offset := up - _centre * _centre.dot(up)

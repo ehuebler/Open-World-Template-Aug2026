@@ -40,8 +40,11 @@ func _init() -> void:
 ## reading the grid would step the wall by up to a cell's worth of slope where it
 ## matters most, along the rim of the drop it is marking.
 func raise(site: MeepSite, claim: MeepClaim, shape: PlanetShape,
-		spacing := 0.0) -> void:
+		spacing := 0.0,
+		suppressed_spans := PackedVector3Array()) -> void:
 	var edges := claim.border_edges() if claim != null else PackedVector2Array()
+	var heights := claim.border_heights() \
+		if claim != null else PackedFloat32Array()
 	var segments := edges.size() / 2
 	if site == null or shape == null or segments == 0:
 		clear()
@@ -61,13 +64,27 @@ func raise(site: MeepSite, claim: MeepClaim, shape: PlanetShape,
 		_material.emission = PURPLE
 		_material.emission_energy_multiplier = 0.35
 		material_override = _material
-	multimesh.instance_count = segments
+	var kept := PackedInt32Array()
 	for segment in segments:
+		var middle := (edges[segment * 2] + edges[segment * 2 + 1]) * 0.5
+		var direction := site.direction_at(middle)
+		var height := heights[segment] if segment < heights.size() \
+			else shape.elevation(direction, spacing)
+		var world_point := direction * (site.planet_radius + height)
+		if not _near_suppressed_span(world_point, suppressed_spans,
+				claim.grid.cell_size * 1.25):
+			kept.push_back(segment)
+	multimesh.instance_count = kept.size()
+	var buffer := PackedFloat32Array()
+	buffer.resize(kept.size() * 12)
+	for output_index in kept.size():
+		var segment := kept[output_index]
 		var from := edges[segment * 2]
 		var to := edges[segment * 2 + 1]
 		var middle := (from + to) * 0.5
 		var direction := site.direction_at(middle)
-		var height := shape.elevation(direction, spacing)
+		var height := heights[segment] if segment < heights.size() \
+			else shape.elevation(direction, spacing)
 		var run := to - from
 		# The edge's heading as a direction on the sphere. Over two metres the
 		# difference between this and a proper great-circle tangent is far below
@@ -78,9 +95,43 @@ func raise(site: MeepSite, claim: MeepClaim, shape: PlanetShape,
 		if along.length_squared() < 0.5:
 			along = up.cross(site.east).normalized()
 		var basis := Basis(along, up, along.cross(up))
-		multimesh.set_instance_transform(segment, Transform3D(basis,
-			direction * (site.planet_radius + height + HEIGHT * 0.5 - SINK)))
+		var origin := direction * (
+			site.planet_radius + height + HEIGHT * 0.5 - SINK)
+		var row := output_index * 12
+		# MultiMesh's packed Transform3D is three rows of four. One buffer upload
+		# avoids a rendering-server round trip for every boundary post: several
+		# hundred set_instance_transform calls were 60+ ms by themselves.
+		buffer[row] = basis.x.x
+		buffer[row + 1] = basis.y.x
+		buffer[row + 2] = basis.z.x
+		buffer[row + 3] = origin.x
+		buffer[row + 4] = basis.x.y
+		buffer[row + 5] = basis.y.y
+		buffer[row + 6] = basis.z.y
+		buffer[row + 7] = origin.y
+		buffer[row + 8] = basis.x.z
+		buffer[row + 9] = basis.y.z
+		buffer[row + 10] = basis.z.z
+		buffer[row + 11] = origin.z
+	multimesh.buffer = buffer
 	visible = true
+
+
+static func _near_suppressed_span(point: Vector3,
+		spans: PackedVector3Array, tolerance: float) -> bool:
+	for index in range(0, spans.size(), 2):
+		if index + 1 >= spans.size():
+			break
+		var from := spans[index]
+		var to := spans[index + 1]
+		var run := to - from
+		var divisor := run.length_squared()
+		var along := clampf((point - from).dot(run)
+			/ divisor, 0.0, 1.0) if divisor > 0.000001 else 0.0
+		if point.distance_squared_to(from + run * along) \
+				<= tolerance * tolerance:
+			return true
+	return false
 
 
 func clear() -> void:

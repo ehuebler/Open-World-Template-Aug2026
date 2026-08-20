@@ -36,7 +36,7 @@ func show_event(event: DamageNumberEvent, camera: Camera3D) -> void:
 
 	var label := Label.new()
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	label.text = str(roundi(event.amount))
+	label.text = _text(event, event.amount)
 	label.add_theme_font_size_override(&"font_size", 24 if event.critical else 20)
 	label.add_theme_color_override(&"font_color", _colour(event))
 	label.add_theme_color_override(&"font_outline_color", Color(0.03, 0.04, 0.08, 0.9))
@@ -68,7 +68,7 @@ func _merge(running: Dictionary, event: DamageNumberEvent,
 		return false
 	var total := float(running["total"]) + event.amount
 	running["total"] = total
-	label.text = str(roundi(total))
+	label.text = _text(event, total)
 	# Held at the point of the latest hit and given its full life back, so a
 	# stream of damage reads as one number climbing rather than one fading. The
 	# rise it was already partway through has to go, or two tweens race over the
@@ -97,11 +97,18 @@ func _animate(label: Label) -> Tween:
 ## One running total per target and direction: your damage to the boss and his
 ## to you are different numbers even when they land in the same instant.
 func _key(event: DamageNumberEvent) -> String:
-	return "%d:%d:%d" % [
-		event.target_peer, event.source_peer, 1 if event.incoming else 0]
+	return "%d:%d:%d:%d:%s" % [
+		event.target_peer, event.source_peer, 1 if event.incoming else 0,
+		1 if event.reward else 0, event.target_key]
+
+
+func _text(event: DamageNumberEvent, amount: float) -> String:
+	return "+%d" % roundi(amount) if event.reward else str(roundi(amount))
 
 
 func _colour(event: DamageNumberEvent) -> Color:
+	if event.reward:
+		return Color(0.36, 1.0, 0.48)
 	if event.blocked:
 		return Color(0.55, 0.82, 1.0)
 	if event.critical:

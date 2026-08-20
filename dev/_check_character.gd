@@ -21,7 +21,8 @@ const BODIES := {
 const POSED := ["Idle", "Run", "JumpRise", "Fall", "AirRun", "Float", "Fly",
 	"Swim", "Tread", "NukeThrow", "NukeFloatThrow", "LassoThrow",
 	"LassoFloatThrow", "LassoHold", "LassoFloatHold", "WallPlace",
-	"WallFloatPlace", "NausicaMark", "NausicaFloatMark"]
+	"WallFloatPlace", "NausicaMark", "NausicaFloatMark", "HeroPunchRight",
+	"HeroPunchLeft", "HeroPunchFloatRight", "HeroPunchFloatLeft"]
 
 ## Clips that play straight into one another, and so have to agree at the join.
 ## `[from, to, what]`, measured at the end of the first and the start of the

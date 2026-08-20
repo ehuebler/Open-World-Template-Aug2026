@@ -121,9 +121,9 @@ func _physics_process(delta: float) -> void:
 		var pulse := 1.0 + sin(_live * WOBBLE) * 0.12
 		_halo.scale = Vector3(pulse, 1.0 / pulse, pulse)
 
-	var struck := _player_along(from, to)
-	if struck != null:
-		global_position = _nearest_on(from, to, _combat_position(struck))
+	var struck := _combatant_along(from, to)
+	if not struck.is_empty():
+		global_position = struck.get("point", from) as Vector3
 		_strike(struck)
 		return
 	var query := PhysicsRayQueryParameters3D.create(from, to)
@@ -137,34 +137,82 @@ func _physics_process(delta: float) -> void:
 	_burst(landed.get("normal", up) as Vector3)
 
 
-## Whoever this step of the flight passes through, or null. The capsule is the
-## same shape the damage is dealt in, so what the ball looks like it hit and what
-## it hits are the same test.
-func _player_along(from: Vector3, to: Vector3) -> Node:
-	var sweep := DamageHit.beam(from, to, hit_radius, 0.0)
-	for player_variant: Variant in get_tree().get_nodes_in_group(
-			&"network_players"):
-		var player := player_variant as Node3D
-		if player == null or player == spitter \
-				or not DamageHit.in_same_world(self, player):
+## Nearest PLAYER-faction body crossed this step. Data-oriented combatants may
+## refine their broad combat node into one actual row; ordinary actors retain
+## their spherical combat bounds.
+func _combatant_along(from: Vector3, to: Vector3) -> Dictionary:
+	var best: Dictionary = {}
+	var best_distance := INF
+	var span := from.distance_to(to)
+	for combatant_variant: Variant in get_tree().get_nodes_in_group(
+			DamageHit.COMBATANT_GROUP):
+		var combatant := combatant_variant as Node
+		if combatant == null or combatant == spitter \
+				or not DamageHit.in_same_world(self, combatant) \
+				or not combatant.has_method(&"combat_faction") \
+				or int(combatant.call(&"combat_faction")) \
+					!= DamageHit.Faction.PLAYER:
 			continue
-		if player.has_method(&"is_dead") and bool(player.call(&"is_dead")):
+		if combatant.has_method(&"is_dead") \
+				and bool(combatant.call(&"is_dead")):
 			continue
-		var bounds := 0.4
-		if player.has_method(&"combat_radius"):
-			bounds = float(player.call(&"combat_radius"))
-		if sweep.reaches(_combat_position(player), bounds):
-			return player
-	return null
+		var row := -1
+		var point := Vector3.ZERO
+		var body_point := Vector3.ZERO
+		var distance := INF
+		if combatant.has_method(&"combat_target_along"):
+			var found: Variant = combatant.call(
+				&"combat_target_along", from, to, hit_radius)
+			if not found is Dictionary or (found as Dictionary).is_empty():
+				continue
+			var candidate := found as Dictionary
+			row = int(candidate.get("row", -1))
+			var point_value: Variant = candidate.get("point")
+			if row < 0 or not point_value is Vector3:
+				continue
+			point = point_value as Vector3
+			var body_value: Variant = candidate.get("body_point", point)
+			body_point = body_value as Vector3 \
+				if body_value is Vector3 else point
+			distance = float(candidate.get(
+				"distance", from.distance_to(point)))
+		else:
+			var centre := _combat_position(combatant)
+			if not centre.is_finite():
+				continue
+			var bounds := 0.4
+			if combatant.has_method(&"combat_radius"):
+				bounds = maxf(float(combatant.call(&"combat_radius")), 0.0)
+			var entry := _sphere_entry_share(
+				from, to, centre, hit_radius + bounds)
+			if entry < 0.0:
+				continue
+			point = from.lerp(to, entry)
+			body_point = centre
+			distance = span * entry
+		if not point.is_finite() or distance >= best_distance:
+			continue
+		best_distance = distance
+		best = {
+			"target": combatant,
+			"row": row,
+			"point": point,
+			"body_point": body_point,
+			"distance": distance,
+		}
+	return best
 
 
-func _strike(player: Node) -> void:
-	if _is_host() and player.has_method(&"apply_damage"):
+func _strike(struck: Dictionary) -> void:
+	var target := struck.get("target") as Node
+	var row := int(struck.get("row", -1))
+	if _is_host() and target != null:
 		var along := _velocity.normalized() \
 			if _velocity.length_squared() > 0.01 else -_up()
-		var hit := DamageHit.impact(global_position, hit_radius, damage)
+		var impact_at := struck.get("body_point", global_position) as Vector3 \
+			if row >= 0 else global_position
+		var hit := DamageHit.impact(impact_at, hit_radius, damage)
 		hit.faction = DamageHit.Faction.ENEMY
-		hit.target_peer = _peer_of(player)
 		hit.parryable = parryable
 		# A wet slap staggers rather than knocks down: this is an animal warning
 		# somebody off, not the boss taking them off their feet.
@@ -172,7 +220,11 @@ func _strike(player: Node) -> void:
 		hit.world_impulse = along * knockback + _up() * knockback * 0.2
 		hit.ability_id = "fauna_spit"
 		hit.set_source(spitter)
-		player.call(&"apply_damage", hit)
+		if row >= 0 and target.has_method(&"apply_damage_to_row"):
+			target.call(&"apply_damage_to_row", row, hit)
+		elif target.has_method(&"apply_damage"):
+			hit.target_peer = _peer_of(target)
+			target.call(&"apply_damage", hit)
 	_burst(-_velocity.normalized() if _velocity.length_squared() > 0.01 \
 		else _up())
 
@@ -188,24 +240,40 @@ func _burst(normal: Vector3) -> void:
 	queue_free()
 
 
-func _nearest_on(from: Vector3, to: Vector3, point: Vector3) -> Vector3:
+func _sphere_entry_share(from: Vector3, to: Vector3,
+		centre: Vector3, radius: float) -> float:
 	var along := to - from
 	var span := along.length_squared()
+	var offset := from - centre
+	var radius_squared := maxf(radius, 0.0) * maxf(radius, 0.0)
+	if offset.length_squared() <= radius_squared:
+		return 0.0
 	if span < 0.000001:
-		return from
-	return from + along * clampf((point - from).dot(along) / span, 0.0, 1.0)
+		return -1.0
+	var b := 2.0 * offset.dot(along)
+	var c := offset.length_squared() - radius_squared
+	var discriminant := b * b - 4.0 * span * c
+	if discriminant < 0.0:
+		return -1.0
+	var entry := (-b - sqrt(discriminant)) / (2.0 * span)
+	return entry if entry >= 0.0 and entry <= 1.0 else -1.0
 
 
-func _combat_position(player: Node) -> Vector3:
-	if player.has_method(&"combat_position"):
-		return player.call(&"combat_position")
-	return (player as Node3D).global_position
+func _combat_position(target: Node) -> Vector3:
+	if target.has_method(&"combat_position"):
+		var value: Variant = target.call(&"combat_position")
+		if value is Vector3:
+			return value as Vector3
+	if target is Node3D:
+		return (target as Node3D).global_position
+	return Vector3(INF, INF, INF)
 
 
-func _peer_of(player: Node) -> int:
-	if player.has_method(&"combat_peer_id"):
-		return int(player.call(&"combat_peer_id"))
-	return int(player.get("peer_id"))
+func _peer_of(target: Node) -> int:
+	if target.has_method(&"combat_peer_id"):
+		return int(target.call(&"combat_peer_id"))
+	var peer: Variant = target.get("peer_id")
+	return int(peer) if peer != null else 0
 
 
 func _up() -> Vector3:

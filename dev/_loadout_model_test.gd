@@ -16,11 +16,14 @@ func _ready() -> void:
 	_check_item_kinds()
 	_check_container_filters()
 	_check_character_schema()
+	_check_retired_apparel_migration()
+	_check_progression_schema()
 	_check_player_camera_rim()
 	_check_organic_camera_rim()
 	_check_starter_inventory()
 	_check_rack_migration()
 	_check_graphics_toggles()
+	_check_rim_colour_setting()
 	_check_god_rays_shaders()
 	_check_god_rays_veil()
 	_check_sunset_tint()
@@ -45,6 +48,13 @@ func _check_item_kinds() -> void:
 	# what changed is only that the catalogue is no longer allowed to be empty.
 	_expect(ItemDB.accepts_ability("laser_eyes"),
 		"ability slot accepts a real ability")
+	_expect(ItemDB.SLOT_ORDER == ["hat"],
+		"active apparel loadout contains only the hat slot")
+	_expect(PlayerStats.has_stat(PlayerStats.GOLD),
+		"Gold is an enumerable player stat")
+	for item_id: String in ItemDB.hat_shop_ids():
+		_expect(ResourceLoader.exists(ItemDB.scene_path(item_id)),
+			"%s has a deterministic runtime scene" % item_id)
 
 
 func _check_player_camera_rim() -> void:
@@ -85,7 +95,8 @@ func _check_organic_camera_rim() -> void:
 			and code.contains("camera_rim_energy")
 			and code.contains("camera_rim_dark")
 			and code.contains("camera_rim_light")
-			and code.contains("camera_rim_color * camera_rim_energy")
+			and code.contains(
+				"vivid_camera_rim_colour(camera_rim_color)")
 		)
 		_expect(shader != null and same_rim_contract,
 			"%s enables the organic camera rim" % path.get_file())
@@ -239,8 +250,8 @@ func _check_player_designer_contract() -> void:
 		"player designer rotates ui_background2")
 
 	panel.show_tab(PlayerDesignerPanel.Tab.APPAREL)
-	_expect(panel.apparel_ids() == PackedStringArray(["c3_hair", "c3_goggles"]),
-		"player designer catalogue contains apparel only")
+	_expect(panel.apparel_ids() == PackedStringArray(["c3_hair"]),
+		"player designer catalogue contains owned compatible hats only")
 	_expect(panel.find_child("SelectedItemDescription", true, false) == null,
 		"player designer apparel has no description panel")
 	var tile := panel.find_child(
@@ -263,6 +274,15 @@ func _check_character_schema() -> void:
 		"default hotbar has three slots")
 	_expect((defaults["abilities"] as Array).size() == CharacterDB.ABILITY_SLOTS,
 		"default abilities have two slots")
+	_expect(defaults["abilities"] == CharacterDB.DEFAULT_EQUIPPED_ABILITIES,
+		"default LMB and RMB slots visibly equip the two starter powers")
+	_expect(CharacterDB.ability_items({
+			"abilities": ["settlement_launcher", "starfire"],
+		}) == PackedStringArray(["building", "starfire"])
+		and CharacterDB.ability_items({
+			"abilities": ["settlement_launcher", "building"],
+		}) == PackedStringArray(["", "building"]),
+		"legacy launcher assignments migrate into the Building ability")
 	_expect(defaults.has("backpack"), "default look carries backpack data")
 	var old_look := {"rack": ["sword", "", "laser_rifle", "sword"]}
 	_expect(CharacterDB.hotbar_items(old_look, 3) \
@@ -271,6 +291,136 @@ func _check_character_schema() -> void:
 	_expect(CharacterDB.racked_items(old_look, 3) \
 		== CharacterDB.hotbar_items(old_look, 3),
 		"racked_items remains a compatibility alias")
+
+
+func _check_retired_apparel_migration() -> void:
+	var saved_config: ConfigFile = SettingsManager._config
+	SettingsManager._config = ConfigFile.new()
+	SettingsManager._config.set_value(
+		"appearance", "starter_inventory_revision",
+		CharacterDB.STARTER_INVENTORY_REVISION)
+	SettingsManager._config.set_value(
+		"appearance", "body", CharacterDB.DEFAULT_BODY)
+	SettingsManager._config.set_value(
+		"appearance", "skin",
+		CharacterDB.default_skin(CharacterDB.DEFAULT_BODY))
+	SettingsManager._config.set_value("appearance", "worn", {
+		"hat": "c3_hair",
+		"goggles": "c3_goggles",
+		"long_sleeve": "c3_tunic",
+	})
+	SettingsManager._config.set_value(
+		"appearance", "backpack", ["laser_rifle"])
+	SettingsManager._config.set_value(
+		"appearance", "hotbar", ["", "", ""])
+	SettingsManager._config.set_value(
+		"appearance", "abilities", ["", ""])
+
+	var migrated := CharacterDB.load_look()
+	var worn: Dictionary = migrated.get("worn", {})
+	var backpack: Array = migrated.get("backpack", [])
+	var persisted_worn: Dictionary = SettingsManager.get_setting(
+		&"appearance", &"worn", {})
+	_expect(worn == {"hat": "c3_hair"}
+		and backpack.count("c3_goggles") == 1
+		and backpack.count("c3_tunic") == 1
+		and not persisted_worn.has("goggles")
+		and not persisted_worn.has("long_sleeve"),
+		"retired worn slots move into the backpack without losing ownership")
+	var loaded_again := CharacterDB.load_look()
+	var second_backpack: Array = loaded_again.get("backpack", [])
+	_expect(second_backpack.count("c3_goggles") == 1
+		and second_backpack.count("c3_tunic") == 1,
+		"hat-only worn migration is idempotent")
+	SettingsManager._config = saved_config
+
+
+func _check_progression_schema() -> void:
+	var saved_config: ConfigFile = SettingsManager._config
+	SettingsManager._config = ConfigFile.new()
+	var empty_look := CharacterDB.default_look()
+	empty_look["abilities"] = ["", ""]
+	CharacterDB._migrate_default_ability_loadout(empty_look)
+	_expect(empty_look["abilities"] == CharacterDB.DEFAULT_EQUIPPED_ABILITIES,
+		"an existing empty ability HUD receives its one-time default assignments")
+	var progress := CharacterDB.load_ability_progress(
+		PackedStringArray(["starfire", ""]))
+	_expect(int(progress.get("laser_eyes", 0)) == 1
+		and int(progress.get("meteor_punch", 0)) == 1,
+		"new profiles seed Laser Eyes and Meteor Punch at level one")
+	_expect(int(progress.get("starfire", 0)) == 1,
+		"an existing equipped ability is grandfathered at level one")
+	var all_unlocked := true
+	for id: String in ItemDB.reusable_ability_ids():
+		all_unlocked = all_unlocked and int(progress.get(id, 0)) >= 1
+	_expect(all_unlocked and not progress.has("settlement_launcher"),
+		"the development policy unlocks reusable powers without minting one-use ownership")
+	progress["starfire"] = 4
+	CharacterDB.save_progression(17.0, progress)
+	var loaded := CharacterDB.load_ability_progress()
+	_expect(is_equal_approx(CharacterDB.load_gold(), 17.0)
+		and int(loaded.get("starfire", 0)) == 4,
+		"Gold and ability_progress persist together")
+	SettingsManager._config.set_value(
+		"appearance", "owned_hats", ["c3_crown", "sword", "c3_crown"])
+	var owned_hats := CharacterDB.load_owned_hats()
+	CharacterDB.save_progression(17.0, progress, owned_hats)
+	_expect(owned_hats == PackedStringArray(["c3_crown"])
+		and SettingsManager.get_setting(
+			&"appearance", &"owned_hats", []) == ["c3_crown"],
+		"persisted owned-hat ledger accepts unique shop ids only")
+	var one_time := {
+		"settlement_launcher": [
+			{
+				"parent_site": "landing",
+				"title": "First Settlement of Colony Ship",
+				"nested_is_rejected": {"forged": true},
+			},
+			{
+				"parent_site": "landing",
+				"title": "Second Settlement of Colony Ship",
+			},
+		],
+		"laser_eyes": {"forged": true},
+	}
+	CharacterDB.save_progression(17.0, progress, owned_hats, one_time)
+	var loaded_one_time := CharacterDB.load_one_time_abilities()
+	var launcher_records: Array = loaded_one_time.get("settlement_launcher", [])
+	var first_record := launcher_records[0] as Dictionary \
+		if launcher_records.size() > 0 else {}
+	_expect(loaded_one_time.size() == 1
+		and launcher_records.size() == 2
+		and String(first_record.get("title", ""))
+			== "First Settlement of Colony Ship"
+		and not first_record.has("nested_is_rejected"),
+		"repeat one-time purchases persist as scalar-only FIFO records")
+	var stat_progress := {
+		"starfire": {
+			"speed": 3,
+			"cooldown": 99,
+			"forged": 4,
+		},
+		"settlement_launcher": {"range": 2},
+	}
+	CharacterDB.save_progression(
+		17.0, progress, owned_hats, one_time, stat_progress)
+	var loaded_stats := CharacterDB.load_ability_stat_progress()
+	_expect(loaded_stats == {
+			"starfire": {
+				"speed": 3,
+				"cooldown": ItemDB.MAX_ABILITY_STAT_LEVEL,
+			},
+		},
+		"ability stat tracks persist, clamp, and reject unknown or one-time entries")
+	var migrated := CharacterDB.sanitize_one_time_abilities({
+		"settlement_launcher": {
+			"parent_site": "landing",
+			"title": "Legacy Settlement",
+		},
+	})
+	_expect((migrated.get("settlement_launcher", []) as Array).size() == 1,
+		"legacy single-record one-time saves migrate into a one-use stack")
+	SettingsManager._config = saved_config
 
 
 func _check_starter_inventory() -> void:
@@ -288,14 +438,14 @@ func _check_starter_inventory() -> void:
 	var backpack: Array = look.get("backpack", [])
 	var worn: Dictionary = look.get("worn", {})
 	var hotbar: Array = look.get("hotbar", [])
-	for item_id: String in CharacterDB.apparel_ids(CharacterDB.DEFAULT_BODY):
+	for item_id: String in CharacterDB.starter_apparel_ids(CharacterDB.DEFAULT_BODY):
 		var count := backpack.count(item_id)
 		if worn.values().has(item_id):
 			count += 1
 		_expect(count == 1, "starter owns exactly one %s" % item_id)
-	_expect(backpack.size() + worn.size()
-		== CharacterDB.apparel_ids(CharacterDB.DEFAULT_BODY).size(),
-		"starter ownership is finite across worn and backpack")
+	for item_id: String in ItemDB.hat_shop_ids():
+		_expect(backpack.count(item_id) == 0,
+			"starter seed does not grant shop hat %s" % item_id)
 	for item_id: String in ItemDB.weapon_ids():
 		_expect(hotbar.count(item_id) + backpack.count(item_id) == 1,
 			"starter owns exactly one %s" % item_id)
@@ -317,7 +467,7 @@ func _check_starter_inventory() -> void:
 	# The first finite-inventory rollouts could leave an empty save marked as
 	# complete. The current revision repairs that all-missing state from every
 	# old marker and adds the weapons those revisions never granted.
-	for old_revision: int in [1, 2, 3, 4]:
+	for old_revision: int in [1, 2, 3, 4, 5]:
 		SettingsManager._config = ConfigFile.new()
 		SettingsManager._config.set_value(
 			"appearance", "starter_inventory_revision", old_revision)
@@ -325,7 +475,8 @@ func _check_starter_inventory() -> void:
 		CharacterDB._seed_starter_inventory(broken_look)
 		var repaired: Array = broken_look.get("backpack", [])
 		var repaired_hotbar: Array = broken_look.get("hotbar", [])
-		for item_id: String in CharacterDB.apparel_ids(CharacterDB.DEFAULT_BODY):
+		for item_id: String in CharacterDB.starter_apparel_ids(
+				CharacterDB.DEFAULT_BODY):
 			_expect(repaired.count(item_id) == 1,
 				"empty revision-%d save recovers %s" % [old_revision, item_id])
 		for item_id: String in ItemDB.weapon_ids():
@@ -428,6 +579,81 @@ func _check_graphics_toggles() -> void:
 	# undeclared global is not a silent no-op: both shaders fail to compile.
 	_expect(ProjectSettings.get_setting("shader_globals/air_chroma") != null,
 		"air_chroma is declared as a shader global")
+
+
+func _check_rim_colour_setting() -> void:
+	var gameplay: Dictionary = GameSettingsManager.DEFAULTS["gameplay"]
+	var default_colour: Variant = gameplay.get("rim_light_color", null)
+	_expect(default_colour is Color
+		and (default_colour as Color).is_equal_approx(
+			GameSettingsManager.DEFAULT_RIM_LIGHT_COLOR),
+		"gameplay settings ship with the authored green rim color")
+
+	var manager := GameSettingsManager.new()
+	manager._config = ConfigFile.new()
+	manager._config.set_value("gameplay", "fov", 88.0)
+	manager._apply_defaults()
+	_expect(manager._config.get_value(
+		"gameplay", "rim_light_color", null) is Color
+		and is_equal_approx(float(manager._config.get_value(
+			"gameplay", "fov", 0.0)), 88.0),
+		"legacy settings receive the rim color without changing gameplay choices")
+
+	var chosen := Color(0.72, 0.18, 0.94, 1.0)
+	manager.set_setting(&"gameplay", &"rim_light_color", chosen)
+	var stored: Variant = manager.get_setting(
+		&"gameplay", &"rim_light_color", Color.BLACK)
+	_expect(stored is Color and (stored as Color).is_equal_approx(chosen),
+		"changing the rim color persists the selected wheel value")
+	manager.set_setting(&"gameplay", &"rim_light_color",
+		GameSettingsManager.DEFAULT_RIM_LIGHT_COLOR)
+	manager.free()
+
+	var global_setting: Variant = ProjectSettings.get_setting(
+		"shader_globals/camera_rim_user_color")
+	var global_value: Variant = global_setting.get("value", null) \
+		if global_setting is Dictionary else null
+	var default_linear := GameSettingsManager.DEFAULT_RIM_LIGHT_COLOR.srgb_to_linear()
+	_expect(global_value is Vector3
+		and (global_value as Vector3).is_equal_approx(Vector3(
+			default_linear.r, default_linear.g, default_linear.b)),
+		"the user rim color is declared as a linear shader global")
+	var vivid_library := FileAccess.get_file_as_string(
+		"res://shaders/vivid/vivid_lib.gdshaderinc")
+	var settings_source := FileAccess.get_file_as_string(
+		"res://core/settings_manager.gd")
+	_expect(vivid_library.contains(
+		"vivid_camera_rim_colour(vec3 authored_colour)")
+		and vivid_library.contains("camera_rim_user_color")
+		and settings_source.contains("global_shader_parameter_set(")
+		and settings_source.contains("&\"camera_rim_user_color\""),
+		"the shared rim helper applies the saved color without rebuilding materials")
+
+	var panel := SettingsPanel.new()
+	panel.configure(true)
+	add_child(panel)
+	panel.show_section(2)
+	var wheel := panel.find_child(
+		"RimLightColourWheel", true, false) as ColourWheel
+	_expect(wheel != null
+		and wheel._bar().position.y >= ColourWheel.DISC
+		and wheel._swatch().position.y > wheel._bar().end.y,
+		"Gameplay embeds the Hero color circle, light bar, and preview bar")
+	var original: Variant = panel._settings.get_setting(
+		&"gameplay", &"rim_light_color",
+		GameSettingsManager.DEFAULT_RIM_LIGHT_COLOR)
+	if wheel != null:
+		wheel.previewed.emit(chosen)
+		wheel.picked.emit(chosen)
+	var ui_stored: Variant = panel._settings.get_setting(
+		&"gameplay", &"rim_light_color", Color.BLACK)
+	_expect(ui_stored is Color
+		and (ui_stored as Color).is_equal_approx(chosen),
+		"the Gameplay circle previews live and saves when released")
+	panel._settings.set_setting(&"gameplay", &"rim_light_color", original)
+	panel._settings.save_settings()
+	remove_child(panel)
+	panel.free()
 
 
 ## The depth thresholds [CelestialCycle] hands the god-rays shader, as ordering

@@ -322,7 +322,11 @@ var _roots: Array[Chunk] = []
 var _pending: Dictionary = {}
 var _finished: Array[Chunk] = []
 var _requests: Array[Chunk] = []
-var _visible: Array[Chunk] = []
+## The chunks currently drawn, as a set: written by [method _set_visible], read by
+## the collision pass and the statistics. A set rather than a list because it is
+## maintained as visibility changes instead of being rebuilt by every walk, so
+## entries have to be removable by name.
+var _visible: Dictionary = {}
 ## Chunks the last walk found wanting to split, spent nearest-first once it has
 ## finished. Collected rather than split where they are met, because the walk
 ## meets them in tree order and tree order is nothing like distance order: with a
@@ -409,6 +413,14 @@ class Chunk extends RefCounted:
 	## cannot have children until its build has landed, so the two never race.
 	var height := 0.0
 	var children: Array[Chunk] = []
+	## The chunk this one was split off, or null for a face root. Held so a mesh
+	## landing can mark the path back to the root as needing a new draw decision;
+	## see [method Planet._mark_redraw].
+	##
+	## A strong reference, and the cycle it makes with [member children] is closed
+	## by [method Planet._collapse], which is the only thing that ever removes a
+	## chunk from the tree and always clears the array holding it.
+	var parent: Chunk
 	var instance: MeshInstance3D
 	var body: StaticBody3D
 	var arrays: Array
@@ -437,6 +449,10 @@ class Chunk extends RefCounted:
 	## from ground that is already on screen without a gap, where a first build
 	## has to wait for the walk to choose it.
 	var rebuilding := false
+	## Whether this subtree's draw decision has to be worked out again, and the
+	## answer it last gave. See [method Planet._show].
+	var draw_dirty := true
+	var covered := false
 
 	func has_mesh() -> bool:
 		return instance != null
@@ -543,6 +559,9 @@ func _process(delta: float) -> void:
 		_collision_micros = 0.0
 		_frame_micros = float(Time.get_ticks_usec() - started)
 		_update_micros = _update_micros * 0.9 + _frame_micros * 0.1
+		RuntimeTelemetry.record_process_step(
+			&"terrain", &"lod_process", int(_frame_micros))
+		_charge_lod_phases()
 		return
 	# Read before it is zeroed: it is the interval since the last walk, which is
 	# what the viewer's velocity has to be measured against. `delta` is a frame,
@@ -568,11 +587,16 @@ func _process(delta: float) -> void:
 	_dispatch(eye)
 	_dispatch_micros += float(Time.get_ticks_usec() - redispatch)
 	var showing := Time.get_ticks_usec()
-	_visible.clear()
-	_near_distance = INF
-	_near_depth = -1
 	for root in _roots:
 		_show(root, eye)
+	# Over the drawn set rather than folded into the walk above, because the walk
+	# now skips subtrees whose decision still stands while this answer moves with
+	# the viewer every frame. The drawn set is the chunks the walk would have
+	# offered it anyway.
+	_near_distance = INF
+	_near_depth = -1
+	for chunk: Chunk in _visible:
+		_note_underfoot(chunk, eye)
 	_show_micros = float(Time.get_ticks_usec() - showing)
 	# No colliders in the editor: nothing there walks, and a body per chunk would
 	# be built and thrown away every time the view moved.
@@ -585,6 +609,30 @@ func _process(delta: float) -> void:
 	# Rolling average rather than the last frame: mesh handoffs make single frames
 	# swing by an order of magnitude, and the average is what costs frame rate.
 	_update_micros = _update_micros * 0.9 + _frame_micros * 0.1
+	RuntimeTelemetry.record_process_step(
+		&"terrain", &"lod_process", int(_frame_micros))
+	_charge_lod_phases()
+
+
+## Files the phases this step already measures for itself with the flight recorder.
+##
+## The debug overlay reads them as a rolling average, which is the wrong shape for
+## finding a hitch: a sixteen-millisecond terrain frame is one of adopting finished
+## chunks, walking the tree, choosing what is drawn, or rebuilding collision, and the
+## average cannot say which. Deep tracing only; the timers themselves are always on.
+func _charge_lod_phases() -> void:
+	if not RuntimeTelemetry.deep_enabled():
+		return
+	RuntimeTelemetry.record_activity(&"terrain", &"lod_apply",
+		int(_apply_micros))
+	RuntimeTelemetry.record_activity(&"terrain", &"lod_dispatch",
+		int(_dispatch_micros))
+	RuntimeTelemetry.record_activity(&"terrain", &"lod_refine",
+		int(_refine_micros))
+	RuntimeTelemetry.record_activity(&"terrain", &"lod_show",
+		int(_show_micros))
+	RuntimeTelemetry.record_activity(&"terrain", &"lod_collision",
+		int(_collision_micros))
 
 
 # --- Public surface queries -------------------------------------------------
@@ -656,9 +704,17 @@ func _mark_ground(scar: TerrainScars.Scar) -> void:
 ## over the patch are worth keeping until the rebuild lands. See [method
 ## _mark_stale].
 func mark_region_stale(direction: Vector3, arc: float, drop := 0.0) -> void:
+	var began := Time.get_ticks_usec() if RuntimeTelemetry.deep_enabled() else 0
 	var at := direction.normalized()
 	for root in _roots:
 		_mark_stale(root, at, arc, drop)
+	var colonies := get_node_or_null("MeepColonies")
+	if colonies != null and colonies.has_method(&"terrain_deformed"):
+		colonies.call(&"terrain_deformed", at, arc, drop)
+	if began > 0:
+		RuntimeTelemetry.record_activity(
+			&"terrain", &"mark_region_stale",
+			Time.get_ticks_usec() - began, arc)
 
 
 func _mark_stale(chunk: Chunk, at: Vector3, arc: float, drop: float) -> void:
@@ -1141,7 +1197,11 @@ func _split(chunk: Chunk) -> void:
 	var half := chunk.size * 0.5
 	for corner in 4:
 		var offset := chunk.offset + Vector2(float(corner % 2) * half, float(corner / 2) * half)
-		chunk.children.append(_make_chunk(chunk.face, offset, half, chunk.depth + 1, chunk.height))
+		var child := _make_chunk(
+			chunk.face, offset, half, chunk.depth + 1, chunk.height)
+		child.parent = chunk
+		chunk.children.append(child)
+	_mark_redraw(chunk)
 
 
 func _collapse(chunk: Chunk) -> void:
@@ -1149,22 +1209,50 @@ func _collapse(chunk: Chunk) -> void:
 		_collapse(child)
 		_drop(child)
 	chunk.children.clear()
+	_mark_redraw(chunk)
 
 
 func _drop(chunk: Chunk) -> void:
 	chunk.discarded = true
+	_visible.erase(chunk)
 	if chunk.instance != null:
 		chunk.instance.queue_free()
 		chunk.instance = null
 	if chunk.body != null:
 		chunk.body.queue_free()
 		chunk.body = null
+	if chunk.parent != null:
+		_mark_redraw(chunk.parent)
+	chunk.parent = null
 
 
 ## Walks the tree deciding what to draw, and returns whether this subtree is fully
 ## covered. A parent keeps its mesh on screen until every descendant that replaces
 ## it is ready, so the ground never opens up mid-build.
+##
+## The decision reads two things and no others: whether a chunk has children, and
+## whether each of them has a mesh. Neither depends on where the viewer is, so a
+## subtree that nothing has happened to since the last walk cannot have changed its
+## mind, and this returns the answer it gave then rather than visiting every node
+## under it. What marks a subtree for reconsideration is a mesh landing, a split, a
+## collapse, a drop, or being hidden for a sibling's sake, each of which calls
+## [method _mark_redraw] on the path back to the root; the walk clears the flags on its
+## way down.
+##
+## That last one is the subtle one, and [method _hide] is where the reasoning lives: a
+## cached answer is a promise that the visibility to match it has already been applied,
+## so anything that moves a chunk off screen from outside this walk has to put its
+## decision back in question or the promise quietly becomes a lie.
+##
+## Both counts matter. The tree runs to a thousand nodes and this walk is one of the
+## three expensive passes here, and it was running over all of them up to 45 times a
+## second — while a single mesh arriving changes the answer for its own ancestors and
+## for nothing else. Standing still it now costs nothing at all.
 func _show(chunk: Chunk, eye: Vector3) -> bool:
+	if not chunk.draw_dirty:
+		return chunk.covered
+	chunk.draw_dirty = false
+	chunk.covered = true
 	if not chunk.children.is_empty():
 		var covered := true
 		for child in chunk.children:
@@ -1176,11 +1264,23 @@ func _show(chunk: Chunk, eye: Vector3) -> bool:
 			_hide(child)
 	if chunk.has_mesh():
 		_set_visible(chunk, true)
-		_visible.append(chunk)
-		_note_underfoot(chunk, eye)
 		return true
 	_set_visible(chunk, false)
+	chunk.covered = false
 	return false
+
+
+## Notes that a subtree has to work its draw decision out again, and its ancestors
+## with it, since what a parent draws depends on what its children managed to.
+##
+## Stops as soon as it meets a chunk already marked: a marked chunk's own ancestors
+## were marked when it was, and only [method _show] clears flags, which it does
+## from the root downwards. So "marked" always implies "marked all the way up".
+func _mark_redraw(chunk: Chunk) -> void:
+	var up := chunk
+	while up != null and not up.draw_dirty:
+		up.draw_dirty = true
+		up = up.parent
 
 
 ## Records the finest chunk drawn over the viewer, which is the resolution the
@@ -1222,8 +1322,29 @@ func _note_underfoot(chunk: Chunk, eye: Vector3) -> void:
 	_near_distance = lateral
 
 
+## Takes a subtree off screen, and puts its draw decision back in question.
+##
+## The second half is what [method _show]'s memo rests on: a cached answer promises the
+## visibility to match it has already been applied, and this is the one place that can
+## quietly make that false. A chunk is hidden here because a *sibling* had not finished
+## building, so the level cannot be drawn yet — nothing about the chunk itself changed,
+## and nothing would mark it again. It would go on reporting that it covers its own
+## ground while being invisible, so the walk that finally saw that sibling arrive would
+## hide the parent in favour of children that are hidden, and leave a hole in the planet
+## you could see the sea through.
+##
+## Marking upward as well is not optional, because [method _mark_redraw] takes a marked
+## chunk to imply a marked path to the root and stops climbing when it meets one.
+## Marking only downward from here would strand these flags below an unmarked ancestor,
+## and the walk would never reach them to act on. The cost is that a level in the middle
+## of being built keeps its ancestors in question every frame, which is the answer
+## genuinely changing that often; once it finishes, the flags settle and the walk stops
+## visiting it at all.
 func _hide(chunk: Chunk) -> void:
 	_set_visible(chunk, false)
+	chunk.draw_dirty = true
+	if chunk.parent != null:
+		_mark_redraw(chunk.parent)
 	for child in chunk.children:
 		_hide(child)
 
@@ -1233,6 +1354,14 @@ func _set_visible(chunk: Chunk, shown: bool) -> void:
 	# changed, and this runs over every node in the tree every frame.
 	if chunk.instance != null and chunk.instance.visible != shown:
 		chunk.instance.visible = shown
+	# The drawn set is kept here, where drawing is decided, rather than collected
+	# by the walk that decides it — because that walk now skips the parts of the
+	# tree whose answer has not changed, and a list rebuilt only from what was
+	# visited would lose every chunk that is still quietly on screen.
+	if shown and chunk.instance != null:
+		_visible[chunk] = true
+	else:
+		_visible.erase(chunk)
 	# Ground nobody can see is ground nobody can stand on. This is also what
 	# retires a parent's collider once its children have taken over.
 	if not shown and chunk.body != null:
@@ -1341,6 +1470,11 @@ func _attach(chunk: Chunk) -> void:
 	add_child(instance, false, Node.INTERNAL_MODE_BACK)
 	chunk.instance = instance
 	chunk.rebuilding = false
+	if shown:
+		_visible[chunk] = true
+	# A mesh where there was none is the one thing that changes what the draw walk
+	# decides, so the path back to the root is asked again on the next walk.
+	_mark_redraw(chunk)
 	# The collider was generated from the mesh that has just been replaced, so it
 	# goes with it — and it is replaced here and now rather than left to the next
 	# collision pass.

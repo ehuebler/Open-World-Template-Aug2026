@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "id": "volcanoronomous",
+  "class_name": "VolcanoronomousBoss",
+  "display_name": "Volcanoronomous",
+  "description": "A host-authoritative caldera dragon awakened by a grounded volcano trial before it takes the arena with swoops, eye beams, claws, and evasive flight.",
+  "asset": {
+    "source": "res://assets/source/meshmaker/volcanoronomous.blend",
+    "runtime_glb": "res://assets/runtime/characters/volcanoronomous.glb",
+    "builder": "res://assets/source/blender/build_volcanoronomous.py"
+  },
+  "controller": {
+    "mode": "custom",
+    "scene": "res://game/enemies/volcanoronomous/volcanoronomous.tscn",
+    "script": "res://game/enemies/volcanoronomous/volcanoronomous.gd"
+  },
+  "health": 50000.0,
+  "arena": {
+    "radius": 900.0,
+    "detection_radius": 1040.0,
+    "reset_delay": 7.0,
+    "distance_mode": "surface_arc"
+  },
+  "combat": {
+    "radius": 5.8,
+    "center_height": 5.6
+  },
+  "collision": {
+    "shape": "sphere",
+    "radius": 5.8,
+    "offset": [
+      0.0,
+      5.6,
+      0.0
+    ]
+  },
+  "animations": {
+    "rest": "Idle",
+    "fly": "Fly",
+    "swoop": "Swoop",
+    "laser": "Laser",
+    "claw": "Claw",
+    "dodge": "Dodge",
+    "emerge": "Emerge",
+    "hit_react": "HitReact",
+    "defeat": "Defeat"
+  },
+  "moves": [
+    {
+      "id": "swoop",
+      "behavior": "custom:volcanoronomous_swoop",
+      "animations": {
+        "attack": "Swoop"
+      }
+    },
+    {
+      "id": "laser",
+      "behavior": "custom:volcanoronomous_laser",
+      "animations": {
+        "attack": "Laser"
+      }
+    },
+    {
+      "id": "claw",
+      "behavior": "custom:volcanoronomous_claw",
+      "animations": {
+        "attack": "Claw"
+      }
+    },
+    {
+      "id": "dodge",
+      "behavior": "custom:volcanoronomous_dodge",
+      "animations": {
+        "evade": "Dodge"
+      }
+    }
+  ],
+  "pretriggers": [
+    "caldera_run"
+  ],
+  "location": {
+    "mode": "planet_surface",
+    "direction": [
+      0.0,
+      -1.0,
+      0.0
+    ],
+    "facing": 0.0,
+    "clearance": 18.0
+  },
+  "waypoint": {
+    "enabled": true,
+    "title": "Volcanoronomous",
+    "tint": "#ff3b16",
+    "show_beyond": 0.0,
+    "aimed_beyond": 0.0,
+    "hide_beyond": 0.0
+  },
+  "material": "res://game/enemies/volcanoronomous/volcanoronomous_surface.tres",
+  "tags": [
+    "boss",
+    "volcano",
+    "flying"
+  ],
+  "extensions": {
+    "site_node_name": "VolcanoronomousCaldera",
+    "boss_node_name": "Volcanoronomous",
+    "site_script": "res://game/enemies/volcanoronomous/volcanoronomous_site.gd"
+  }
+}

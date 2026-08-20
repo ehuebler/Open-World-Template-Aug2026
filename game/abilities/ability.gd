@@ -47,7 +47,8 @@ func configure(owner: OnlinePlayer, index: int, id: String,
 	allowed_stances.clear()
 	if record is AbilityDefinition:
 		definition = record
-		stats = definition.stats
+		stats = player.ability_stats(ability_id) \
+			if player != null else ItemDB.stats_of(ability_id)
 		blocked_underwater = definition.blocked_underwater
 		for stance_value: int in definition.allowed_stances:
 			allowed_stances.append(stance_value)

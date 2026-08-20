@@ -32,6 +32,7 @@ func _ready() -> void:
 	_abilities.resize(player.abilities.size())
 	_built_for.resize(player.abilities.size())
 	player.abilities.changed.connect(_on_slots_changed)
+	player.progression_changed.connect(_on_progression_changed)
 	player.ability_activated.connect(_on_activated)
 	player.ability_released.connect(_on_released)
 	_rebuild()
@@ -61,6 +62,13 @@ func _on_slots_changed() -> void:
 	_rebuild()
 
 
+func _on_progression_changed() -> void:
+	# An equipped id can stay in the same slot while an upgrade changes the
+	# central scaled stats used by its runtime instance.
+	_built_for.fill("")
+	_rebuild()
+
+
 func _rebuild() -> void:
 	for index in _abilities.size():
 		var id := player.abilities.get_item(index)
@@ -74,7 +82,8 @@ func _rebuild() -> void:
 
 
 func _make(index: int, id: String) -> Ability:
-	if not ItemDB.accepts_ability(id):
+	if not ItemDB.accepts_ability(id) \
+			or not ItemDB.ability_directly_equippable(id):
 		return null
 	var definition := ItemDB.ability_definition(id)
 	if definition == null:

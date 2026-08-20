@@ -60,6 +60,25 @@ func reset(id := "") -> void:
 	save_progress()
 
 
+func snapshot() -> PackedStringArray:
+	var out := PackedStringArray()
+	for id: String in JournalDB.ENTRIES:
+		if is_done(id):
+			out.push_back(id)
+	return out
+
+
+func apply_snapshot(state: Variant, persist := true) -> void:
+	_done.clear()
+	if state is Array or state is PackedStringArray:
+		for entry: Variant in state:
+			var id := String(entry)
+			if JournalDB.has_entry(id):
+				_done[id] = true
+	if persist:
+		save_progress()
+
+
 ## Walks the unfinished entries and completes any whose condition now holds.
 ## `where` is the player's global position; `tree` is how landmarks are found.
 func track(where: Vector3, tree: SceneTree, delta: float) -> void:
@@ -84,7 +103,7 @@ func track(where: Vector3, tree: SceneTree, delta: float) -> void:
 func _landmarks(tree: SceneTree) -> Dictionary:
 	var out: Dictionary = {}
 	for node in tree.get_nodes_in_group(Landmark.GROUP):
-		var landmark := node as Landmark
+		var landmark := LandmarkAccess.as_location(node)
 		if landmark != null:
 			out[landmark.name] = landmark.global_position
 	return out

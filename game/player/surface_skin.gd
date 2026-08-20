@@ -14,6 +14,8 @@ extends RefCounted
 ## surface needs is either in the template or manufactured by the shader.
 
 const TEMPLATE := preload("res://game/player/player_suit.tres")
+## Authored shared-green marker. vivid_camera_rim_colour replaces this exact hue
+## with the player's saved Gameplay color while preserving unique species rims.
 const CAMERA_RIM_COLOR := Color(0.20, 1.0, 0.58)
 const CAMERA_RIM_ENERGY := 1.25
 const CAMERA_RIM_DARK := 0.68

@@ -344,6 +344,19 @@ func _gameplay_section() -> VBoxContainer:
 		func(value: float) -> void: _write(&"gameplay", &"fov", value),
 		"deg"
 	))
+	var rim_value: Variant = _settings.get_setting(
+		&"gameplay", &"rim_light_color",
+		GameSettingsManager.DEFAULT_RIM_LIGHT_COLOR)
+	var rim_colour := rim_value as Color if rim_value is Color \
+		else GameSettingsManager.DEFAULT_RIM_LIGHT_COLOR
+	tab.add_child(_color_row(
+		"Rim light color",
+		rim_colour,
+		func(value: Color) -> void:
+			_settings.set_setting(&"gameplay", &"rim_light_color", value),
+		func(value: Color) -> void:
+			_write(&"gameplay", &"rim_light_color", value)
+	))
 	return tab
 
 
@@ -519,6 +532,38 @@ func _slider_row(
 	update_label.call(value)
 	slider.value_changed.connect(update_label)
 	slider.value_changed.connect(callback)
+	return _row_panel(group)
+
+
+func _color_row(
+		label_text: String,
+		value: Color,
+		preview_callback: Callable,
+		callback: Callable
+	) -> Control:
+	var group := VBoxContainer.new()
+	group.add_theme_constant_override(&"separation", 7)
+	var label := Label.new()
+	label.text = label_text
+	_style_red_label(label, RED_TEXT, 13)
+	group.add_child(label)
+
+	var centre := CenterContainer.new()
+	centre.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	group.add_child(centre)
+	var wheel := ColourWheel.new()
+	wheel.name = "RimLightColourWheel"
+	wheel.tooltip_text = (
+		"Circle: hue and saturation  //  middle bar: light level"
+	)
+	wheel.set_colour(Color(value.r, value.g, value.b, 1.0))
+	wheel.previewed.connect(func(colour: Color) -> void:
+		preview_callback.call(Color(colour.r, colour.g, colour.b, 1.0))
+	)
+	wheel.picked.connect(func(colour: Color) -> void:
+		callback.call(Color(colour.r, colour.g, colour.b, 1.0))
+	)
+	centre.add_child(wheel)
 	return _row_panel(group)
 
 

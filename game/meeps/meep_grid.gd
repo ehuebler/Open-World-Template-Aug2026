@@ -39,14 +39,17 @@ enum Terrain {
 	## Held by something the colony put there, or by terrain that was recut after
 	## the bake.
 	BLOCKED,
+	## Append-only raw water class no more than five metres below sea level.
+	## It remains unwalkable until a completed dock surface overrides it.
+	SHALLOW,
 }
 
 ## Metres per cell. Two is a Meep's own stride and about the narrowest road worth
 ## laying, which keeps the grid honest as both a navigation mesh and a plan.
 const CELL := 2.0
-## Cells across. 128 at two metres is a 256 m square, which holds a 100 m claim
-## with room for it to grow before any of this has to be rebuilt bigger.
-const CELLS := 128
+## Cells across. 192 at two metres is a 384 m square: enough for the 185 m maximum
+## continuous claim plus a navigation margin without reallocating cell snapshots.
+const CELLS := 192
 
 ## Nothing here yet.
 const FLAG_NONE := 0
@@ -60,6 +63,18 @@ const FLAG_BUILDING := 1 << 2
 ## Promised to a job that has not finished, so two crews cannot plan the same
 ## square.
 const FLAG_RESERVED := 1 << 3
+## A completed elevated bridge, ramp, or dock deck overrides raw terrain.
+const FLAG_SURFACE := 1 << 4
+## The colony or settlement ship's central footprint. Unlike a structure this is
+## reconstructed from the settlement site rather than replicated, but it is equally
+## impassable: routes belong on the circular plaza road around the hull, not under it.
+const FLAG_SHIP := 1 << 5
+## Deliberately open district parcel. Meeps may walk and gather here, but later
+## building and road planners must preserve it as a park.
+const FLAG_PARK := 1 << 6
+## A free lot in the immutable city blueprint. It remains ordinary walkable ground
+## until construction starts, but roads may not consume it first.
+const FLAG_PLANNED_LOT := 1 << 7
 
 ## Steepest ground a Meep will walk, in degrees. Generous enough for dunes and
 ## hillside, mean enough to refuse the canyon walls at Vacationer's Landing.
@@ -73,16 +88,24 @@ const FALL_LIMIT := 3.5
 ## itself is left to the sea so that a boundary drawn against it sits above the
 ## tide rather than in it.
 const SHORE_MARGIN := 0.6
+const SHALLOW_DEPTH := 5.0
 
 ## Cost units for one orthogonal step of open ground. Ten rather than one so that
 ## a road can be cheaper than dirt later without any of this becoming fractional.
 const STEP_COST := 10
+## Strong enough that a route chooses a modest street detour over an open-lot
+## shortcut. Runtime walkers now consult these fields on town errands, so this is a
+## visible travel preference rather than only an obstacle-routing tie-break.
+const ROAD_COST := 2
 ## sqrt(2), in the same units.
 const DIAGONAL_COST := 14
 ## Added for every point of hazard on a cell. Reserved for the mobs pass: a Meep
 ## will detour a long way around somewhere its colony has learned to fear, but
 ## will still cross it rather than refuse to move.
 const HAZARD_COST := 6
+## Routes may cross an empty future lot, but prefer its surrounding streets so the
+## road planner does not repeatedly choose a path it is forbidden to pave.
+const PLANNED_LOT_COST := 40
 
 var site: MeepSite
 var cells := CELLS
@@ -96,6 +119,13 @@ var flags := PackedByteArray()
 var hazard := PackedByteArray()
 ## Ground height above sea level per cell, in metres.
 var heights := PackedFloat32Array()
+## Deck height above sea level. NAN means raw terrain.
+var surface_heights := PackedFloat32Array()
+## Registry-authored regional ownership. Empty keeps legacy isolated-city behavior.
+## Setback cells remain claimable by their owner but are reserved for a shared wall.
+var region_owner := PackedByteArray()
+var region_setback := PackedByteArray()
+var region_revision := -1
 ## Bumped whenever anything above changes, so cost fields built against an older
 ## version of the ground know to throw themselves away.
 var revision := 0
@@ -116,6 +146,8 @@ func _init(for_site: MeepSite, across := CELLS, metres := CELL) -> void:
 	flags.resize(total)
 	hazard.resize(total)
 	heights.resize(total)
+	surface_heights.resize(total)
+	surface_heights.fill(NAN)
 
 
 ## Metres from the colony centre to the edge of the map.
@@ -163,6 +195,18 @@ func height_at(cell: Vector2i) -> float:
 	return heights[index(cell)]
 
 
+func walk_height_at(cell: Vector2i) -> float:
+	if not inside(cell):
+		return 0.0
+	var at := index(cell)
+	return surface_heights[at] \
+		if is_finite(surface_heights[at]) else heights[at]
+
+
+func has_walk_surface(cell: Vector2i) -> bool:
+	return inside(cell) and is_finite(surface_heights[index(cell)])
+
+
 func flags_at(cell: Vector2i) -> int:
 	if not inside(cell):
 		return FLAG_NONE
@@ -183,14 +227,90 @@ func set_flag(cell: Vector2i, flag: int, on := true) -> void:
 		revision += 1
 
 
+func set_surface(cell: Vector2i, height: float, on := true,
+		override_terrain := true) -> void:
+	if not inside(cell):
+		return
+	var at := index(cell)
+	var was_height := surface_heights[at]
+	var was_flag := (flags[at] & FLAG_SURFACE) != 0
+	if on and is_finite(height):
+		surface_heights[at] = height
+		if override_terrain:
+			flags[at] |= FLAG_SURFACE
+		else:
+			flags[at] &= ~FLAG_SURFACE
+	else:
+		surface_heights[at] = NAN
+		flags[at] &= ~FLAG_SURFACE
+	var now_flag := (flags[at] & FLAG_SURFACE) != 0
+	if was_flag != now_flag or (on and not is_equal_approx(was_height, height)):
+		revision += 1
+
+
+func bind_region_masks(owner: PackedByteArray, setback: PackedByteArray,
+		plan_revision: int) -> void:
+	var total := cells * cells
+	if owner.size() != total:
+		owner = PackedByteArray()
+	if not setback.is_empty() and setback.size() != total:
+		setback = PackedByteArray()
+	if plan_revision == region_revision and owner == region_owner \
+			and setback == region_setback:
+		return
+	region_owner = owner.duplicate()
+	region_setback = setback.duplicate()
+	region_revision = plan_revision
+	revision += 1
+
+
+func regionally_owned(cell: Vector2i) -> bool:
+	return inside(cell) and regionally_owned_index(index(cell))
+
+
+func regionally_owned_index(at: int) -> bool:
+	return at >= 0 and at < cells * cells \
+		and (region_owner.is_empty() or region_owner[at] != 0)
+
+
+func region_buildable(cell: Vector2i) -> bool:
+	if not inside(cell):
+		return false
+	return region_buildable_index(index(cell))
+
+
+func region_buildable_index(at: int) -> bool:
+	return regionally_owned_index(at) \
+		and (region_setback.is_empty() or region_setback[at] == 0)
+
+
 ## Whether a Meep can stand here. Blocked cells and everything outside the map are
 ## no; a claim is not required, because Meeps walk out of their town to work.
 func passable(cell: Vector2i) -> bool:
 	if not inside(cell):
 		return false
-	if terrain[index(cell)] != Terrain.PASSABLE:
+	var at := index(cell)
+	if terrain[at] != Terrain.PASSABLE \
+			and (flags[at] & FLAG_SURFACE) == 0:
 		return false
-	return (flags[index(cell)] & FLAG_BUILDING) == 0
+	return (flags[at] & (FLAG_BUILDING | FLAG_SHIP)) == 0
+
+
+## Claim membership and walking are deliberately separate. Coasts may reserve
+## connected shallow water before its dock exists; every other unsupported terrain
+## needs a completed constructed surface before a claim can flood through it.
+func raw_claimable(cell: Vector2i, coasts := false) -> bool:
+	if not inside(cell):
+		return false
+	if has_flag(cell, FLAG_SURFACE):
+		return true
+	match terrain_at(cell):
+		Terrain.PASSABLE:
+			return true
+		Terrain.SHALLOW:
+			return coasts
+		_:
+			return false
 
 
 ## What crossing this cell costs, in the units of [constant STEP_COST]. Only
@@ -198,11 +318,11 @@ func passable(cell: Vector2i) -> bool:
 func cost_at(cell: Vector2i) -> int:
 	var at := index(cell)
 	var cost := STEP_COST
-	# Roads are the whole reason cost is not a boolean. Nothing sets this flag in
-	# this build; when the roads pass does, every Meep on the planet starts
-	# preferring them without a line changing here or in the cost field.
+	# Roads are the whole reason cost is not a boolean.
 	if (flags[at] & FLAG_ROAD) != 0:
-		cost = STEP_COST / 2
+		cost = ROAD_COST
+	elif (flags[at] & FLAG_PLANNED_LOT) != 0:
+		cost += PLANNED_LOT_COST
 	return cost + hazard[at] * HAZARD_COST
 
 
@@ -283,7 +403,8 @@ func _classify() -> void:
 			var at := row + x
 			var here := heights[at]
 			if here < SHORE_MARGIN:
-				terrain[at] = Terrain.WATER
+				terrain[at] = Terrain.SHALLOW \
+					if here >= -SHALLOW_DEPTH else Terrain.WATER
 				continue
 			var west := heights[at - 1] if x > 0 else here
 			var east := heights[at + 1] if x < cells - 1 else here

@@ -9,7 +9,6 @@ extends CharacterBody3D
 
 signal health_changed(current: float, maximum: float)
 signal died
-signal respawned
 
 enum MotionState {
 	IDLE,
@@ -23,6 +22,14 @@ enum MotionState {
 	FLEE,
 	## Circling whoever hurt it while staying turned toward them.
 	STRAFE,
+	## Pawing the ground, telegraphing a charge it has not committed to yet.
+	PAW,
+	## Committed and running the line, horn down.
+	CHARGE,
+	## Walking toward a chosen adult of the same species.
+	COURTSHIP,
+	## Stopped face-to-face while the courtship timer finishes.
+	MATE,
 }
 
 const SPIT := preload("res://game/fauna/fauna_spit.gd")
@@ -35,10 +42,26 @@ const BODY_SLAP_RECOVERY := 0.48
 ## is shown. Both are presentation timers, replicated so clients match the host.
 const SPIT_RECOVERY := 0.42
 const HIT_CLIP_SECONDS := 0.45
+## How long the gore clip stays up after the horn connects, and how far past a
+## target a charge will carry before it accepts that it missed.
+const GORE_CLIP_SECONDS := 0.5
+const CHARGE_OVERRUN := 2.5
 const FLOOR_CLEARANCE := 0.025
 const THINK_INTERVAL := 0.14
 const SURFACE_GUARD_INTERVAL := 0.12
+## Simulation rate for a creature that is already walking the height field rather
+## than sweeping its capsule. Bands are multiples of the species'
+## [member FaunaSpecies.physics_within]; the interval is how often the whole step
+## — decide, face, plant on the ground, publish — is run. Between those steps the
+## creature keeps drifting along the velocity it already had, so what is turned
+## down is the thinking and the terrain reads rather than the motion.
+const COARSE_BANDS: Array[float] = [2.0, 4.0]
+const COARSE_INTERVALS: Array[float] = [0.05, 0.1, 0.2]
 const CONTACT_SCAN_INTERVAL := 0.1
+const MIGRATION_SPEED_SHARE := 0.55
+## Size presentation is only rebuilt after a visible fraction of growth. A
+## ninety-second childhood does not need sixty collision-shape writes a second.
+const GROWTH_PRESENTATION_STEP := 0.001
 ## Prism-Coil is a squat cylinder: its long-axis half length is about 44% of
 ## its authored height after the asset is turned to face down the travel axis.
 const END_OVER_END_HALF_LENGTH_SHARE := 0.44
@@ -56,12 +79,19 @@ var _planet: Planet
 var _initial_transform := Transform3D.IDENTITY
 var _spawn_transform := Transform3D.IDENTITY
 var _biome_tint := Color.WHITE
+var _adult_height := 1.0
 var _instance_height := 1.0
+var _growth := 1.0
+var _presented_growth := -1.0
 var _maximum_health := 1.0
 var _health := 1.0
 var _alive := true
+var _grappled := false
+var _grapple_carrier: Node3D
 var _lassoed := false
 var _lasso_source_peer := 0
+var _captured := false
+var _captured_by_peer := 0
 
 var _collision: CollisionShape3D
 var _visual_root: Node3D
@@ -72,11 +102,14 @@ var _animator: AnimationPlayer
 var _current_clip := ""
 
 var _motion_state: MotionState = MotionState.IDLE
+## The host's concrete combat target. Players are ordinary actor nodes; a Meep
+## target is its colony node plus a stable packed-array row.
+var _target_actor: Node3D
+var _target_row := -1
 var _target_peer := 0
 var _attack_elapsed := 0.0
 var _attack_impact_done := false
 var _attack_cooldown_left := 0.0
-var _respawn_left := 0.0
 var _alert_left := 0.0
 var _wander_left := 0.0
 var _wander_heading := Vector3.ZERO
@@ -90,14 +123,28 @@ var _think_left := 0.0
 var _surface_guard_left := 0.0
 var _contact_scan_left := 0.0
 var _cached_nearest_player: Node3D
+var _cached_behaviour_target: Node3D
+var _cached_behaviour_target_row := -1
 var _player_gap := INF
 var _physics_body := false
+var _coarse_carry := 0.0
 var _graze_left := 0.0
 var _provoked_left := 0.0
 var _spit_windup_left := 0.0
 var _spit_show_left := 0.0
 var _hit_show_left := 0.0
 var _strafe_sign := 1.0
+var _charge_left := 0.0
+var _charge_recover_left := 0.0
+var _charge_heading := Vector3.ZERO
+var _gore_show_left := 0.0
+var _mate_actor: FaunaMob
+var _courtship_left := 0.0
+var _mate_cooldown_left := 0.0
+## Planet-local destination for den-born animals. Zero is an ordinary resident;
+## a normalized direction walks toward the nearest city's outer claim.
+var _migration_direction := Vector3.ZERO
+var _migration_stop_radius := 0.0
 
 var _network_transform := Transform3D.IDENTITY
 var _network_velocity := Vector3.ZERO
@@ -112,13 +159,20 @@ var _base_brightness := 1.0
 
 func configure(definition: FaunaSpecies, id: String, seed: int,
 		at_transform: Transform3D, biome_tint := Color.WHITE,
-		owner: Node = null) -> void:
+		owner: Node = null, growth := 1.0,
+		migration_direction := Vector3.ZERO,
+		migration_stop_radius := 0.0) -> void:
 	species = definition
 	mob_id = id
 	spawn_seed = maxi(seed, 1)
 	_initial_transform = at_transform
 	_biome_tint = biome_tint
 	_spawner = owner
+	_growth = clampf(growth, 0.1, 1.0)
+	_migration_direction = migration_direction.normalized() \
+		if migration_direction.is_finite() \
+			and migration_direction.length_squared() > 0.5 else Vector3.ZERO
+	_migration_stop_radius = maxf(migration_stop_radius, 0.0)
 
 
 func _ready() -> void:
@@ -130,8 +184,9 @@ func _ready() -> void:
 	_planet = _find_planet()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = spawn_seed
-	_instance_height = species.height * rng.randf_range(
+	_adult_height = species.height * rng.randf_range(
 		1.0 - species.height_variation, 1.0 + species.height_variation)
+	_instance_height = _adult_height * _growth
 	_maximum_health = maxf(species.health_for(_instance_height), 1.0)
 	_health = _maximum_health
 	_build_collision()
@@ -147,35 +202,76 @@ func _ready() -> void:
 	_surface_guard_left = _seed_unit(97) * SURFACE_GUARD_INTERVAL
 	_contact_scan_left = _seed_unit(109) * CONTACT_SCAN_INTERVAL
 	_strafe_sign = 1.0 if _seed_unit(127) < 0.5 else -1.0
+	_mate_cooldown_left = species.mate_cooldown * lerpf(
+		0.18, 0.52, _seed_unit(149)) if is_adult() else species.mate_cooldown
+	_presented_growth = _growth
 
 
 func _process(delta: float) -> void:
+	var began := Time.get_ticks_usec() if RuntimeTelemetry.deep_enabled() else 0
 	_clock += delta
+	if _is_host():
+		_advance_growth(delta)
 	_flash_left = maxf(_flash_left - delta, 0.0)
 	_spit_show_left = maxf(_spit_show_left - delta, 0.0)
 	_hit_show_left = maxf(_hit_show_left - delta, 0.0)
+	_gore_show_left = maxf(_gore_show_left - delta, 0.0)
 	if _motion_state == MotionState.ATTACK:
 		_visual_attack_elapsed += delta
 	else:
 		_visual_attack_elapsed = 0.0
 	_animate_visual(delta)
 	_update_damage_flash()
+	if began > 0:
+		RuntimeTelemetry.record_process_step(&"fauna", &"mob_present",
+			Time.get_ticks_usec() - began)
 
 
+## Timed separately from the presentation half, because a herd is the most
+## numerous scripted callback in a settled world and the two halves are turned
+## down by different things.
 func _physics_process(delta: float) -> void:
+	if not RuntimeTelemetry.deep_enabled():
+		_advance(delta)
+		return
+	var began := Time.get_ticks_usec()
+	_advance(delta)
+	RuntimeTelemetry.record_physics_step(
+		&"fauna", &"mob_think", Time.get_ticks_usec() - began)
+
+
+func _advance(delta: float) -> void:
 	if not _is_host():
-		if not _lassoed:
+		if _grappled:
+			if not is_instance_valid(_grapple_carrier):
+				end_grapple(global_position, _up())
+			return
+		if not _lassoed and not _captured:
 			_follow_network(delta)
 		return
+	if _captured:
+		return
+	var coarse := _coarse_interval()
+	if coarse > 0.0:
+		_coarse_carry += delta
+		if _coarse_carry < coarse:
+			_drift(delta)
+			return
+		# Every clock below is advanced by the whole gathered interval, so a
+		# creature simulated eight times a second ages at the same rate as one
+		# simulated sixty times a second.
+		delta = _coarse_carry
+		_coarse_carry = 0.0
 	_attack_cooldown_left = maxf(_attack_cooldown_left - delta, 0.0)
+	_mate_cooldown_left = maxf(_mate_cooldown_left - delta, 0.0)
 	_alert_left = maxf(_alert_left - delta, 0.0)
 	_contact_scan_left = maxf(_contact_scan_left - delta, 0.0)
 	_provoked_left = maxf(_provoked_left - delta, 0.0)
 	if not _alive:
-		_respawn_left = maxf(_respawn_left - delta, 0.0)
-		if _respawn_left <= 0.0:
-			_respawn()
-		_publish_event()
+		return
+	if _grappled:
+		if not is_instance_valid(_grapple_carrier):
+			end_grapple(global_position, _up())
 		return
 	if _lassoed:
 		return
@@ -197,8 +293,16 @@ func _physics_process(delta: float) -> void:
 		move_and_slide()
 		if is_on_floor():
 			velocity = velocity.move_toward(Vector3.ZERO, 16.0 * delta)
+	elif _mate_actor != null:
+		_update_courtship(delta)
 	elif _motion_state == MotionState.ATTACK:
 		_update_body_slap(delta)
+	elif _motion_state == MotionState.PAW:
+		_update_paw(delta)
+	elif _motion_state == MotionState.CHARGE:
+		_update_charge(delta)
+	elif _charge_recover_left > 0.0:
+		_update_charge_recover(delta)
 	else:
 		_update_behaviour(delta)
 	if species.attack_style == FaunaSpecies.AttackStyle.CONTACT \
@@ -216,14 +320,16 @@ func _physics_process(delta: float) -> void:
 
 
 func _update_behaviour(delta: float) -> void:
-	var target := _nearest_player_for_behaviour(delta)
+	var target := _nearest_target_for_behaviour(delta)
+	var target_row := _cached_behaviour_target_row
+	var target_at := _target_position_of(target, target_row)
 	var toward_target := Vector3.ZERO
 	var target_gap := INF
-	if target != null:
+	if target != null and target_at.is_finite():
 		toward_target = _flat_direction(
-			target.global_position - global_position, _up())
-		target_gap = global_position.distance_to(target.global_position) \
-			- combat_radius() - _combat_radius_of(target)
+			target_at - global_position, _up())
+		target_gap = global_position.distance_to(target_at) \
+			- combat_radius() - _target_radius_of(target, target_row)
 
 	# A creature that has been hurt stands its ground for a while, whatever its
 	# temperament: it circles whoever hurt it and answers with its own attack.
@@ -236,7 +342,10 @@ func _update_behaviour(delta: float) -> void:
 
 	if species.is_hostile() and target != null \
 			and target_gap <= species.notice_range:
-		_target_peer = _peer_id(target)
+		_set_target(target, target_row)
+		if species.attack_style == FaunaSpecies.AttackStyle.HORN_CHARGE:
+			_stalk(target, toward_target, target_gap, delta)
+			return
 		if species.attack_style == FaunaSpecies.AttackStyle.BODY_SLAP \
 				and species.has_move(FaunaSpecies.Move.ATTACK) \
 				and target_gap <= species.attack_range \
@@ -249,14 +358,16 @@ func _update_behaviour(delta: float) -> void:
 
 	if not species.is_hostile() and target != null \
 			and target_gap <= species.flee_range:
-		_target_peer = _peer_id(target)
+		_set_target(target)
 		_alert_left = 1.4
 		var escape := _flat_direction(
-			global_position - target.global_position, _up())
+			global_position - target_at, _up())
 		_flee(escape, delta)
 		return
 
-	_target_peer = 0
+	_clear_target()
+	if _migrate(delta):
+		return
 	_wander(delta)
 
 
@@ -271,13 +382,164 @@ func _flee(direction: Vector3, delta: float) -> void:
 		else MotionState.RUN)
 
 
+## A den-born rhino walks rather than runs toward the nearest city. Combat and
+## courtship remain higher priorities; when either finishes this route resumes.
+func _migrate(delta: float) -> bool:
+	if _migration_direction.is_zero_approx():
+		return false
+	if _planet == null or _planet.shape == null:
+		_migration_direction = Vector3.ZERO
+		return false
+	var local := _planet.to_local(global_position)
+	if local.length_squared() < 1.0:
+		return false
+	var here := local.normalized()
+	var remaining := acos(clampf(
+		here.dot(_migration_direction), -1.0, 1.0)) * _planet.shape.radius
+	if remaining <= maxf(_migration_stop_radius, 1.0):
+		_migration_direction = Vector3.ZERO
+		_migration_stop_radius = 0.0
+		_spawn_transform = global_transform
+		_choose_wander_heading()
+		_publish_event()
+		return false
+	var local_heading := _migration_direction \
+		- here * _migration_direction.dot(here)
+	if local_heading.length_squared() < 0.000001:
+		_migration_direction = Vector3.ZERO
+		return false
+	var heading := (
+		_planet.global_basis * local_heading.normalized()).normalized()
+	var speed := maxf(species.walk_speed * MIGRATION_SPEED_SHARE, 0.35)
+	_move(heading, speed, delta)
+	_set_motion_state(MotionState.WALK)
+	return true
+
+
+## Reproduction is deliberately temperament-blind. A hostile animal may court
+## whenever it is an unattached, unthreatened adult just as a friendly one may.
+func can_start_courtship() -> bool:
+	return _is_host() and species != null and species.reproduces \
+		and _alive and is_adult() and not _grappled and not _lassoed \
+		and not _captured and _mate_actor == null \
+		and _mate_cooldown_left <= 0.0 and _knockback_left <= 0.0 \
+		and _provoked_left <= 0.0 and _charge_recover_left <= 0.0 \
+		and _target_actor == null \
+		and _motion_state in [
+			MotionState.IDLE, MotionState.WALK, MotionState.GRAZE]
+
+
+func begin_courtship(partner: FaunaMob) -> bool:
+	if not can_start_courtship() or partner == null or partner == self \
+			or not is_instance_valid(partner) or partner.species == null \
+			or partner.species.species_id != species.species_id \
+			or not partner.is_alive() or not partner.is_adult():
+		return false
+	_mate_actor = partner
+	_courtship_left = maxf(species.courtship_seconds, 0.1)
+	_graze_left = 0.0
+	_clear_target_cache()
+	_set_motion_state(MotionState.COURTSHIP)
+	_publish_event()
+	return true
+
+
+func has_courtship_partner() -> bool:
+	return _mate_actor != null and is_instance_valid(_mate_actor)
+
+
+func courtship_partner() -> FaunaMob:
+	return _mate_actor if has_courtship_partner() else null
+
+
+func is_courtship_leader() -> bool:
+	return has_courtship_partner() and mob_id < _mate_actor.mob_id
+
+
+func is_courting_with(partner: FaunaMob) -> bool:
+	return partner != null and _mate_actor == partner \
+		and partner._mate_actor == self
+
+
+func _update_courtship(delta: float) -> void:
+	var partner := _mate_actor
+	if not _courtship_partner_valid(partner):
+		cancel_courtship()
+		return
+	var up := _up()
+	var toward := _flat_direction(
+		partner.global_position - global_position, up)
+	if toward.is_zero_approx():
+		toward = _flat_direction(-global_basis.z, up)
+	var own_width := _instance_height * species.collision_radius_share
+	var partner_width := partner._instance_height \
+		* partner.species.collision_radius_share
+	var stand_off := maxf(
+		species.mate_distance, own_width + partner_width + 0.12)
+	var distance := global_position.distance_to(partner.global_position)
+	if distance > stand_off + 0.12:
+		_courtship_left = maxf(species.courtship_seconds, 0.1)
+		_move(toward, species.walk_speed, delta, toward)
+		_set_motion_state(MotionState.COURTSHIP)
+		return
+	_move(Vector3.ZERO, 0.0, delta)
+	_face_along(toward, up, delta)
+	_set_motion_state(MotionState.MATE)
+	if partner.motion_state() != MotionState.MATE:
+		_courtship_left = maxf(species.courtship_seconds, 0.1)
+		return
+	_courtship_left = maxf(_courtship_left - delta, 0.0)
+	if _courtship_left <= 0.0 and is_courtship_leader():
+		if _spawner != null and _spawner.has_method(&"complete_mating"):
+			_spawner.call(&"complete_mating", self, partner)
+		else:
+			finish_courtship(false)
+			partner.finish_courtship(false)
+
+
+func _courtship_partner_valid(partner: FaunaMob) -> bool:
+	return partner != null and is_instance_valid(partner) \
+		and partner != self and partner.is_inside_tree() \
+		and partner.is_alive() and partner.is_adult() \
+		and partner.species != null \
+		and partner.species.species_id == species.species_id \
+		and partner._mate_actor == self \
+		and DamageHit.in_same_world(self, partner)
+
+
+func finish_courtship(success: bool) -> void:
+	_clear_courtship_local()
+	var cooldown := species.mate_cooldown if species != null else 1.0
+	_mate_cooldown_left = maxf(cooldown, 1.0) * lerpf(
+		0.85, 1.15, _seed_unit(_wander_step * 71 + (181 if success else 191)))
+	_set_motion_state(MotionState.IDLE)
+	_publish_event()
+
+
+func cancel_courtship() -> void:
+	var partner := _mate_actor
+	_clear_courtship_local()
+	_set_motion_state(MotionState.IDLE)
+	if partner != null and is_instance_valid(partner) \
+			and partner._mate_actor == self:
+		partner._clear_courtship_local()
+		partner._set_motion_state(MotionState.IDLE)
+		partner._publish_event()
+	_publish_event()
+
+
+func _clear_courtship_local() -> void:
+	_mate_actor = null
+	_courtship_left = 0.0
+
+
 ## Circles a threat at arm's length, facing it, spitting when the throw is ready.
 func _strafe(target: Node3D, delta: float) -> void:
 	_graze_left = 0.0
-	_target_peer = _peer_id(target)
+	_set_target(target)
 	var up := _up()
 	var outward := _flat_direction(
-		global_position - target.global_position, up)
+		global_position - _target_position_of(target, -1), up)
 	if outward.is_zero_approx():
 		outward = _flat_direction(-global_basis.z, up)
 	var gap := global_position.distance_to(target.global_position)
@@ -290,6 +552,180 @@ func _strafe(target: Node3D, delta: float) -> void:
 	_move(heading, species.strafe_speed, delta, -outward)
 	_set_motion_state(MotionState.STRAFE)
 	_try_spit(gap)
+
+
+## What a charger does while it is not charging: close to the band it can run a
+## line from, back off if it is already inside that band, and start pawing the
+## moment the ground between it and its target is long enough to use.
+func _stalk(target: Node3D, toward: Vector3, gap: float, delta: float) -> void:
+	_graze_left = 0.0
+	if toward.is_zero_approx():
+		toward = _flat_direction(-global_basis.z, _up())
+	if _attack_cooldown_left <= 0.0 and species.has_move(
+			FaunaSpecies.Move.ATTACK) and gap <= species.charge_from \
+			and gap >= species.charge_minimum:
+		_begin_paw(target)
+		return
+	if gap < species.charge_minimum:
+		# Too close to build up any speed. It walks itself backwards out to
+		# where it can, keeping its horn pointed at whoever put it there.
+		_move(-toward, species.walk_speed, delta, toward)
+		_set_motion_state(MotionState.WALK)
+		return
+	_travel(toward, true, delta)
+
+
+func _begin_paw(target: Node3D) -> void:
+	var target_at := _target_position_of(target, _target_row)
+	if not target_at.is_finite():
+		_abort_charge()
+		return
+	_attack_elapsed = 0.0
+	_attack_impact_done = false
+	_charge_heading = _flat_direction(
+		target_at - global_position, _up())
+	_set_motion_state(MotionState.PAW)
+	_publish_event()
+
+
+## Stands and scrapes, turning to keep the line honest, then commits. This is
+## the player's warning, so it is deliberately a beat longer than it needs to be.
+func _update_paw(delta: float) -> void:
+	velocity = Vector3.ZERO
+	_attack_elapsed += delta
+	var target := _current_target()
+	var target_at := _target_position_of(target, _target_row)
+	if target == null or not target_at.is_finite():
+		_abort_charge()
+		return
+	var toward := _flat_direction(
+		target_at - global_position, _up())
+	if not toward.is_zero_approx():
+		_charge_heading = toward
+		_face_along(toward, _up(), delta)
+	_move(Vector3.ZERO, 0.0, delta)
+	_set_motion_state(MotionState.PAW)
+	if _attack_elapsed >= maxf(species.attack_windup, 0.05):
+		_begin_charge(target)
+
+
+## Locks the line, leading a moving target by as long as the run will take.
+func _begin_charge(target: Node3D) -> void:
+	var up := _up()
+	var at := _target_position_of(target, _target_row)
+	if not at.is_finite():
+		_abort_charge()
+		return
+	var flight := global_position.distance_to(at) \
+		/ maxf(species.charge_speed, 1.0)
+	var lead := _target_velocity_of(target, _target_row)
+	if lead.is_finite():
+		at += lead * flight * 0.5
+	var heading := _flat_direction(at - global_position, up)
+	if not heading.is_zero_approx():
+		_charge_heading = heading
+	_charge_left = maxf(species.charge_seconds, 0.1)
+	_attack_elapsed = 0.0
+	_attack_impact_done = false
+	_set_motion_state(MotionState.CHARGE)
+	_publish_event()
+
+
+func _update_charge(delta: float) -> void:
+	_charge_left = maxf(_charge_left - delta, 0.0)
+	_attack_elapsed += delta
+	var up := _up()
+	if _charge_heading.is_zero_approx():
+		_charge_heading = _flat_direction(-global_basis.z, up)
+	var target := _current_target()
+	var target_at := _target_position_of(target, _target_row)
+	if target != null and target_at.is_finite():
+		# Only a little correction is allowed, so a charge can be side-stepped.
+		var want := _flat_direction(
+			target_at - global_position, up)
+		if not want.is_zero_approx():
+			var turn := clampf(_charge_heading.signed_angle_to(want, up),
+				-species.charge_turn * delta, species.charge_turn * delta)
+			_charge_heading = _flat_direction(
+				_charge_heading.rotated(up, turn), up)
+	_move(_charge_heading, species.charge_speed, delta)
+	_set_motion_state(MotionState.CHARGE)
+	if not _attack_impact_done and _try_horn_damage():
+		_end_charge()
+		return
+	if _charge_left <= 0.0 or _charge_ran_past(target, up):
+		_end_charge()
+
+
+## Whether the target is behind the horn now. A charge that has run past its
+## target is over whether or not its clock has expired: carrying on would be a
+## creature running in a straight line for no reason anybody can see.
+func _charge_ran_past(target: Node3D, up: Vector3) -> bool:
+	if target == null:
+		return true
+	var target_at := _target_position_of(target, _target_row)
+	if not target_at.is_finite():
+		return true
+	var along := _flat_direction(
+		target_at - global_position, up)
+	return not along.is_zero_approx() \
+		and along.dot(_charge_heading) < 0.0 \
+		and global_position.distance_to(target_at) \
+			> CHARGE_OVERRUN
+
+
+func _end_charge() -> void:
+	_charge_left = 0.0
+	_charge_recover_left = maxf(species.charge_recover, 0.0)
+	_attack_cooldown_left = maxf(species.attack_cooldown, 0.05)
+	_attack_elapsed = 0.0
+	_set_motion_state(MotionState.RUN)
+	_publish_event()
+
+
+func _abort_charge() -> void:
+	_charge_left = 0.0
+	_attack_elapsed = 0.0
+	_attack_impact_done = false
+	_attack_cooldown_left = maxf(species.attack_cooldown * 0.5, 0.05)
+	_set_motion_state(MotionState.IDLE)
+	_publish_event()
+
+
+## Running the speed off after a charge, which is what stops the animal from
+## turning on the spot the instant it has been dodged.
+func _update_charge_recover(delta: float) -> void:
+	_charge_recover_left = maxf(_charge_recover_left - delta, 0.0)
+	var share := _charge_recover_left / maxf(species.charge_recover, 0.0001)
+	_move(_charge_heading, species.charge_speed * share * share, delta)
+	_set_motion_state(MotionState.RUN if share > 0.15 else MotionState.IDLE)
+
+
+## The horn, swept as a cylinder from the chest through the tip. Answers whether
+## it connected, so a charge that lands ends there instead of ploughing on.
+func _try_horn_damage() -> bool:
+	var forward := _flat_direction(-global_basis.z, _up())
+	if forward.is_zero_approx():
+		return false
+	var hit := DamageHit.cylinder(
+		combat_position() - forward * combat_radius() * 0.3,
+		combat_position() + forward * maxf(species.attack_range, 0.2),
+		maxf(species.attack_radius, 0.1), species.attack_damage)
+	hit.faction = DamageHit.Faction.ENEMY
+	hit.parryable = species.attack_parryable
+	hit.reaction = DamageHit.Reaction.KNOCKBACK
+	# Up as well as away: being caught by a horn should put the player in the
+	# air, which is also what sells the weight of the animal that did it.
+	hit.world_impulse = forward * species.attack_knockback \
+		+ _up() * species.attack_knockback * 0.45
+	hit.ability_id = "fauna_horn_charge"
+	hit.set_source(self)
+	if DamageHit.apply_to_combatants(self, hit) <= 0.0:
+		return false
+	_attack_impact_done = true
+	_gore_show_left = GORE_CLIP_SECONDS
+	_flash_left = maxf(_flash_left, 0.06)
+	return true
 
 
 func _try_spit(gap: float) -> void:
@@ -389,6 +825,39 @@ func _move(direction: Vector3, speed: float, delta: float,
 	move_and_slide()
 
 
+## How long this creature may go between full simulation steps, or zero for every
+## tick.
+##
+## Anything a player could be about to feel is exempt: a physics body, a creature
+## in an attack, one that has been hurt, and one being carried or roped. What is
+## left is a distant animal walking about, and the whole reason a herd is worth
+## having is that there are a lot of them — which is also why sixty decisions a
+## second each is the wrong price for scenery.
+func _coarse_interval() -> float:
+	if _physics_body or _grappled or _lassoed or _knockback_left > 0.0 \
+			or _provoked_left > 0.0 or _charge_left > 0.0 \
+			or _charge_recover_left > 0.0 or _spit_windup_left > 0.0 \
+			or _mate_actor != null or not _alive:
+		return 0.0
+	match _motion_state:
+		MotionState.ATTACK, MotionState.PAW, MotionState.CHARGE:
+			return 0.0
+	var reach := maxf(species.physics_within, 1.0)
+	for band in COARSE_BANDS.size():
+		if _player_gap <= reach * COARSE_BANDS[band]:
+			return COARSE_INTERVALS[band]
+	return COARSE_INTERVALS[COARSE_INTERVALS.size() - 1]
+
+
+## Carries on along the velocity already chosen, without deciding anything or
+## reading the ground. Keeps a coarsely simulated creature moving smoothly for
+## every frame it is drawn; the next full step puts it back on the surface.
+func _drift(delta: float) -> void:
+	if velocity.is_zero_approx():
+		return
+	global_position += velocity * delta
+
+
 ## Walks the height field instead of sweeping the capsule through the world.
 ##
 ## Used only past the species' physics_within, where there is no player near
@@ -447,10 +916,11 @@ func _update_body_slap(delta: float) -> void:
 	velocity = Vector3.ZERO
 	_attack_elapsed += delta
 	_visual_attack_elapsed = _attack_elapsed
-	var target := _player_for_peer(_target_peer)
+	var target := _current_target()
 	if target != null:
+		var target_at := _target_position_of(target, _target_row)
 		_face_along(_flat_direction(
-			target.global_position - global_position, _up()), _up(), delta)
+			target_at - global_position, _up()), _up(), delta)
 	if not _attack_impact_done \
 			and _attack_elapsed >= maxf(species.attack_windup, 0.0):
 		_attack_impact_done = true
@@ -481,38 +951,83 @@ func _apply_body_slap() -> void:
 func _try_contact_damage() -> void:
 	if _attack_cooldown_left > 0.0:
 		return
-	for player_variant: Variant in get_tree().get_nodes_in_group(&"network_players"):
-		var player := player_variant as Node3D
-		if player == null or not DamageHit.in_same_world(self, player) \
-				or _player_dead(player):
+	var target: Node
+	var target_row := -1
+	var target_point := Vector3.ZERO
+	var nearest_gap := INF
+	var own_point := combat_position()
+	var own_radius := combat_radius()
+	var attack_reach := maxf(species.attack_range, 0.05)
+	for combatant_variant: Variant in get_tree().get_nodes_in_group(
+			DamageHit.COMBATANT_GROUP):
+		var combatant := combatant_variant as Node
+		if combatant == null or combatant == self \
+				or not DamageHit.in_same_world(self, combatant) \
+				or not combatant.has_method(&"combat_faction") \
+				or int(combatant.call(&"combat_faction")) \
+					!= DamageHit.Faction.PLAYER:
 			continue
-		var gap := combat_position().distance_to(_combat_position_of(player)) \
-			- combat_radius() - _combat_radius_of(player)
-		if gap > maxf(species.attack_range, 0.05):
+		if combatant.has_method(&"is_dead") \
+				and bool(combatant.call(&"is_dead")):
 			continue
-		var away := _flat_direction(
-			player.global_position - global_position, _up())
-		var hit := DamageHit.impact(
-			_combat_position_of(player), maxf(species.attack_radius, 0.1),
-			species.attack_damage)
-		hit.faction = DamageHit.Faction.ENEMY
-		hit.target_peer = _peer_id(player)
-		hit.reaction = DamageHit.Reaction.KNOCKBACK
-		hit.world_impulse = away * species.attack_knockback \
-			+ _up() * species.attack_knockback * 0.12
-		hit.ability_id = "fauna_quills"
-		hit.set_source(self)
-		DamageHit.apply_to_combatants(self, hit)
-		_attack_cooldown_left = maxf(species.attack_cooldown, 0.05)
-		_flash_left = maxf(_flash_left, 0.06)
-		_publish_event()
+		var point := Vector3.ZERO
+		var gap := INF
+		var row := -1
+		if combatant.has_method(&"combat_target_within"):
+			var found: Variant = combatant.call(&"combat_target_within",
+				own_point, own_radius + attack_reach)
+			if not found is Dictionary or (found as Dictionary).is_empty():
+				continue
+			var candidate := found as Dictionary
+			row = int(candidate.get("row", -1))
+			var point_value: Variant = candidate.get("point")
+			if row < 0 or not point_value is Vector3:
+				continue
+			point = point_value as Vector3
+			gap = float(candidate.get("distance", INF)) - own_radius
+		else:
+			if not combatant.has_method(&"combat_position"):
+				continue
+			var point_value: Variant = combatant.call(&"combat_position")
+			if not point_value is Vector3:
+				continue
+			point = point_value as Vector3
+			gap = own_point.distance_to(point) - own_radius \
+				- _combat_radius_of(combatant)
+		if not point.is_finite() or gap > attack_reach or gap >= nearest_gap:
+			continue
+		target = combatant
+		target_row = row
+		target_point = point
+		nearest_gap = gap
+	if target == null:
 		return
+	var away := _flat_direction(target_point - global_position, _up())
+	if away.is_zero_approx():
+		away = _flat_direction(-global_basis.z, _up())
+	var hit := DamageHit.impact(
+		target_point, maxf(species.attack_radius, 0.1),
+		species.attack_damage)
+	hit.faction = DamageHit.Faction.ENEMY
+	hit.reaction = DamageHit.Reaction.KNOCKBACK
+	hit.world_impulse = away * species.attack_knockback \
+		+ _up() * species.attack_knockback * 0.12
+	hit.ability_id = "fauna_quills"
+	hit.set_source(self)
+	if target_row >= 0 and target.has_method(&"apply_damage_to_row"):
+		target.call(&"apply_damage_to_row", target_row, hit)
+	else:
+		hit.target_peer = _peer_id(target)
+		DamageHit.apply_to_combatants(self, hit)
+	_attack_cooldown_left = maxf(species.attack_cooldown, 0.05)
+	_flash_left = maxf(_flash_left, 0.06)
+	_publish_event()
 
 
 ## Throws one ball of liquid from the muzzle, led so a walking target runs into
 ## it and lofted so gravity brings it back down onto them.
 func _launch_spit() -> void:
-	var target := _player_for_peer(_target_peer)
+	var target := _current_target()
 	if target == null or _planet == null:
 		return
 	var up := _up()
@@ -520,11 +1035,13 @@ func _launch_spit() -> void:
 	var from := global_position \
 		+ up * _instance_height * species.spit_from_height_share \
 		+ forward * _instance_height * species.spit_from_forward_share
-	var at := _combat_position_of(target)
+	var at := _target_position_of(target, _target_row)
+	if not at.is_finite():
+		return
 	var flight := from.distance_to(at) / maxf(species.spit_speed, 1.0)
-	var lead: Variant = target.get(&"velocity")
-	if lead is Vector3 and (lead as Vector3).is_finite():
-		at += (lead as Vector3) * flight * 0.55
+	var lead := _target_velocity_of(target, _target_row)
+	if lead.is_finite():
+		at += lead * flight * 0.55
 	var along := at - from + up * 0.5 * species.spit_gravity * flight * flight
 	if along.is_zero_approx():
 		return
@@ -606,14 +1123,20 @@ func state_wire() -> Dictionary:
 		"velocity": velocity,
 		"motion": int(_motion_state),
 		"health": _health,
+		"growth": _growth,
 		"alive": _alive,
+		"captured": _captured,
+		"captured_by": _captured_by_peer,
 		"target_peer": _target_peer,
 		"attack_elapsed": _attack_elapsed,
 		"attack_cooldown": _attack_cooldown_left,
-		"respawn_left": _respawn_left,
+		"mate_cooldown": _mate_cooldown_left,
+		"migration_direction": _migration_direction,
+		"migration_stop": _migration_stop_radius,
 		"flash": _flash_left,
 		"spit_show": _spit_show_left,
 		"hit_show": _hit_show_left,
+		"gore_show": _gore_show_left,
 	}
 
 
@@ -628,28 +1151,49 @@ func apply_network_state(wire: Dictionary, snap := false) -> void:
 	if velocity_value is Vector3 and (velocity_value as Vector3).is_finite():
 		_network_velocity = velocity_value as Vector3
 	var previous_alive := _alive
+	var previous_captured := _captured
 	_motion_state = clampi(
 		int(wire.get("motion", _motion_state)), 0, MotionState.size() - 1) \
 		as MotionState
+	var network_growth := clampf(float(wire.get("growth", _growth)), 0.1, 1.0)
+	if not is_equal_approx(network_growth, _growth):
+		_set_growth(network_growth, true)
 	_health = clampf(float(wire.get("health", _health)), 0.0, _maximum_health)
 	_alive = bool(wire.get("alive", _alive))
+	_captured = bool(wire.get("captured", _captured))
+	_captured_by_peer = maxi(
+		int(wire.get("captured_by", _captured_by_peer)), 0)
 	_target_peer = maxi(int(wire.get("target_peer", _target_peer)), 0)
 	_attack_elapsed = maxf(float(wire.get(
 		"attack_elapsed", _attack_elapsed)), 0.0)
 	_visual_attack_elapsed = _attack_elapsed
 	_attack_cooldown_left = maxf(float(wire.get(
 		"attack_cooldown", _attack_cooldown_left)), 0.0)
-	_respawn_left = maxf(float(wire.get("respawn_left", _respawn_left)), 0.0)
+	_mate_cooldown_left = maxf(float(wire.get(
+		"mate_cooldown", _mate_cooldown_left)), 0.0)
+	var migration_value: Variant = wire.get(
+		"migration_direction", _migration_direction)
+	if migration_value is Vector3 and (migration_value as Vector3).is_finite():
+		_migration_direction = (migration_value as Vector3).normalized() \
+			if (migration_value as Vector3).length_squared() > 0.5 \
+			else Vector3.ZERO
+	_migration_stop_radius = maxf(float(wire.get(
+		"migration_stop", _migration_stop_radius)), 0.0)
 	_flash_left = maxf(float(wire.get("flash", _flash_left)), _flash_left)
 	_spit_show_left = maxf(float(wire.get("spit_show", 0.0)), 0.0)
 	_hit_show_left = maxf(float(wire.get("hit_show", 0.0)), 0.0)
+	_gore_show_left = maxf(float(wire.get("gore_show", 0.0)), 0.0)
 	# A thrown ball is an event, not a state: the host sends the launch it made
 	# and every peer flies its own copy from it, the way the boss's rocks work.
 	var spit_from: Variant = wire.get("spit_from")
 	var spit_launch: Variant = wire.get("spit_launch")
 	if spit_from is Vector3 and spit_launch is Vector3:
 		_spawn_spit(spit_from as Vector3, spit_launch as Vector3)
-	if previous_alive != _alive:
+	if previous_alive != _alive or previous_captured != _captured:
+		if previous_captured and not _captured and _has_network_transform:
+			global_transform = _network_transform
+			velocity = _network_velocity
+			reset_physics_interpolation()
 		_set_alive_presentation()
 	health_changed.emit(_health, _maximum_health)
 
@@ -677,7 +1221,7 @@ func _should_publish() -> bool:
 
 
 func apply_damage(hit: DamageHit) -> float:
-	if hit == null or not _alive or not _is_host() \
+	if hit == null or not _alive or _captured or not _is_host() \
 			or hit.faction != DamageHit.Faction.PLAYER:
 		return 0.0
 	var delivered := species.damage_taken(
@@ -685,6 +1229,8 @@ func apply_damage(hit: DamageHit) -> float:
 	var actual := minf(delivered, _health)
 	if actual <= 0.0:
 		return 0.0
+	if _mate_actor != null:
+		cancel_courtship()
 	_health -= actual
 	if hit.reaction == DamageHit.Reaction.KNOCKBACK \
 			or hit.reaction == DamageHit.Reaction.RAGDOLL:
@@ -709,45 +1255,97 @@ func apply_damage(hit: DamageHit) -> float:
 	return actual
 
 
+## A large boss physically crossing this actor is categorical contact, not a
+## faction attack. Keeping it separate from [method apply_damage] preserves the
+## rule that ordinary enemy hits cannot make ambient fauna fight one another.
+func destroy_by_boss(_boss: Node = null) -> bool:
+	if not _is_host() or not _alive or _captured:
+		return false
+	_health = 0.0
+	health_changed.emit(_health, _maximum_health)
+	_die()
+	_publish_event()
+	return true
+
+
 func _die() -> void:
+	if _mate_actor != null:
+		cancel_courtship()
 	_alive = false
+	_grappled = false
+	_grapple_carrier = null
 	_lassoed = false
 	_lasso_source_peer = 0
+	_captured = false
+	_captured_by_peer = 0
 	_provoked_left = 0.0
 	_spit_windup_left = 0.0
 	_graze_left = 0.0
+	_charge_left = 0.0
+	_charge_recover_left = 0.0
+	_clear_target_cache()
 	_motion_state = MotionState.DEAD
-	_respawn_left = maxf(species.respawn_delay, 0.0)
 	velocity = Vector3.ZERO
 	_set_alive_presentation()
 	died.emit()
 
 
-func _respawn() -> void:
-	_alive = true
-	_lassoed = false
-	_lasso_source_peer = 0
-	_health = _maximum_health
-	_respawn_left = 0.0
-	_attack_cooldown_left = 0.0
-	_attack_elapsed = 0.0
-	_target_peer = 0
-	_provoked_left = 0.0
-	_spit_windup_left = 0.0
-	_spit_show_left = 0.0
-	_hit_show_left = 0.0
-	_graze_left = 0.0
-	_motion_state = MotionState.IDLE
-	global_transform = _spawn_transform
-	_network_transform = global_transform
-	velocity = Vector3.ZERO
-	reset_physics_interpolation()
-	_set_alive_presentation()
+func _advance_growth(delta: float) -> void:
+	if species == null or not _alive or _growth >= 1.0 \
+			or species.growth_seconds <= 0.0:
+		return
+	var rate := (1.0 - species.newborn_scale) / species.growth_seconds
+	_set_growth(minf(_growth + maxf(delta, 0.0) * rate, 1.0), true)
+
+
+func _set_growth(next: float, preserve_health: bool,
+		force_presentation := false) -> void:
+	next = clampf(next, 0.1, 1.0)
+	_growth = next
+	if not force_presentation and _presented_growth >= 0.0 \
+			and absf(_growth - _presented_growth) < GROWTH_PRESENTATION_STEP \
+			and _growth < 1.0:
+		return
+	var health_share := _health / maxf(_maximum_health, 0.0001) \
+		if preserve_health else 1.0
+	_instance_height = _adult_height * _growth
+	_maximum_health = maxf(species.health_for(_instance_height), 1.0)
+	_health = clampf(_maximum_health * health_share, 0.0, _maximum_health)
+	_presented_growth = _growth
+	_apply_size_presentation()
 	health_changed.emit(_health, _maximum_health)
-	respawned.emit()
+
+
+func _apply_size_presentation() -> void:
+	if _collision != null:
+		var capsule := _collision.shape as CapsuleShape3D
+		if capsule != null:
+			var radius := maxf(
+				_instance_height * species.collision_radius_share, 0.08)
+			var body_height := maxf(
+				_instance_height * species.collision_height_share, radius * 2.0)
+			if radius >= capsule.radius:
+				capsule.height = body_height
+				capsule.radius = radius
+			else:
+				capsule.radius = radius
+				capsule.height = body_height
+			_collision.position = Vector3.UP * body_height * 0.5
+			floor_snap_length = maxf(_instance_height * 0.18, 0.12)
+	if _model_holder != null:
+		var authored := maxf(species.height, 0.01)
+		_model_holder.scale = Vector3.ONE * (_instance_height / authored)
+		var centred_motion := species.locomotion \
+			in [FaunaSpecies.Locomotion.ROLLER,
+				FaunaSpecies.Locomotion.END_OVER_END]
+		_model_holder.position.y = -_instance_height * 0.5 \
+			if centred_motion else 0.0
 
 
 func _build_collision() -> void:
+	# Nearby Meep bodies are pooled on their own layer. Fauna only sweeps this
+	# capsule while a player is close, matching the same proximity budget.
+	collision_mask |= MeepBlockProxy.LAYER
 	var radius := maxf(_instance_height * species.collision_radius_share, 0.08)
 	var body_height := maxf(
 		_instance_height * species.collision_height_share, radius * 2.0)
@@ -825,7 +1423,8 @@ func _bind_animator(model: Node) -> void:
 		return
 	_animator.playback_default_blend_time = species.clip_blend
 	for clip in [species.clip_idle, species.clip_walk, species.clip_run,
-			species.clip_graze, species.clip_bound, species.clip_strafe]:
+			species.clip_graze, species.clip_bound, species.clip_strafe,
+			species.clip_windup, species.clip_charge]:
 		if _animator.has_animation(clip):
 			_animator.get_animation(clip).loop_mode = Animation.LOOP_LINEAR
 
@@ -842,7 +1441,8 @@ func _animate_visual(delta: float) -> void:
 		_animate_clips(speed)
 		return
 	var moving := _motion_state == MotionState.WALK \
-		or _motion_state == MotionState.RUN
+		or _motion_state == MotionState.RUN \
+		or _motion_state == MotionState.COURTSHIP
 	var attack_duration := maxf(
 		species.attack_windup + BODY_SLAP_RECOVERY, 0.01)
 	var attack_progress := clampf(
@@ -919,6 +1519,10 @@ func _animate_clips(speed: float) -> void:
 	if _animator == null:
 		return
 	var clip := _clip_for_state()
+	if not _animator.has_animation(clip):
+		# A species only bakes the clips its moves need, so a state it never
+		# reaches, or a bake that predates one, falls back to standing.
+		clip = species.clip_idle
 	var rate := species.clip_speed_scale
 	if clip == species.clip_walk:
 		rate *= _clip_rate(speed, species.walk_speed)
@@ -926,6 +1530,8 @@ func _animate_clips(speed: float) -> void:
 		rate *= _clip_rate(speed, species.run_speed)
 	elif clip == species.clip_strafe:
 		rate *= _clip_rate(speed, species.strafe_speed)
+	elif clip == species.clip_charge:
+		rate *= _clip_rate(speed, species.charge_speed)
 	if clip != _current_clip:
 		_current_clip = clip
 		if _animator.has_animation(clip):
@@ -940,15 +1546,23 @@ func _clip_rate(speed: float, authored: float) -> float:
 func _clip_for_state() -> String:
 	if not _alive:
 		return species.clip_dead
-	if _spit_show_left > 0.0:
+	if _spit_show_left > 0.0 or _gore_show_left > 0.0:
 		return species.clip_attack
-	if _hit_show_left > 0.0:
+	# Nothing flinches mid-charge. An animal that has committed to running a line
+	# does not stop to react to being shot, and the clip swap would read as one.
+	if _hit_show_left > 0.0 and _motion_state != MotionState.CHARGE:
 		return species.clip_hit
 	match _motion_state:
+		MotionState.PAW:
+			return species.clip_windup
+		MotionState.CHARGE:
+			return species.clip_charge
 		MotionState.GRAZE:
 			return species.clip_graze
-		MotionState.WALK:
+		MotionState.WALK, MotionState.COURTSHIP:
 			return species.clip_walk
+		MotionState.MATE:
+			return species.clip_idle
 		MotionState.RUN:
 			return species.clip_run
 		MotionState.FLEE:
@@ -1050,9 +1664,10 @@ func _update_damage_flash() -> void:
 
 func _set_alive_presentation() -> void:
 	if _visual_root != null:
-		_visual_root.visible = _alive
+		_visual_root.visible = _alive and not _captured
 	if _collision != null:
-		_collision.set_deferred(&"disabled", not _alive)
+		_collision.set_deferred(
+			&"disabled", not _alive or _captured or _grappled)
 
 
 func _set_motion_state(next: MotionState) -> void:
@@ -1098,20 +1713,94 @@ func is_alive() -> bool:
 	return _alive
 
 
+func can_be_grappled() -> bool:
+	return _alive and not _grappled and not _lassoed and not _captured
+
+
+func begin_grapple(carrier: Node3D) -> bool:
+	if not can_be_grappled() or carrier == null:
+		return false
+	if _mate_actor != null:
+		cancel_courtship()
+	_grappled = true
+	_grapple_carrier = carrier
+	_set_motion_state(MotionState.IDLE)
+	_attack_elapsed = 0.0
+	_attack_impact_done = false
+	_clear_target_cache()
+	_knockback_left = 0.0
+	velocity = Vector3.ZERO
+	_network_velocity = Vector3.ZERO
+	_set_alive_presentation()
+	return true
+
+
+func grapple_follow(centre: Vector3, up: Vector3) -> void:
+	if not _grappled or not centre.is_finite():
+		return
+	up = up.normalized() if up.length_squared() > 0.001 else _up()
+	global_position = centre - up * _instance_height * 0.5
+	global_basis = _upright_basis(-global_basis.z, up)
+	velocity = Vector3.ZERO
+	_network_velocity = Vector3.ZERO
+	reset_physics_interpolation()
+
+
+func end_grapple(at: Vector3, up: Vector3) -> void:
+	if not _grappled:
+		return
+	_grappled = false
+	_grapple_carrier = null
+	var forward := -global_basis.z
+	if at.is_finite():
+		global_position = at
+		if _planet != null and _planet.shape != null:
+			var local := _planet.to_local(at)
+			if local.length_squared() > 1.0:
+				var direction := local.normalized()
+				var spacing := _planet.finest_spacing()
+				var local_normal := _planet.shape.normal_at(
+					direction, spacing).normalized()
+				var world_normal := (
+					_planet.global_basis * local_normal).normalized()
+				var surface := _planet.shape.surface_point(
+					direction, spacing) + local_normal * FLOOR_CLEARANCE
+				global_transform = Transform3D(
+					_upright_basis(forward, world_normal),
+					_planet.to_global(surface))
+	elif up.length_squared() > 0.001:
+		global_basis = _upright_basis(forward, up.normalized())
+	_set_motion_state(MotionState.IDLE)
+	velocity = Vector3.ZERO
+	_network_transform = global_transform
+	_network_velocity = Vector3.ZERO
+	_has_network_transform = true
+	_set_alive_presentation()
+	reset_physics_interpolation()
+	if _is_host():
+		_publish_event()
+
+
+func is_grappled() -> bool:
+	return _grappled
+
+
 func can_be_lassoed() -> bool:
-	return _alive and not _lassoed
+	return _alive and not _grappled and not _lassoed and not _captured
 
 
 func begin_lasso(source: Node3D) -> bool:
 	if not can_be_lassoed() or source == null:
 		return false
+	if _mate_actor != null:
+		cancel_courtship()
 	_lassoed = true
 	_lasso_source_peer = int(source.get("peer_id")) \
 		if source.get("peer_id") != null else 0
 	_motion_state = MotionState.IDLE
 	_attack_elapsed = 0.0
 	_attack_impact_done = false
-	_target_peer = 0
+	_clear_target_cache()
 	_knockback_left = 0.0
 	velocity = Vector3.ZERO
 	return true
@@ -1167,12 +1856,110 @@ func is_lassoed() -> bool:
 	return _lassoed
 
 
+func can_be_captured() -> bool:
+	return _alive and not _grappled and not _lassoed and not _captured
+
+
+## Host-only ownership transition. The actor remains registered and pinned by
+## FaunaSpawner so releasing the ball restores this exact seed, scale, and HP.
+func begin_capture(captor_peer: int) -> bool:
+	if not _is_host() or captor_peer <= 0 or not can_be_captured():
+		return false
+	if _mate_actor != null:
+		cancel_courtship()
+	_captured = true
+	_captured_by_peer = captor_peer
+	_grappled = false
+	_grapple_carrier = null
+	_lassoed = false
+	_lasso_source_peer = 0
+	_motion_state = MotionState.IDLE
+	_attack_elapsed = 0.0
+	_attack_impact_done = false
+	_clear_target_cache()
+	_knockback_left = 0.0
+	velocity = Vector3.ZERO
+	_network_velocity = Vector3.ZERO
+	_set_alive_presentation()
+	_publish_event()
+	return true
+
+
+## Places a captured actor back on its planet surface while preserving health,
+## age, and species state. Its new landing point becomes its wandering home.
+func end_capture(at: Vector3, forward: Vector3) -> bool:
+	if not _is_host() or not _captured or not at.is_finite() \
+			or not forward.is_finite():
+		return false
+	var release_transform := Transform3D(
+		_upright_basis(forward, _up()), at)
+	if _planet != null and _planet.shape != null:
+		var local := _planet.to_local(at)
+		if local.length_squared() > 1.0:
+			var direction := local.normalized()
+			var spacing := _planet.finest_spacing()
+			var local_normal := _planet.shape.normal_at(
+				direction, spacing).normalized()
+			var world_normal := (
+				_planet.global_basis * local_normal).normalized()
+			var surface := _planet.shape.surface_point(direction, spacing) \
+				+ local_normal * FLOOR_CLEARANCE
+			release_transform = Transform3D(
+				_upright_basis(forward, world_normal),
+				_planet.to_global(surface))
+	_captured = false
+	_captured_by_peer = 0
+	_motion_state = MotionState.IDLE
+	global_transform = release_transform
+	_spawn_transform = release_transform
+	_network_transform = release_transform
+	_has_network_transform = true
+	velocity = Vector3.ZERO
+	_network_velocity = Vector3.ZERO
+	reset_physics_interpolation()
+	_set_alive_presentation()
+	_publish_event()
+	return true
+
+
+func is_captured() -> bool:
+	return _captured
+
+
+func captured_by_peer() -> int:
+	return _captured_by_peer
+
+
 func motion_state() -> MotionState:
 	return _motion_state
 
 
 func instance_height() -> float:
 	return _instance_height
+
+
+func adult_height() -> float:
+	return _adult_height
+
+
+func growth_share() -> float:
+	return _growth
+
+
+func is_adult() -> bool:
+	return _growth >= 0.999
+
+
+func is_migrating() -> bool:
+	return not _migration_direction.is_zero_approx()
+
+
+func migration_direction() -> Vector3:
+	return _migration_direction
+
+
+func migration_stop_radius() -> float:
+	return _migration_stop_radius
 
 
 ## Whether this creature is currently sweeping its capsule against the world, as
@@ -1189,15 +1976,24 @@ func glow_position() -> Vector3:
 	return combat_position()
 
 
-func _nearest_player_for_behaviour(delta: float) -> Node3D:
+## Refreshes two deliberately separate answers: the nearest real player controls
+## expensive physics detail, while a hostile creature's behaviour target may be
+## either that player or one concrete Meep row.
+func _nearest_target_for_behaviour(delta: float) -> Node3D:
 	_think_left -= delta
+	# Dropped on read rather than inside _target_is_valid, because a freed object
+	# cannot cross a typed parameter: the guard there never gets to run. A city
+	# distilling to a ledger frees its MeepColony while mobs are still chasing rows
+	# of it, so this is a normal thing to find rather than a broken state.
+	if not is_instance_valid(_cached_behaviour_target):
+		_cached_behaviour_target = null
+		_cached_behaviour_target_row = -1
 	if _think_left > 0.0:
-		if _cached_nearest_player == null:
+		if _cached_behaviour_target == null:
 			return null
-		if is_instance_valid(_cached_nearest_player) \
-				and not _player_dead(_cached_nearest_player) \
-				and DamageHit.in_same_world(self, _cached_nearest_player):
-			return _cached_nearest_player
+		if _target_is_valid(
+				_cached_behaviour_target, _cached_behaviour_target_row):
+			return _cached_behaviour_target
 	_think_left = THINK_INTERVAL * lerpf(
 		0.85, 1.15, _seed_unit(_wander_step * 29 + 83))
 	_cached_nearest_player = _nearest_player()
@@ -1205,7 +2001,66 @@ func _nearest_player_for_behaviour(delta: float) -> Node3D:
 		_cached_nearest_player.global_position) \
 		if _cached_nearest_player != null else INF
 	_refresh_simulation_detail()
-	return _cached_nearest_player
+	if not species.is_hostile():
+		_cached_behaviour_target = _cached_nearest_player
+		_cached_behaviour_target_row = -1
+		return _cached_behaviour_target
+	var found := _nearest_hostile_target()
+	_cached_behaviour_target = found.get("target") as Node3D
+	_cached_behaviour_target_row = int(found.get("row", -1))
+	return _cached_behaviour_target
+
+
+## Finds the nearest PLAYER-faction body in notice range. A normal actor is one
+## node; a data-oriented combatant such as MeepColony refines itself to one row.
+func _nearest_hostile_target() -> Dictionary:
+	var nearest: Node3D
+	var nearest_row := -1
+	var nearest_gap := INF
+	var own_point := combat_position()
+	var own_radius := combat_radius()
+	var query_reach := maxf(species.notice_range + own_radius, 0.0)
+	for combatant_variant: Variant in get_tree().get_nodes_in_group(
+			DamageHit.COMBATANT_GROUP):
+		var combatant := combatant_variant as Node3D
+		if combatant == null or combatant == self \
+				or not DamageHit.in_same_world(self, combatant) \
+				or not combatant.has_method(&"combat_faction") \
+				or int(combatant.call(&"combat_faction")) \
+					!= DamageHit.Faction.PLAYER:
+			continue
+		if combatant.has_method(&"is_dead") \
+				and bool(combatant.call(&"is_dead")):
+			continue
+		var row := -1
+		var gap := INF
+		if combatant.has_method(&"combat_target_within"):
+			var found: Variant = combatant.call(
+				&"combat_target_within", own_point, query_reach)
+			if not found is Dictionary or (found as Dictionary).is_empty():
+				continue
+			var candidate := found as Dictionary
+			row = int(candidate.get("row", -1))
+			gap = float(candidate.get("distance", INF)) - own_radius
+			if row < 0:
+				continue
+		else:
+			var target_at := _combat_position_of(combatant)
+			if not target_at.is_finite():
+				continue
+			gap = own_point.distance_to(target_at) - own_radius \
+				- _combat_radius_of(combatant)
+		if not is_finite(gap) or gap > species.notice_range \
+				or gap >= nearest_gap:
+			continue
+		nearest = combatant
+		nearest_row = row
+		nearest_gap = gap
+	return {
+		"target": nearest,
+		"row": nearest_row,
+		"gap": nearest_gap,
+	} if nearest != null else {}
 
 
 func _nearest_player() -> Node3D:
@@ -1233,6 +2088,72 @@ func _player_for_peer(peer: int) -> Node3D:
 				and not _player_dead(player):
 			return player
 	return null
+
+
+func _set_target(target: Node3D, row := -1) -> void:
+	_target_actor = target
+	_target_row = row if row >= 0 else -1
+	_target_peer = _peer_id(target) if _target_row < 0 else 0
+
+
+func _clear_target() -> void:
+	_target_actor = null
+	_target_row = -1
+	_target_peer = 0
+
+
+func _clear_target_cache() -> void:
+	_clear_target()
+	_cached_behaviour_target = null
+	_cached_behaviour_target_row = -1
+
+
+func _current_target() -> Node3D:
+	if not is_instance_valid(_target_actor):
+		_clear_target()
+	return _target_actor if _target_is_valid(
+		_target_actor, _target_row) else null
+
+
+func _target_is_valid(target: Node3D, row: int) -> bool:
+	if target == null or not is_instance_valid(target) \
+			or not DamageHit.in_same_world(self, target):
+		return false
+	if row >= 0:
+		return _target_position_of(target, row).is_finite()
+	return not _player_dead(target)
+
+
+func _target_position_of(target: Node3D, row: int) -> Vector3:
+	if target == null or not is_instance_valid(target):
+		return Vector3(INF, INF, INF)
+	if row >= 0:
+		if not target.has_method(&"combat_target_position"):
+			return Vector3(INF, INF, INF)
+		var row_position: Variant = target.call(&"combat_target_position", row)
+		return row_position as Vector3 \
+			if row_position is Vector3 else Vector3(INF, INF, INF)
+	return _combat_position_of(target)
+
+
+func _target_velocity_of(target: Node3D, row: int) -> Vector3:
+	if target == null or not is_instance_valid(target):
+		return Vector3.ZERO
+	if row >= 0 and target.has_method(&"combat_target_velocity"):
+		var row_velocity: Variant = target.call(&"combat_target_velocity", row)
+		if row_velocity is Vector3 and (row_velocity as Vector3).is_finite():
+			return row_velocity as Vector3
+	if target is CharacterBody3D:
+		var body_velocity := (target as CharacterBody3D).velocity
+		return body_velocity if body_velocity.is_finite() else Vector3.ZERO
+	return Vector3.ZERO
+
+
+func _target_radius_of(target: Node, row: int) -> float:
+	if target != null and row >= 0 \
+			and target.has_method(&"combat_target_radius"):
+		return maxf(float(target.call(&"combat_target_radius", row)), 0.0)
+	return _combat_radius_of(target)
 
 
 func _peer_id(player: Node) -> int:

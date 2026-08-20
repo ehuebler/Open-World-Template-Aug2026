@@ -20,6 +20,7 @@ radius = 0.2
 ; a face it ended up inside — which reads as the body sinking into a hillside and
 ; sticking there. A few centimetres costs nothing and depenetrates in one frame.
 [node name="Player" type="CharacterBody3D"]
+collision_mask = 65
 floor_snap_length = 0.3
 safe_margin = 0.04
 max_slides = 6

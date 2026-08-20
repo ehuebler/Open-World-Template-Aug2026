@@ -32,6 +32,7 @@ func _ready() -> void:
 	_check_catalogue()
 	_check_authored_ability_shapes()
 	_check_stat_lines()
+	_check_progression_scaling()
 	_check_slot_filters()
 
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
@@ -48,6 +49,7 @@ func _ready() -> void:
 	_check_starfire_alternation()
 	_check_starfire_motion()
 	_check_starfire_rejection()
+	_check_hero_punch_runtime()
 	_check_grapple_pending_release()
 	await _check_new_ability_runtime()
 	await _check_blast_self_launch()
@@ -56,6 +58,7 @@ func _ready() -> void:
 	_check_cooldown()
 	_check_gating()
 	_check_controller()
+	_check_host_cast_authority()
 	_check_eye_points()
 
 	_player.queue_free()
@@ -69,8 +72,9 @@ func _check_catalogue() -> void:
 	var ids := ItemDB.ability_ids()
 	var expected := PackedStringArray(
 		["laser_eyes", "meteor_punch", "starfire", "grapple",
-			"nuke", "lasso", "wall", "nausicaa"])
-	_expect(ids == expected, "all eight abilities are in manifest order")
+			"nuke", "lasso", "wall", "nausicaa", "poke_ball",
+			"hero_punch", "building", "settlement_launcher"])
+	_expect(ids == expected, "all twelve abilities are in manifest order")
 	for id: String in expected:
 		_expect(ItemDB.kind_of(id) == ItemDB.KIND_ABILITY,
 			"%s is an ability" % id)
@@ -98,6 +102,10 @@ func _check_authored_ability_shapes() -> void:
 	var lasso := ItemDB.ability_definition("lasso")
 	var wall := ItemDB.ability_definition("wall")
 	var nausicaa := ItemDB.ability_definition("nausicaa")
+	var poke_ball := ItemDB.ability_definition("poke_ball")
+	var hero_punch := ItemDB.ability_definition("hero_punch")
+	var building := ItemDB.ability_definition("building")
+	var settlement_launcher := ItemDB.ability_definition("settlement_launcher")
 	_expect(starfire != null
 		and starfire.activation_type
 			== AbilityDefinition.ActivationType.SUSTAINED
@@ -197,10 +205,63 @@ func _check_authored_ability_shapes() -> void:
 		and float(nausicaa.stats.get("duration", 0.0))
 			< float(ItemDB.stats_of("laser_eyes").get("duration", 0.0))
 		and is_equal_approx(
+			float(nausicaa.stats.get("range", 0.0)), 60.0)
+		and is_equal_approx(
+			float(nausicaa.stats.get("radius", 0.0)), 18.0)
+		and is_equal_approx(
 			float(nausicaa.stats.get("paint_spacing", 0.0)), 1.25)
 		and is_equal_approx(
 			float(nausicaa.stats.get("crater_depth", 0.0)), 0.55),
-		"Nausicaä authors a short Laser Eyes-style terrain chain with shallow indents")
+		"Nausicaä authors a brief long-range terrain chain with broad blasts and shallow indents")
+	_expect(poke_ball != null
+		and poke_ball.activation_type
+			== AbilityDefinition.ActivationType.INSTANT
+		and poke_ball.projectile_type
+			== AbilityDefinition.ProjectileType.POKE_BALL
+		and is_zero_approx(float(poke_ball.stats.get("damage", -1.0)))
+		and float(poke_ball.stats.get("capture_low_health", 0.0))
+			> float(poke_ball.stats.get("capture_full_health", 0.0)),
+		"Poké Ball authors a harmless capture projectile weighted by mob health")
+	_expect(hero_punch != null
+		and hero_punch.activation_type
+			== AbilityDefinition.ActivationType.INSTANT
+		and hero_punch.projectile_type
+			== AbilityDefinition.ProjectileType.NONE
+		and hero_punch.blocked_underwater
+		and hero_punch.allowed_stances.has(OnlinePlayer.Stance.STAND)
+		and hero_punch.allowed_stances.has(OnlinePlayer.Stance.FLY)
+		and hero_punch.allowed_stances.has(OnlinePlayer.Stance.HERO)
+		and not hero_punch.allowed_stances.has(OnlinePlayer.Stance.SWIM)
+		and is_equal_approx(
+			float(hero_punch.stats.get("range", 0.0)), 1.0)
+		and float(hero_punch.stats.get("damage", 0.0))
+			< float(starfire.stats.get("damage", 0.0))
+		and not hero_punch.alternate_animation.is_empty()
+		and not hero_punch.alternate_hover_animation.is_empty(),
+		"Hero Punch authors a light one-metre alternating strike for every ordinary non-swim pose")
+	_expect(building != null
+		and building.activation_type
+			== AbilityDefinition.ActivationType.SUSTAINED
+		and building.projectile_type
+			== AbilityDefinition.ProjectileType.NONE
+		and building.direct_equip
+		and building.overrides_weapon_input
+		and building.allowed_stances.has(OnlinePlayer.Stance.SWIM)
+		and ItemDB.ability_directly_equippable("building"),
+		"Building is an equipable held utility wheel in every ordinary stance")
+	_expect(settlement_launcher != null
+		and settlement_launcher.use_type
+			== AbilityDefinition.UseType.ONE_TIME
+		and settlement_launcher.activation_type
+			== AbilityDefinition.ActivationType.INSTANT
+		and settlement_launcher.projectile_type
+			== AbilityDefinition.ProjectileType.NONE
+		and not settlement_launcher.direct_equip
+		and not settlement_launcher.overrides_weapon_input
+		and not ItemDB.ability_directly_equippable("settlement_launcher")
+		and is_zero_approx(float(
+			settlement_launcher.stats.get("damage", -1.0))),
+		"Settlement Launcher is harmless one-time Building inventory, not a direct cast")
 
 
 func _check_stat_lines() -> void:
@@ -220,8 +281,82 @@ func _check_stat_lines() -> void:
 		"cooldown is written in seconds")
 	_expect(not written.contains(".0"),
 		"whole numbers lose their decimal point")
+	var capture_lines := "\n".join(ItemDB.stat_lines("poke_ball"))
+	_expect(capture_lines.contains("Full-Health Capture\t20%")
+		and capture_lines.contains("Low-Health Capture\t90%"),
+		"Poké Ball capture chances are readable percentages")
+	var punch_lines := "\n".join(ItemDB.stat_lines("hero_punch"))
+	_expect(punch_lines.contains("Punch Reach\t")
+		and punch_lines.contains("Wind Tunnel\t"),
+		"Hero Punch labels its damaging reach and compressed-air tunnel")
 	_expect(ItemDB.stat_lines("sword").is_empty(),
 		"an item with no stats gets no lines")
+
+
+func _check_progression_scaling() -> void:
+	var laser_one := ItemDB.stats_of("laser_eyes", 1)
+	var laser_five := ItemDB.stats_of("laser_eyes", 5)
+	_expect(is_equal_approx(
+		float(laser_five["damage"]), float(laser_one["damage"]) * 1.32),
+		"level five adds thirty-two percent primary PvE damage")
+	var starfire_one := ItemDB.stats_of("starfire", 1)
+	var starfire_five := ItemDB.stats_of("starfire", 5)
+	_expect(is_equal_approx(
+		float(starfire_five["cooldown"]),
+		float(starfire_one["cooldown"]) * 0.8),
+		"level five removes twenty percent cooldown")
+	var wall_one := ItemDB.stats_of("wall", 1)
+	var wall_five := ItemDB.stats_of("wall", 5)
+	_expect(is_equal_approx(
+		float(wall_five["duration"]), float(wall_one["duration"]) * 1.32)
+		and is_equal_approx(
+			float(wall_five["cooldown"]), float(wall_one["cooldown"]) * 0.8),
+		"Wall scales duration and cooldown")
+	var nuke_one := ItemDB.stats_of("nuke", 1)
+	var nuke_five := ItemDB.stats_of("nuke", 5)
+	_expect(float(nuke_five["damage"]) > float(nuke_one["damage"])
+		and nuke_five["player_damage"] == nuke_one["player_damage"]
+		and nuke_five["radius"] == nuke_one["radius"],
+		"Nuke scales PvE damage without changing player damage or radius")
+	var trained_starfire := ItemDB.stats_of("starfire", 1, {
+		"cooldown": 5,
+		"size": 5,
+		"speed": 5,
+	})
+	_expect(is_equal_approx(
+			float(trained_starfire["cooldown"]),
+			float(starfire_one["cooldown"]) * 0.6)
+		and is_equal_approx(
+			float(trained_starfire["projectile_radius"]),
+			float(starfire_one["projectile_radius"]) * 1.5)
+		and is_equal_approx(
+			float(trained_starfire["speed"]),
+			float(starfire_one["speed"]) * 1.5),
+		"independent training reduces cooldown and increases size and speed")
+	var trained_nuke := ItemDB.stats_of("nuke", 1, {
+		"power": 5,
+		"size": 5,
+	})
+	_expect(is_equal_approx(
+			float(trained_nuke["damage"]), float(nuke_one["damage"]) * 1.5)
+		and trained_nuke["player_damage"] == nuke_one["player_damage"]
+		and is_equal_approx(
+			float(trained_nuke["radius"]), float(nuke_one["radius"]) * 1.5),
+		"explicit Power and Size tracks scale PvE output without scaling player damage")
+	_expect(ItemDB.ability_stat_ids("starfire").has("cooldown")
+		and ItemDB.ability_stat_ids("starfire").has("size")
+		and ItemDB.ability_stat_ids("starfire").has("speed")
+		and ItemDB.ability_stat_ids("settlement_launcher").is_empty()
+		and ItemDB.sanitize_ability_stat_levels("starfire", {
+			"speed": 99, "unknown": 4,
+		}) == {"speed": ItemDB.MAX_ABILITY_STAT_LEVEL},
+		"training exposes only authored reusable stat tracks and clamps its wire data")
+	_expect(ItemDB.hat_shop_ids().size() >= 4
+		and ItemDB.hat_price(ItemDB.hat_shop_ids()[0]) == 0
+		and ItemDB.ability_unlock_price("starfire") == 0
+		and ItemDB.ability_upgrade_price("starfire", 1) == 0
+		and ItemDB.ability_unlock_price("settlement_launcher") < 0,
+		"reusable specialty prices are free while one-time stock stays source-exclusive")
 
 
 func _check_slot_filters() -> void:
@@ -346,6 +481,76 @@ func _check_starfire_rejection() -> void:
 			child.queue_free()
 
 
+func _check_hero_punch_runtime() -> void:
+	var definition := ItemDB.ability_definition("hero_punch")
+	var ability := HeroPunch.new()
+	ability.configure(_player, 0, "hero_punch", definition)
+	_player._applying_loadout = true
+	_player.ability_progress["hero_punch"] = 1
+	_player.abilities.set_item(0, "hero_punch")
+	_player._applying_loadout = false
+	_player._apply_stance(OnlinePlayer.Stance.STAND)
+	_player._lava_state = {}
+	var start := _player.global_position
+	_expect(ability.press(), "Hero Punch sends its host-approved right fist")
+	var first_clip := _player._ability_clip
+	ability.release()
+	_expect(not ability.is_held(),
+		"an immediately approved quick Hero Punch still commits its hand")
+	_player._hero_punch_move(1.0)
+	var travelled := _player.global_position.distance_to(start)
+	var shock := _player.hero_punch_shock()
+	_expect(travelled >= 0.95 and travelled <= 1.01,
+		"Hero Punch lunges the body one measured metre (%.2f m)" % travelled)
+	_expect(shock != null
+		and is_equal_approx(shock.radius,
+			float(definition.stats.get("radius", 0.0)))
+		and is_equal_approx(shock.minimum_reach,
+			float(definition.stats.get("wind_length", 0.0))),
+		"Hero Punch draws a narrow authored wind tunnel from its fist")
+	ability.tick(ability.cooldown() + 0.01)
+	_expect(ability.press(), "Hero Punch can strike again after its short cooldown")
+	var second_clip := _player._ability_clip
+	ability.tick(0.0)
+	_expect(first_clip == String(definition.animation)
+		and second_clip == String(definition.alternate_animation),
+		"Hero Punch alternates right then left only after approved casts")
+
+	var pose_gate := HeroPunch.new()
+	pose_gate.configure(_player, 0, "hero_punch", definition)
+	for allowed: int in [
+		OnlinePlayer.Stance.STAND, OnlinePlayer.Stance.CROUCH,
+		OnlinePlayer.Stance.SLIDE, OnlinePlayer.Stance.FLY,
+		OnlinePlayer.Stance.HERO,
+	]:
+		_player._apply_stance(allowed)
+		_expect(pose_gate.can_use(),
+			"Hero Punch works from %s" % OnlinePlayer.Stance.keys()[allowed])
+	_player._apply_stance(OnlinePlayer.Stance.SWIM)
+	_expect(not pose_gate.can_use(), "Hero Punch refuses the swim stance")
+	_player._apply_stance(OnlinePlayer.Stance.STAND)
+
+	# A quick mouse-up must not discard a cast still travelling to the host.
+	pose_gate._held = true
+	pose_gate._request_sequence = 91
+	_player._hero_punch_result_sequence = 91
+	_player._hero_punch_result = OnlinePlayer.ProjectileRequestState.PENDING
+	pose_gate.release()
+	_expect(pose_gate.is_held(),
+		"Hero Punch keeps a quick click alive while host approval is pending")
+	_player._hero_punch_result = OnlinePlayer.ProjectileRequestState.REJECTED
+	pose_gate.tick(0.0)
+	_expect(not pose_gate.is_held() and pose_gate.can_use(),
+		"a rejected Hero Punch spends no cooldown")
+
+	_player.global_position = start
+	_player.reset_physics_interpolation()
+	_player._hero_punch_move_left = 0.0
+	_player._hero_punch_effect_left = 0.0
+	_player.abilities.clear()
+	_player.ability_progress.erase("hero_punch")
+
+
 func _check_grapple_pending_release() -> void:
 	var ability := Grapple.new()
 	ability.configure(
@@ -383,10 +588,37 @@ func _check_new_ability_runtime() -> void:
 	if orb != null:
 		orb.queue_free()
 
+	var poke_definition := ItemDB.ability_definition("poke_ball")
+	var poke_ball := PokeBall.new()
+	poke_ball.configure(_player, 0, "poke_ball", poke_definition)
+	_expect(poke_ball.press(), "Poké Ball launches its host-approved hand projectile")
+	var ball: AbilityProjectile
+	for child: Node in get_children():
+		if child is AbilityProjectile \
+				and (child as AbilityProjectile).definition == poke_definition:
+			ball = child as AbilityProjectile
+	_expect(ball != null and ball._disk.mesh is SphereMesh
+		and ball._disk.get_node_or_null("RedCap") is MeshInstance3D
+		and ball._disk.get_node_or_null("Band") is MeshInstance3D
+		and ball._disk.get_node_or_null("Button") is MeshInstance3D,
+		"Poké Ball builds a tumbling red-and-white ball with a band and button")
+	var capture_stats := ItemDB.stats_of("poke_ball")
+	_expect(is_equal_approx(PokeBall.capture_chance(
+			100.0, 100.0, capture_stats), 0.2)
+		and is_equal_approx(PokeBall.capture_chance(
+			0.0, 100.0, capture_stats), 0.9)
+		and PokeBall.capture_chance(25.0, 100.0, capture_stats) > 0.7,
+		"Poké Ball capture chance rises smoothly as a mob is weakened")
+	poke_ball.tick(0.0)
+	if ball != null:
+		ball.queue_free()
+
 	var clips := [
 		"NukeThrow", "NukeFloatThrow",
 		"LassoThrow", "LassoFloatThrow", "LassoHold", "LassoFloatHold",
 		"WallPlace", "WallFloatPlace",
+		"HeroPunchRight", "HeroPunchLeft",
+		"HeroPunchFloatRight", "HeroPunchFloatLeft",
 	]
 	var clips_present := _player.animator != null
 	for clip: String in clips:
@@ -768,6 +1000,9 @@ func _check_controller() -> void:
 	_expect(controller != null, "a local player has an ability controller")
 	if controller == null:
 		return
+	_player.abilities.set_item(0, "hero_punch")
+	_expect(controller.ability_in(0) is HeroPunch,
+		"the controller builds the authored Hero Punch implementation")
 	_player.abilities.set_item(0, "laser_eyes")
 	_expect(controller.ability_in(0) is LaserEyes,
 		"filling a slot builds that ability")
@@ -780,6 +1015,88 @@ func _check_controller() -> void:
 	_expect(controller.ability_in(1) is MeteorPunch,
 		"and leaves the other slot alone")
 	_player.abilities.clear()
+
+
+func _check_host_cast_authority() -> void:
+	var saved_launchers := _player.one_time_ability_records(
+		"settlement_launcher")
+	_player.one_time_abilities.erase("settlement_launcher")
+	_player.ability_progress = {"laser_eyes": 1, "starfire": 1}
+	var all_unlocked := true
+	for id: String in ItemDB.reusable_ability_ids():
+		all_unlocked = all_unlocked and _player.ability_unlocked(id)
+	_expect(all_unlocked,
+		"every reusable ability is currently unlocked at level one")
+	_expect(not _player.ability_unlocked("settlement_launcher"),
+		"an unowned one-time ability is not manufactured by the unlock policy")
+	_player.abilities.set_item(0, "laser_eyes")
+	_expect(_player._host_can_cast_ability("laser_eyes"),
+		"host accepts an unlocked equipped ability")
+	_expect(not _player._host_can_cast_ability("starfire"),
+		"host rejects an unlocked but unequipped ability")
+	_player.abilities.set_item(0, "starfire")
+	_expect(_player._host_can_cast_ability("starfire")
+		and not _player._host_can_cast_ability("nuke"),
+		"host still rejects unlocked abilities outside the authoritative loadout")
+	_player.ability_stat_progress.clear()
+	var base_speed := float(ItemDB.stats_of("starfire").get("speed", 0.0))
+	_expect(_player.authoritative_ability_stat_upgrade("starfire", "speed")
+		and _player.authoritative_ability_stat_upgrade("starfire", "speed")
+		and _player.ability_stat_level("starfire", "speed") == 2
+		and is_equal_approx(
+			float(_player.ability_stats("starfire").get("speed", 0.0)),
+			base_speed * 1.2)
+		and not _player.authoritative_ability_stat_upgrade(
+			"settlement_launcher", "speed"),
+		"host authoritatively trains only unlocked reusable ability stats")
+	var live_ability := _player.ability_controller().ability_in(0)
+	_expect(live_ability != null and is_equal_approx(
+			float(live_ability.stats.get("speed", 0.0)), base_speed * 1.2),
+		"training refreshes an equipped ability immediately")
+	var trained_projectile := AbilityProjectile.launch(
+		self, _player, "starfire", Vector3.ZERO, Vector3.FORWARD, false)
+	_expect(trained_projectile != null and is_equal_approx(
+			trained_projectile._speed,
+			float(_player.ability_stats("starfire").get("speed", 0.0))),
+		"launched projectiles use the trained runtime speed")
+	if trained_projectile != null:
+		trained_projectile.queue_free()
+	_player.abilities.clear()
+	_expect(_player.authoritative_grant_one_time_ability(
+		"settlement_launcher", {
+			"parent_site": "landing",
+			"title": "First Settlement of Colony Ship",
+		}) and _player.authoritative_grant_one_time_ability(
+			"settlement_launcher", {
+				"parent_site": "ridge",
+				"title": "First Settlement of Ridge City",
+			})
+		and _player.one_time_ability_count("settlement_launcher") == 2
+		and _player.abilities.find("settlement_launcher") < 0,
+		"repeat one-time grants queue in inventory without auto-equipping")
+	_expect(not _player.equip_ability("settlement_launcher", 0)
+		and _player.equip_ability("building", 0)
+		and _player._host_can_cast_ability("building")
+		and not _player._host_can_cast_ability("settlement_launcher")
+		and _player.one_time_ability_title("settlement_launcher")
+			== "First Settlement of Colony Ship",
+		"Building is the equipped authority while launch records stay inventory-only")
+	_expect(_player.authoritative_consume_one_time_ability(
+		"settlement_launcher", "parent_site", "ridge")
+		and _player.one_time_ability_count("settlement_launcher") == 1
+		and _player.abilities.get_item(0) == "building"
+		and _player.one_time_ability_title("settlement_launcher")
+			== "First Settlement of Colony Ship",
+		"one successful use consumes the selected parent-city launcher")
+	_expect(_player.authoritative_consume_one_time_ability(
+		"settlement_launcher", "parent_site", "landing")
+		and not _player.owns_one_time_ability("settlement_launcher")
+		and _player.abilities.get_item(0) == "building",
+		"the last successful use removes inventory while preserving Building")
+	_player.one_time_abilities.erase("settlement_launcher")
+	if not saved_launchers.is_empty():
+		_player.one_time_abilities["settlement_launcher"] = \
+			saved_launchers.duplicate(true)
 
 
 func _expect(condition: bool, message: String) -> void:

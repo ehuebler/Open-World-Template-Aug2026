@@ -173,6 +173,7 @@ void fragment() {
 		* v_visibility, 0.0, 1.0);
 	ALBEDO = v_colour * 0.08;
 	EMISSION = (v_colour * emission_energy * mask
-		+ camera_rim_color * camera_rim_energy * camera_rim) * v_visibility;
+		+ vivid_camera_rim_colour(camera_rim_color)
+			* camera_rim_energy * camera_rim) * v_visibility;
 	ALPHA = alpha;
 }

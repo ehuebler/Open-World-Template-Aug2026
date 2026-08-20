@@ -19,10 +19,20 @@ const DEFAULT_BODY := "settler"
 const HOTBAR_SLOTS := 3
 const ABILITY_SLOTS := 2
 const BACKPACK_SLOTS := 36
-## One-time ownership seed. Revision five repairs the known partial-wardrobe
-## state where Settler Hair alone was never granted. Other missing pieces remain
-## finite ownership: once this revision is recorded, dropped apparel stays gone.
-const STARTER_INVENTORY_REVISION := 5
+## Abilities are under active development, so every generated power currently
+## begins at level one. Flip this policy off when progression locks return.
+const ALL_ABILITIES_UNLOCKED := true
+const DEFAULT_EQUIPPED_ABILITIES := ["laser_eyes", "meteor_punch"]
+## Revision two also moves legacy Settlement Launcher assignments onto Building,
+## because launch authorizations now live inside its utility wheel.
+const ABILITY_LOADOUT_REVISION := 2
+## One-time ownership seed. Revision six switches the active wardrobe to hats
+## without granting the specialty-shop hats to existing profiles.
+const STARTER_INVENTORY_REVISION := 6
+const DEFAULT_ABILITY_PROGRESS := {
+	"laser_eyes": 1,
+	"meteor_punch": 1,
+}
 
 ## Paint schemes laid over a body without changing its mesh, skeleton or
 ## measurements. A skin is kept separate from `body`: all three painted designs
@@ -52,8 +62,8 @@ const BODIES := {
 		"eye_height": 1.29,
 		"eye_offset": Vector3(0.076, 0.102, -0.192),
 		"lean_pivot": 0.72,
-		"apparel": ["straw_hat", "flight_goggles", "rust_long_sleeve", "denim_trousers",
-			"leather_shoes"],
+		"apparel": ["straw_hat"],
+		"starter_apparel": ["straw_hat"],
 		"skins": [],
 	},
 	"settler": {
@@ -64,7 +74,14 @@ const BODIES := {
 		"eye_height": 1.45,
 		"eye_offset": Vector3(0.048, 0.104, -0.084),
 		"lean_pivot": 0.85,
-		"apparel": ["c3_hair", "c3_goggles", "c3_tunic", "c3_boots"],
+		"apparel": [
+			"c3_hair",
+			"c3_sun_hat",
+			"c3_wizard_hat",
+			"c3_crown",
+			"c3_beanie",
+		],
+		"starter_apparel": ["c3_hair"],
 		# First is the fallback for an old settings file with no skin key.
 		"skins": ["luke", "clean_robotic", "integrated_robotic"],
 	},
@@ -185,6 +202,18 @@ static func apparel_ids(id: String) -> PackedStringArray:
 	return out
 
 
+## The finite hats a fresh profile receives. Shop stock deliberately lives only
+## in `apparel`, so schema migrations cannot accidentally manufacture ownership.
+static func starter_apparel_ids(id: String) -> PackedStringArray:
+	var raw: Variant = _field(id, "starter_apparel", [])
+	var out := PackedStringArray()
+	for entry: Variant in raw:
+		var item_id := str(entry)
+		if item_id in apparel_ids(id):
+			out.append(item_id)
+	return out
+
+
 ## True when this garment was authored for this body's skeleton.
 static func apparel_fits(body_id: String, item_id: String) -> bool:
 	return item_id in apparel_ids(body_id)
@@ -206,7 +235,7 @@ static func default_look() -> Dictionary:
 		"skin": default_skin(DEFAULT_BODY),
 		"worn": {},
 		"hotbar": hotbar,
-		"abilities": _empty_slots(ABILITY_SLOTS),
+		"abilities": DEFAULT_EQUIPPED_ABILITIES.duplicate(),
 		"backpack": [],
 		"rack": hotbar.duplicate(),
 		"tints": {},
@@ -224,12 +253,19 @@ static func load_look() -> Dictionary:
 	look["skin"] = sanitize_skin(str(look["body"]), str(SettingsManager.get_setting(
 		&"appearance", &"skin", default_skin(str(look["body"])))))
 	var worn_raw: Variant = SettingsManager.get_setting(&"appearance", &"worn", {})
+	var retired_worn: Dictionary = {}
 	if worn_raw is Dictionary:
 		var worn: Dictionary = {}
 		for slot: Variant in worn_raw:
 			var item_id := str(worn_raw[slot])
-			if ItemDB.has_item(item_id) and apparel_fits(str(look["body"]), item_id):
-				worn[str(slot)] = item_id
+			var slot_id := str(slot)
+			if ItemDB.has_item(item_id) \
+					and slot_id in ItemDB.SLOT_ORDER \
+					and ItemDB.slot_of(item_id) == slot_id \
+					and apparel_fits(str(look["body"]), item_id):
+				worn[slot_id] = item_id
+			elif ItemDB.accepts_backpack(item_id):
+				retired_worn[slot] = item_id
 		look["worn"] = worn
 	var hotbar_raw: Variant = SettingsManager.get_setting(
 		&"appearance", &"hotbar", null)
@@ -239,18 +275,65 @@ static func load_look() -> Dictionary:
 	look["hotbar"] = _plain_array(clean_hotbar)
 	look["rack"] = _plain_array(clean_hotbar)
 	var abilities_raw: Variant = SettingsManager.get_setting(
-		&"appearance", &"abilities", [])
+		&"appearance", &"abilities", DEFAULT_EQUIPPED_ABILITIES)
 	look["abilities"] = _plain_array(ability_items(
 		{"abilities": abilities_raw}, ABILITY_SLOTS))
+	_migrate_default_ability_loadout(look)
 	var backpack_raw: Variant = SettingsManager.get_setting(
 		&"appearance", &"backpack", [])
-	look["backpack"] = _trimmed_array(backpack_items(
+	var clean_backpack := _trimmed_array(backpack_items(
 		{"backpack": backpack_raw}, BACKPACK_SLOTS))
+	# Retiring body slots must not delete finite ownership. Move any formerly
+	# worn physical item into the backpack once, removing only the migrated entry
+	# from the persisted worn map. A full backpack leaves it parked in the old
+	# map so a later load can retry without manufacturing or losing the item.
+	if not retired_worn.is_empty() and clean_backpack.size() < BACKPACK_SLOTS:
+		var persisted_worn := (worn_raw as Dictionary).duplicate(true)
+		var migrated := false
+		for slot: Variant in retired_worn:
+			if clean_backpack.size() >= BACKPACK_SLOTS:
+				break
+			clean_backpack.append(str(retired_worn[slot]))
+			persisted_worn.erase(slot)
+			migrated = true
+		if migrated:
+			SettingsManager.set_setting(
+				&"appearance", &"worn", persisted_worn, false)
+			SettingsManager.set_setting(
+				&"appearance", &"backpack", clean_backpack.duplicate(), false)
+			SettingsManager.save_settings()
+	look["backpack"] = clean_backpack
 	var tint_raw: Variant = SettingsManager.get_setting(&"appearance", &"tints", {})
 	if tint_raw is Dictionary:
 		look["tints"] = (tint_raw as Dictionary).duplicate(true)
 	_seed_starter_inventory(look)
 	return look
+
+
+## Existing profiles could legitimately save ["", ""] before the HUD gained
+## dedicated ability tiles. Seed the original two powers once. Ability item
+## sanitization also replaces a legacy Settlement Launcher slot with Building.
+static func _migrate_default_ability_loadout(look: Dictionary) -> void:
+	if SettingsManager == null:
+		return
+	var revision := int(SettingsManager.get_setting(
+		&"appearance", &"ability_loadout_revision", 0))
+	if revision >= ABILITY_LOADOUT_REVISION:
+		return
+	var equipped := ability_items(look, ABILITY_SLOTS)
+	var has_assignment := false
+	for id: String in equipped:
+		has_assignment = has_assignment or not id.is_empty()
+	if not has_assignment:
+		for index in mini(equipped.size(), DEFAULT_EQUIPPED_ABILITIES.size()):
+			equipped[index] = DEFAULT_EQUIPPED_ABILITIES[index]
+	look["abilities"] = _plain_array(equipped)
+	SettingsManager.set_setting(
+		&"appearance", &"abilities", _plain_array(equipped), false)
+	SettingsManager.set_setting(
+		&"appearance", &"ability_loadout_revision",
+		ABILITY_LOADOUT_REVISION, false)
+	SettingsManager.save_settings()
 
 
 ## Gives a new character its finite starter wardrobe and weapons once. Later
@@ -296,7 +379,7 @@ static func _seed_starter_inventory(look: Dictionary) -> void:
 			hotbar[index] = ""
 
 	var body_id := sanitize_body(str(look.get("body", DEFAULT_BODY)))
-	var wardrobe := apparel_ids(body_id)
+	var wardrobe := starter_apparel_ids(body_id)
 	var should_seed := revision < 1
 	if revision >= 1:
 		should_seed = true
@@ -345,6 +428,181 @@ static func _seed_starter_inventory(look: Dictionary) -> void:
 	SettingsManager.set_setting(
 		&"appearance", &"starter_inventory_revision",
 		STARTER_INVENTORY_REVISION, false)
+	SettingsManager.save_settings()
+
+
+## Private progression is kept beside the look but sent to the host over a
+## separate authoritative snapshot. Equipped powers from an older profile are
+## grandfathered at level one before host cast validation begins.
+static func load_ability_progress(equipped: PackedStringArray = PackedStringArray()) -> Dictionary:
+	var out: Dictionary = DEFAULT_ABILITY_PROGRESS.duplicate()
+	if SettingsManager != null:
+		var raw: Variant = SettingsManager.get_setting(
+			&"appearance", &"ability_progress", DEFAULT_ABILITY_PROGRESS)
+		if raw is Dictionary:
+			for id_variant: Variant in raw:
+				var id := str(id_variant)
+				if ItemDB.is_ability(id) \
+						and not ItemDB.is_one_time_ability(id):
+					out[id] = clampi(int((raw as Dictionary)[id]), 1, 5)
+	for id: String in equipped:
+		if ItemDB.is_ability(id) and not ItemDB.is_one_time_ability(id) \
+				and not out.has(id):
+			out[id] = 1
+	if ALL_ABILITIES_UNLOCKED:
+		for id: String in ItemDB.reusable_ability_ids():
+			if not out.has(id):
+				out[id] = 1
+	return out
+
+
+static func load_ability_stat_progress() -> Dictionary:
+	var out: Dictionary = {}
+	if SettingsManager == null:
+		return out
+	var raw: Variant = SettingsManager.get_setting(
+		&"appearance", &"ability_stat_progress", {})
+	if not raw is Dictionary:
+		return out
+	for id_variant: Variant in raw:
+		var id := str(id_variant)
+		var clean := ItemDB.sanitize_ability_stat_levels(
+			id, (raw as Dictionary)[id_variant])
+		if not clean.is_empty():
+			out[id] = clean
+	return out
+
+
+## Unique one-use ownership is separate from permanent power levels. Each id owns
+## a FIFO array so repeatable purchases can queue several individually named uses.
+## Legacy saves stored one Dictionary; those migrate into a one-element array.
+## Metadata remains scalar-only so snapshots cannot smuggle nodes/resources.
+static func sanitize_one_time_abilities(raw: Variant) -> Dictionary:
+	var out: Dictionary = {}
+	if not raw is Dictionary:
+		return out
+	for id_variant: Variant in raw:
+		var id := str(id_variant)
+		if not ItemDB.is_one_time_ability(id):
+			continue
+		var owned_variant: Variant = (raw as Dictionary)[id_variant]
+		var raw_records: Array = owned_variant \
+			if owned_variant is Array else [owned_variant]
+		var clean_records: Array[Dictionary] = []
+		for record_variant: Variant in raw_records:
+			if not record_variant is Dictionary:
+				continue
+			clean_records.append(_sanitize_one_time_ability_record(
+				record_variant as Dictionary))
+		if not clean_records.is_empty():
+			out[id] = clean_records
+	return out
+
+
+static func _sanitize_one_time_ability_record(record: Dictionary) -> Dictionary:
+	var clean_record: Dictionary = {}
+	for key_variant: Variant in record:
+		var key := str(key_variant).substr(0, 64)
+		if key.is_empty():
+			continue
+		var value: Variant = record[key_variant]
+		if value is String or value is StringName:
+			clean_record[key] = str(value).substr(0, 256)
+		elif value is bool or value is int:
+			clean_record[key] = value
+		elif value is float and is_finite(float(value)):
+			clean_record[key] = value
+	return clean_record
+
+
+static func load_one_time_abilities() -> Dictionary:
+	if SettingsManager == null:
+		return {}
+	return sanitize_one_time_abilities(SettingsManager.get_setting(
+		&"appearance", &"one_time_abilities", {}))
+
+
+static func load_gold() -> float:
+	if SettingsManager == null:
+		return 0.0
+	return maxf(float(SettingsManager.get_setting(
+		&"appearance", &"gold", 0.0)), 0.0)
+
+
+## One-time local-save trust boundary for free shop ownership. Once mirrored, the
+## host ledger—not future loadout snapshots—decides whether a shop hat is valid.
+static func load_owned_hats(look: Dictionary = {}) -> PackedStringArray:
+	var out := PackedStringArray()
+	if SettingsManager == null:
+		return out
+	var raw: Variant = SettingsManager.get_setting(
+		&"appearance", &"owned_hats", null)
+	if raw is Array or raw is PackedStringArray:
+		for item_variant: Variant in raw:
+			var item_id := str(item_variant)
+			if item_id in ItemDB.hat_shop_ids() and not out.has(item_id):
+				out.push_back(item_id)
+		return out
+	# Migration for profiles created before the ownership ledger: trust only the
+	# already-sanitized local look, once, then persist the explicit entitlement.
+	var candidates: Array = []
+	var worn: Variant = look.get("worn", {})
+	if worn is Dictionary:
+		candidates.append_array((worn as Dictionary).values())
+	var backpack: Variant = look.get("backpack", [])
+	if backpack is Array or backpack is PackedStringArray:
+		for item_variant: Variant in backpack:
+			candidates.push_back(item_variant)
+	for item_variant: Variant in candidates:
+		var item_id := str(item_variant)
+		if item_id in ItemDB.hat_shop_ids() and not out.has(item_id):
+			out.push_back(item_id)
+	SettingsManager.set_setting(
+		&"appearance", &"owned_hats", _plain_array(out), false)
+	SettingsManager.save_settings()
+	return out
+
+
+static func save_progression(gold: float, ability_progress: Dictionary,
+		owned_hats: PackedStringArray = PackedStringArray(),
+		one_time_abilities: Dictionary = {},
+		ability_stat_progress: Dictionary = {}) -> void:
+	if SettingsManager == null:
+		return
+	var clean: Dictionary = {}
+	for id_variant: Variant in ability_progress:
+		var id := str(id_variant)
+		if ItemDB.is_ability(id) and not ItemDB.is_one_time_ability(id):
+			clean[id] = clampi(int(ability_progress[id_variant]), 1, 5)
+	for id: String in DEFAULT_ABILITY_PROGRESS:
+		if not clean.has(id):
+			clean[id] = int(DEFAULT_ABILITY_PROGRESS[id])
+	if ALL_ABILITIES_UNLOCKED:
+		for id: String in ItemDB.reusable_ability_ids():
+			if not clean.has(id):
+				clean[id] = 1
+	SettingsManager.set_setting(
+		&"appearance", &"gold", maxf(gold, 0.0), false)
+	SettingsManager.set_setting(
+		&"appearance", &"ability_progress", clean, false)
+	var clean_stats: Dictionary = {}
+	for id_variant: Variant in ability_stat_progress:
+		var id := str(id_variant)
+		var levels := ItemDB.sanitize_ability_stat_levels(
+			id, ability_stat_progress[id_variant])
+		if not levels.is_empty():
+			clean_stats[id] = levels
+	SettingsManager.set_setting(
+		&"appearance", &"ability_stat_progress", clean_stats, false)
+	var clean_hats := PackedStringArray()
+	for item_id: String in owned_hats:
+		if item_id in ItemDB.hat_shop_ids() and not clean_hats.has(item_id):
+			clean_hats.push_back(item_id)
+	SettingsManager.set_setting(
+		&"appearance", &"owned_hats", _plain_array(clean_hats), false)
+	SettingsManager.set_setting(
+		&"appearance", &"one_time_abilities",
+		sanitize_one_time_abilities(one_time_abilities), false)
 	SettingsManager.save_settings()
 
 
@@ -404,7 +662,19 @@ static func hotbar_items(look: Dictionary, slots := HOTBAR_SLOTS) -> PackedStrin
 
 
 static func ability_items(look: Dictionary, slots := ABILITY_SLOTS) -> PackedStringArray:
-	return _filtered_items(look.get("abilities", []), slots, ItemDB.ABILITY)
+	var equipped := _filtered_items(
+		look.get("abilities", []), slots, ItemDB.ABILITY)
+	var building_assigned := equipped.has("building")
+	for index in equipped.size():
+		var id := equipped[index]
+		if id.is_empty() or ItemDB.ability_directly_equippable(id):
+			continue
+		equipped[index] = "building" \
+			if id == "settlement_launcher" \
+				and not building_assigned \
+				and ItemDB.ability_directly_equippable("building") else ""
+		building_assigned = building_assigned or equipped[index] == "building"
+	return equipped
 
 
 static func backpack_items(look: Dictionary, slots := BACKPACK_SLOTS) -> PackedStringArray:

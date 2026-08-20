@@ -1,0 +1,46 @@
+[gd_resource type="Resource" script_class="AbilityDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/abilities/ability_definition.gd" id="1_definition"]
+[ext_resource type="Script" path="res://game/abilities/poke_ball.gd" id="2_implementation"]
+[ext_resource type="Texture2D" path="res://assets/runtime/abilities/icons/poke_ball.svg" id="3_icon"]
+
+[resource]
+script = ExtResource("1_definition")
+ability_id = "poke_ball"
+title = "Poké Ball"
+description = "Throw an empty ball at a living fauna mob for a health-weighted chance to capture that exact creature. The next throw releases it where the ball lands; unequipping Poké Ball releases it safely beside you."
+implementation = ExtResource("2_implementation")
+icon = ExtResource("3_icon")
+tint = Color(0.937255, 0.239216, 0.262745, 1.000000)
+use_type = 0
+direct_equip = true
+activation_type = 0
+projectile_type = 6
+impact_type = 0
+grapple_type = 0
+construct_type = 0
+reaction_type = 0
+affects_players = false
+self_launch = false
+blast_occlusion = false
+overrides_weapon_input = false
+animation = &"NukeThrow"
+alternate_animation = &""
+hover_animation = &"NukeFloatThrow"
+alternate_hover_animation = &""
+held_animation = &""
+held_hover_animation = &""
+impact_animation = &""
+blocked_underwater = true
+allowed_stances = PackedInt32Array(0, 1, 2, 3)
+stats = {
+"damage": 0.0,
+"speed": 34.0,
+"range": 45.0,
+"cooldown": 2.0,
+"projectile_radius": 0.28,
+"animation_duration": 0.42,
+"capture_full_health": 20.0,
+"capture_low_health": 90.0,
+"release_distance": 2.5,
+}

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="pod" x1="0" x2="1" y1="0" y2="1">
+      <stop stop-color="#d7fff2"/>
+      <stop offset="1" stop-color="#40bf9d"/>
+    </linearGradient>
+  </defs>
+  <circle cx="64" cy="64" r="58" fill="#071d23"/>
+  <path d="M64 14c17 13 27 31 27 50 0 13-4 25-11 35H48c-7-10-11-22-11-35 0-19 10-37 27-50z" fill="url(#pod)" stroke="#72f0c5" stroke-width="5"/>
+  <circle cx="64" cy="55" r="12" fill="#123a54" stroke="#b9fff0" stroke-width="4"/>
+  <path d="M47 83L28 103l22-5m31-15 19 20-22-5" fill="#238d86" stroke="#72f0c5" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M55 99l9 18 9-18" fill="#ffb34d" stroke="#ffe4a3" stroke-width="4" stroke-linejoin="round"/>
+</svg>

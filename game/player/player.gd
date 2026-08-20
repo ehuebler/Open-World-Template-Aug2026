@@ -4,10 +4,19 @@ extends CharacterBody3D
 ## Networked first/third person character. The local player simulates itself and
 ## broadcasts state; everyone else is interpolated toward the state they receive.
 
+const BIOMASS_HARVESTER_MENU_SCRIPT := preload(
+	"res://ui/city/biomass_harvester_menu.gd")
+const BUILDING_WHEEL_SCRIPT := preload(
+	"res://ui/abilities/building_wheel.gd")
+const BLUEPRINT_CITY_MENU_SCRIPT := preload(
+	"res://ui/city/blueprint_city_menu.gd")
+
 enum Stance { STAND, CROUCH, SLIDE, FLY, CRASH, SWIM, HERO, METEOR, GRAPPLE }
 enum CameraMode { FIRST, THIRD_NEAR, THIRD_FAR }
 enum GrapplePhase { RISE, APEX, SLAM }
 enum ProjectileRequestState { PENDING, ACCEPTED, REJECTED }
+## Appended protocol values: never reorder once requests can cross versions.
+enum AbilityProgressAction { UNLOCK, UPGRADE, EQUIP_PRIMARY, EQUIP_SECONDARY }
 
 ## Extension points for item and ability definitions that do not exist yet.
 ## Empty slots never emit either signal.
@@ -26,6 +35,7 @@ signal parry_blocked(perfect: bool, hit: DamageHit)
 signal enemy_damaged(target: Node, amount: float, hit: DamageHit)
 signal grabbed(socket: Node)
 signal released_from_grab(throw_velocity: Vector3)
+signal progression_changed
 
 const SYNC_INTERVAL := 1.0 / 20.0
 const DEFAULT_STAGGER_TIME := 0.28
@@ -48,6 +58,10 @@ const BACKPACK_SLOTS := CharacterDB.BACKPACK_SLOTS
 const HOTBAR_SLOTS := CharacterDB.HOTBAR_SLOTS
 const ABILITY_SLOTS := CharacterDB.ABILITY_SLOTS
 const WEAPON_SLOTS := HOTBAR_SLOTS
+const SETTLEMENT_BLOCKED_ACTIONS := [
+	"attack", "aim", "parry", "interact", "holster",
+	"weapon_next", "weapon_prev", "weapon_1", "weapon_2", "weapon_3",
+]
 ## Weapons are two-handed here, so one hand carries them and the other supports.
 const WEAPON_HAND := "right"
 ## Where a shot is aimed: far enough that the muzzle's offset from the eye does not
@@ -620,6 +634,17 @@ var weapons: ItemContainer:
 ## admin tab. Health is host-authoritative; Speed is wired through to movement.
 var stats := PlayerStats.new()
 var statuses := CombatStatuses.new()
+## Ability id -> level (1-5). Absence means locked.
+var ability_progress: Dictionary = {}
+## Ability id -> independently trained stat track levels (1-5).
+var ability_stat_progress: Dictionary = {}
+## FIFO arrays of unique purchased records by one-time ability id. The base id
+## still fits either ordinary ability slot while repeated purchases remain
+## individually named and are consumed one successful use at a time.
+var one_time_abilities: Dictionary = {}
+## Sanitized shop ids only. A remote owner's first progression snapshot may seed
+## this from local persistence; after that the host is the sole writer.
+var _owned_hats: Dictionary = {}
 
 ## Quests and achievements. Local and never replicated — a session shares a world,
 ## not a diary — which is why this is built here rather than handed down from the
@@ -694,6 +719,14 @@ var _meteor_since_sweep := 0.0
 ## Numbers from the ability's catalogue entry, kept here for the duration of the
 ## flight so the movement code does not have to hold a reference to the ability.
 var _meteor_stats: Dictionary = {}
+## Hero Punch is a short displacement rather than a stance. The remaining
+## distance is owned only by this player's machine; the host approves its
+## direction and derives the whole damage tunnel before peers draw the effect.
+var _hero_punch_move_left := 0.0
+var _hero_punch_along := Vector3.FORWARD
+var _hero_punch_speed := 0.0
+var _hero_punch_effect_left := 0.0
+var _hero_punch_from_left := false
 ## Player-authored grapple. Separate from `_grabbed`, which means an enemy has
 ## attached this player to one of its sockets.
 var _ability_grapple_id := ""
@@ -810,6 +843,27 @@ var _death_cause := ""
 var _death_screen: DeathScreen
 ## Local player only, and only while they are stood at a colony ship.
 var _city_menu: CityMenu
+## Local player only. The first phase is held by Building's assigned mouse
+## button; a multi-launcher picker may remain after that button is released.
+var _building_wheel: BuildingWheel
+var _building_wheel_slot := -1
+var _settlement_targeting := false
+var _settlement_parent: StringName = &""
+var _settlement_preview: MeshInstance3D
+var _settlement_preview_direction := Vector3.ZERO
+## Local-only hypothetical cities. They live for this player/world session and
+## never enter the authoritative settlement registry.
+var _blueprint_registry: MeepBlueprintPreviewRegistry
+var _blueprint_targeting := false
+var _blueprint_preview: MeshInstance3D
+var _blueprint_preview_direction := Vector3.ZERO
+var _blueprint_preview_facing := 0.0
+var _blueprint_menu: BLUEPRINT_CITY_MENU_SCRIPT
+## Local player only, opened from a completed specialty building.
+var _specialty_shop: SpecialtyShop
+## Local player only, opened from this city's completed passive harvester.
+var _harvester_menu: Control
+var _resident_list: ResidentListOverlay
 var _stagger_left := 0.0
 ## Damage/throw ragdolls do not start blending upright until they have landed.
 var _forced_ragdoll := false
@@ -842,6 +896,11 @@ var _host_projectile_sequence := 0
 var _last_projectile_sequence := 0
 var _projectile_result_sequence := 0
 var _projectile_result: int = ProjectileRequestState.REJECTED
+var _host_poke_ball_sequence := 0
+var _last_poke_ball_sequence := 0
+var _poke_ball_mob_id := ""
+var _poke_ball_mob_name := ""
+var _poke_ball_release_queued := false
 var _ability_explosion_request_sequence := 0
 var _last_ability_explosion_request_sequence := 0
 var _host_ability_explosion_sequence := 0
@@ -862,6 +921,12 @@ var _host_ability_wall_sequence := 0
 var _last_ability_wall_sequence := 0
 var _ability_wall_result_sequence := 0
 var _ability_wall_result: int = ProjectileRequestState.REJECTED
+var _hero_punch_request_sequence := 0
+var _last_hero_punch_request_sequence := 0
+var _host_hero_punch_sequence := 0
+var _last_hero_punch_sequence := 0
+var _hero_punch_result_sequence := 0
+var _hero_punch_result: int = ProjectileRequestState.REJECTED
 var _delayed_blast_request_sequence := 0
 var _last_delayed_blast_request_sequence := 0
 var _host_delayed_blast_sequence := 0
@@ -870,6 +935,10 @@ var _delayed_blast_result_sequence := 0
 var _delayed_blast_result: int = ProjectileRequestState.REJECTED
 var _combat_state_sequence := 0
 var _last_combat_state_sequence := 0
+## Carried resources use their own small reliable snapshot. Tying them to combat
+## would make a flower break look like a zero-damage hit to every observer.
+var _resource_sequence := 0
+var _last_resource_sequence := 0
 var _feedback_sequence := 0
 var _last_feedback_sequence := 0
 var _grab_sequence := 0
@@ -921,6 +990,9 @@ var _laser_beams: LaserBeams
 ## Also built on demand and also on every peer, and for the same reason: the
 ## stance a punch is drawn from replicates, the ability behind it does not.
 var _meteor_shock: MeteorShock
+## Hero Punch has a separate, narrower instance so its lingering fade cannot
+## resize a Meteor Punch shell that starts on the same frame.
+var _hero_punch_shock: MeteorShock
 ## Container transfers emit once for each side. Coalescing their persistence to a
 ## deferred write records the completed move and prevents save/change recursion.
 var _applying_loadout := false
@@ -935,6 +1007,12 @@ var _loadout_snapshot_revision := 0
 var _server_snapshot_revision := 0
 var _inventory_generation := 0
 var _server_has_loadout_snapshot := false
+var _progression_snapshot_queued := false
+var _progression_snapshot_revision := 0
+var _server_progression_revision := 0
+var _progression_generation := 0
+var _server_has_progression_snapshot := false
+var _progression_save_queued := false
 var _confirmed_drop_ids: Dictionary = {}
 var _received_pickup_ids: Dictionary = {}
 var _waypoints: WaypointLayer
@@ -1017,7 +1095,15 @@ func _ready() -> void:
 	# spawn metadata a moment later, which swaps the body before the first frame
 	# of gameplay if it differs from the scene default.
 	if peer_id == multiplayer.get_unique_id():
-		apply_look(CharacterDB.load_look())
+		var saved_look := CharacterDB.load_look()
+		one_time_abilities = CharacterDB.load_one_time_abilities()
+		ability_progress = CharacterDB.load_ability_progress(
+			CharacterDB.ability_items(saved_look, abilities.size()))
+		ability_stat_progress = CharacterDB.load_ability_stat_progress()
+		for item_id: String in CharacterDB.load_owned_hats(saved_look):
+			_owned_hats[item_id] = true
+		stats.set_base(PlayerStats.GOLD, CharacterDB.load_gold())
+		apply_look(saved_look)
 	else:
 		_bind_character_nodes()
 		_character_meshes = SurfaceSkin.apply(character, true)
@@ -1092,7 +1178,9 @@ func _ready() -> void:
 		# complete mirror before it accepts a finite-item operation.
 		if multiplayer.is_server():
 			_server_has_loadout_snapshot = true
+			_server_has_progression_snapshot = true
 		else:
+			_queue_progression_snapshot()
 			_queue_loadout_snapshot()
 
 
@@ -1123,6 +1211,34 @@ func reset_network_state(at_transform: Transform3D) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if peer_id != multiplayer.get_unique_id() or not controls_enabled:
+		return
+	if _blueprint_targeting:
+		if event.is_action_pressed("pause"):
+			cancel_blueprint_targeting()
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("attack"):
+			submit_blueprint_target()
+			get_viewport().set_input_as_handled()
+			return
+		for action: String in SETTLEMENT_BLOCKED_ACTIONS:
+			if event.is_action(action):
+				get_viewport().set_input_as_handled()
+				return
+	if _settlement_targeting:
+		if event.is_action_pressed("pause"):
+			cancel_settlement_targeting()
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("attack"):
+			submit_settlement_target()
+			get_viewport().set_input_as_handled()
+			return
+		for action: String in SETTLEMENT_BLOCKED_ACTIONS:
+			if event.is_action(action):
+				get_viewport().set_input_as_handled()
+				return
+	if _handle_building_wheel_input(event):
 		return
 	# Clicking back into a window that has let the cursor go is only ever about
 	# taking it again, so it happens before the click can also be an attack.
@@ -1173,17 +1289,19 @@ func _unhandled_input(event: InputEvent) -> void:
 		activate_primary()
 	elif event.is_action_pressed("aim"):
 		# A drawn weapon keeps the existing held/polled aim behaviour. Empty
-		# hands route the same button to the second ability slot.
-		if not _hotbar_drawn:
+		# hands route the same button to the second ability slot. Explicit
+		# utility abilities may claim their assigned button even while armed.
+		if _ability_overrides_weapon_input(1) or not _hotbar_drawn:
 			activate_ability(1)
 	elif event.is_action_released("attack"):
 		# Guarded on the same condition the press was. A weapon's trigger has no
 		# release behaviour, and letting it through would end an ability that a
 		# player had started and then drawn a weapon during.
-		if not _hotbar_drawn or _held.is_empty():
+		if _ability_overrides_weapon_input(0) \
+				or not _hotbar_drawn or _held.is_empty():
 			release_ability(0)
 	elif event.is_action_released("aim"):
-		if not _hotbar_drawn:
+		if _ability_overrides_weapon_input(1) or not _hotbar_drawn:
 			release_ability(1)
 	elif event.is_action_pressed("weapon_next"):
 		_cycle_weapon(1)
@@ -1197,14 +1315,24 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _process(delta: float) -> void:
+	var began := Time.get_ticks_usec() if RuntimeTelemetry.deep_enabled() else 0
+	_present(delta)
+	if began > 0:
+		RuntimeTelemetry.record_process_step(&"player", &"present",
+			Time.get_ticks_usec() - began)
+
+
+func _present(delta: float) -> void:
 	_update_step_offset(delta)
 	_update_walking_ground_offset(delta)
 	_update_body_lean(delta)
 	_update_camera(delta)
 	_ability_clip_left = maxf(_ability_clip_left - delta, 0.0)
+	_hero_punch_effect_left = maxf(_hero_punch_effect_left - delta, 0.0)
 	_update_animation(delta)
 	_update_dust_trails()
 	_update_meteor_shock()
+	_update_hero_punch_shock()
 	_update_parry_shield()
 	if _weapon_pose != null:
 		# Everyone's, not just our own: a remote player's pitch is synced, and their
@@ -1213,9 +1341,21 @@ func _process(delta: float) -> void:
 	if peer_id == multiplayer.get_unique_id():
 		_update_weapon(delta)
 		_update_hud(delta)
+		_update_settlement_preview()
+		_update_blueprint_preview()
 
 
 func _physics_process(delta: float) -> void:
+	if not RuntimeTelemetry.deep_enabled():
+		_simulate(delta)
+		return
+	var began := Time.get_ticks_usec()
+	_simulate(delta)
+	RuntimeTelemetry.record_physics_step(
+		&"player", &"simulate", Time.get_ticks_usec() - began)
+
+
+func _simulate(delta: float) -> void:
 	_tick_combat(delta)
 	if _grabbed:
 		_follow_grab_socket()
@@ -1316,6 +1456,151 @@ func _interact() -> bool:
 	return false
 
 
+func building_wheel() -> BuildingWheel:
+	return _building_wheel if is_instance_valid(_building_wheel) else null
+
+
+func building_wheel_open() -> bool:
+	return is_instance_valid(_building_wheel)
+
+
+func building_launcher_options() -> Array[Dictionary]:
+	var options: Array[Dictionary] = []
+	var world := DamageHit.game_world_of(self)
+	for record: Dictionary in one_time_ability_records("settlement_launcher"):
+		var parent := StringName(String(record.get("parent_site", "")))
+		if parent == &"":
+			continue
+		var report := world.colony_report(parent) \
+			if world != null else {}
+		var parent_city := String(report.get(
+			"display_name", String(parent).capitalize())).strip_edges()
+		if parent_city.is_empty():
+			parent_city = String(parent).capitalize()
+		options.append({
+			"parent_site": String(parent),
+			"parent_city": parent_city,
+			"title": String(record.get(
+				"title", "Settlement of %s" % parent_city)),
+		})
+	return options
+
+
+func open_building_wheel(slot_index: int) -> bool:
+	if peer_id != multiplayer.get_unique_id() or _menu_open \
+			or _settlement_targeting or _blueprint_targeting \
+			or is_instance_valid(_building_wheel) \
+			or slot_index < 0 or slot_index >= abilities.size() \
+			or abilities.get_item(slot_index) != "building":
+		return false
+	var nearest := _nearest_city()
+	var wheel := BUILDING_WHEEL_SCRIPT.new() as BuildingWheel
+	if wheel == null:
+		return false
+	wheel.configure(not nearest.is_empty(), building_launcher_options())
+	wheel.launcher_chosen.connect(_on_building_launcher_chosen)
+	wheel.picker_cancelled.connect(_on_building_picker_cancelled)
+	_building_wheel = wheel
+	_building_wheel_slot = slot_index
+	hud.add_child(wheel)
+	reticle.visible = false
+	prompt_plate.visible = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	return true
+
+
+func finish_building_wheel(slot_index: int) -> void:
+	if not is_instance_valid(_building_wheel) \
+			or slot_index != _building_wheel_slot:
+		return
+	var option := _building_wheel.selected_option()
+	if not _building_wheel.option_enabled(option):
+		_close_building_wheel_overlay()
+		return
+	if option == BuildingWheel.Option.SETTLEMENT \
+			and _building_wheel.launcher_count() > 1:
+		_building_wheel_slot = -1
+		_building_wheel.show_launcher_picker()
+		return
+	var parent := &""
+	if option == BuildingWheel.Option.SETTLEMENT:
+		var launchers := building_launcher_options()
+		if not launchers.is_empty():
+			parent = StringName(String(launchers[0].get("parent_site", "")))
+	_close_building_wheel_overlay()
+	match option:
+		BuildingWheel.Option.CITY:
+			var nearest := _nearest_city()
+			var site := StringName(String(nearest.get("site", "")))
+			if site != &"":
+				open_city_menu(site)
+		BuildingWheel.Option.SETTLEMENT:
+			if parent != &"":
+				request_settlement_launcher(parent)
+		BuildingWheel.Option.BLUEPRINT:
+			begin_blueprint_targeting()
+
+
+func cancel_building_wheel(slot_index := -1) -> void:
+	if not is_instance_valid(_building_wheel) \
+			or (slot_index >= 0 and slot_index != _building_wheel_slot):
+		return
+	_close_building_wheel_overlay()
+
+
+func _handle_building_wheel_input(event: InputEvent) -> bool:
+	if not is_instance_valid(_building_wheel):
+		return false
+	if _building_wheel.picker_open():
+		if event.is_action_pressed("pause"):
+			_on_building_picker_cancelled()
+		get_viewport().set_input_as_handled()
+		return true
+	var action := &"attack" if _building_wheel_slot == 0 else &"aim"
+	if event.is_action_released(action):
+		release_ability(_building_wheel_slot)
+		get_viewport().set_input_as_handled()
+		return true
+	if event.is_action_pressed("pause"):
+		_building_wheel.clear_selection()
+		release_ability(_building_wheel_slot)
+		get_viewport().set_input_as_handled()
+		return true
+	# Motion still reaches BuildingWheel through the viewport cursor; consuming
+	# it here prevents the same movement from turning the camera underneath.
+	get_viewport().set_input_as_handled()
+	return true
+
+
+func _on_building_launcher_chosen(parent: StringName) -> void:
+	if not is_instance_valid(_building_wheel) \
+			or not _building_wheel.picker_open():
+		return
+	_close_building_wheel_overlay()
+	request_settlement_launcher(parent)
+
+
+func _on_building_picker_cancelled() -> void:
+	_close_building_wheel_overlay()
+
+
+func _close_building_wheel_overlay() -> void:
+	if is_instance_valid(_building_wheel):
+		_building_wheel.queue_free()
+	_building_wheel = null
+	_building_wheel_slot = -1
+	if not _menu_open:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		reticle.visible = not _settlement_targeting \
+			and not _blueprint_targeting and not _dead
+
+
+func _nearest_city() -> Dictionary:
+	var world := DamageHit.game_world_of(self)
+	var colonies := world.meep_colonies() if world != null else null
+	return colonies.nearest_city(global_position) if colonies != null else {}
+
+
 ## Tab and Escape are the same menu opened at a different tab. Both are handled
 ## here rather than in the world, because everything on the menu's first page — the
 ## containers, the stats, the body — belongs to this player, and the pause overlay
@@ -1351,12 +1636,40 @@ func open_city_menu(site: StringName) -> void:
 	var world := DamageHit.game_world_of(self)
 	if world == null:
 		return
+	sync_progression_to_server()
 	var menu := CityMenu.new()
 	menu.configure(func() -> Dictionary:
-		return world.colony_report(site) if is_instance_valid(world) else {})
+		var report := world.colony_report(site) \
+			if is_instance_valid(world) else {}
+		report["carried_biomass"] = biomass()
+		var owned_launchers := one_time_ability_count("settlement_launcher")
+		if owned_launchers > 0:
+			var offers_variant: Variant = report.get("purchase_offers", {})
+			if offers_variant is Dictionary:
+				var offers := (offers_variant as Dictionary).duplicate(true)
+				var launch_variant: Variant = offers.get("send_settlement", {})
+				if launch_variant is Dictionary:
+					var launch := (launch_variant as Dictionary).duplicate(true)
+					launch["value"] = "%d IN INVENTORY — BUY ANOTHER" \
+						% owned_launchers
+					offers["send_settlement"] = launch
+					report["purchase_offers"] = offers
+		return report)
 	menu.release_settlers_requested.connect(func() -> void:
 		if is_instance_valid(world):
 			world.request_release_settlers(peer_id, site))
+	menu.deposit_biomass_requested.connect(func(amount: float) -> void:
+		if is_instance_valid(world):
+			world.request_deposit_biomass(peer_id, site, amount))
+	menu.add_100_biomass_requested.connect(func() -> void:
+		if is_instance_valid(world):
+			world.request_add_city_biomass(peer_id, site))
+	menu.city_purchase_requested.connect(func(purchase_id: int) -> void:
+		if is_instance_valid(world):
+			world.request_city_purchase(peer_id, site, purchase_id))
+	menu.settlement_rename_requested.connect(func(wanted: String) -> void:
+		if is_instance_valid(world):
+			world.request_settlement_rename(peer_id, site, wanted))
 	menu.closed.connect(_on_city_menu_closed)
 	_city_menu = menu
 	open_menu()
@@ -1368,6 +1681,423 @@ func _on_city_menu_closed() -> void:
 	_city_menu = null
 	# Dying at the ship leaves the death screen behind the panel, which owns the
 	# mouse from here rather than the world doing.
+	if is_instance_valid(_death_screen):
+		open_menu()
+	else:
+		close_menu()
+	var world := NetworkManager.active_world as GameWorld
+	if world != null:
+		world.set_local_pause(false)
+
+
+func begin_settlement_targeting(parent: StringName) -> void:
+	if peer_id != multiplayer.get_unique_id() or parent == &"":
+		return
+	_settlement_targeting = true
+	_settlement_parent = parent
+	release_ability(0)
+	release_ability(1)
+	holster()
+	controls_enabled = true
+	reticle.visible = true
+	if _settlement_preview == null:
+		_settlement_preview = MeshInstance3D.new()
+		_settlement_preview.name = "SettlementFootprintPreview"
+		_settlement_preview.top_level = true
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(
+			SettlementShip.FOOTPRINT.x, 0.18, SettlementShip.FOOTPRINT.z)
+		_settlement_preview.mesh = mesh
+		add_child(_settlement_preview)
+	_update_settlement_preview()
+
+
+func request_settlement_launcher(parent: StringName) -> bool:
+	if peer_id != multiplayer.get_unique_id() or parent == &"" \
+			or _settlement_targeting or _blueprint_targeting \
+			or not ItemDB.ability_directly_equippable("building") \
+			or abilities.find("building") < 0 \
+			or one_time_ability_record_matching(
+				"settlement_launcher", "parent_site", String(parent)).is_empty():
+		return false
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return false
+	# Placement is local presentation, so show it on the first click instead of
+	# waiting a network round trip. The host still validates ownership, source,
+	# Building loadout, and the final green landing point before anything is
+	# consumed.
+	sync_loadout_to_server()
+	begin_settlement_targeting(parent)
+	world.request_settlement_ability(peer_id, parent)
+	return true
+
+
+func cancel_settlement_targeting() -> void:
+	_settlement_targeting = false
+	_settlement_parent = &""
+	_settlement_preview_direction = Vector3.ZERO
+	if _settlement_preview != null:
+		_settlement_preview.visible = false
+
+
+func submit_settlement_target() -> void:
+	if not _settlement_targeting \
+			or _settlement_preview_direction == Vector3.ZERO:
+		return
+	var world := DamageHit.game_world_of(self)
+	if world != null:
+		world.request_settlement_launch(
+			peer_id, _settlement_parent, _settlement_preview_direction)
+
+
+func settlement_targeting() -> bool:
+	return _settlement_targeting
+
+
+func settlement_blocks_action(action: StringName) -> bool:
+	return _settlement_targeting and String(action) in SETTLEMENT_BLOCKED_ACTIONS
+
+
+func settlement_preview_direction() -> Vector3:
+	return _settlement_preview_direction
+
+
+func _update_settlement_preview() -> void:
+	if not _settlement_targeting or _settlement_preview == null \
+			or camera == null:
+		return
+	var world := DamageHit.game_world_of(self)
+	var world_planet := planet()
+	if world == null or world_planet == null or world_planet.shape == null:
+		_settlement_preview.visible = false
+		_settlement_preview_direction = Vector3.ZERO
+		return
+	var from := camera.global_position
+	var query := PhysicsRayQueryParameters3D.create(
+		from, from - camera.global_basis.z * 20000.0)
+	query.exclude = [get_rid()]
+	query.collision_mask = 1
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var point: Vector3 = hit.get("position", Vector3.ZERO)
+	if point == Vector3.ZERO:
+		_settlement_preview.visible = false
+		_settlement_preview_direction = Vector3.ZERO
+		return
+	var direction := (point - world_planet.global_position).normalized()
+	_settlement_preview_direction = direction
+	var height := world_planet.shape.elevation(direction)
+	var centre := world_planet.to_global(
+		direction * (world_planet.shape.radius + height + 0.15))
+	var up := (centre - world_planet.global_position).normalized()
+	var forward := -camera.global_basis.z
+	forward -= up * forward.dot(up)
+	if forward.length_squared() < 0.000001:
+		forward = camera.global_basis.x
+	forward = forward.normalized()
+	var right := forward.cross(up).normalized()
+	_settlement_preview.global_transform = Transform3D(
+		Basis(right, up, -forward), centre)
+	var valid := world.settlement_preview_valid(
+		_settlement_parent, direction)
+	var material := StandardMaterial3D.new()
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.albedo_color = Color(0.2, 1.0, 0.35, 0.36) \
+		if valid else Color(1.0, 0.12, 0.18, 0.36)
+	_settlement_preview.material_override = material
+	_settlement_preview.visible = true
+
+
+func blueprint_registry() -> MeepBlueprintPreviewRegistry:
+	return _ensure_blueprint_registry()
+
+
+func _ensure_blueprint_registry() -> MeepBlueprintPreviewRegistry:
+	if is_instance_valid(_blueprint_registry):
+		return _blueprint_registry
+	if peer_id != multiplayer.get_unique_id():
+		return null
+	var world := DamageHit.game_world_of(self)
+	var world_planet := planet()
+	if world == null:
+		return null
+	if world_planet == null:
+		world_planet = world.get_node_or_null("Planet") as Planet
+	var real_colonies := world.meep_colonies()
+	if world_planet == null or world_planet.shape == null:
+		return null
+	var previews := MeepBlueprintPreviewRegistry.new()
+	previews.name = "LocalBlueprintPreviews_%d" % peer_id
+	previews.configure(world_planet, real_colonies)
+	world_planet.add_child(previews)
+	_blueprint_registry = previews
+	tree_exiting.connect(func() -> void:
+		if is_instance_valid(previews):
+			previews.queue_free(), CONNECT_ONE_SHOT)
+	return previews
+
+
+func begin_blueprint_targeting() -> bool:
+	if peer_id != multiplayer.get_unique_id() or _menu_open \
+			or _settlement_targeting or _blueprint_targeting \
+			or _ensure_blueprint_registry() == null:
+		return false
+	_blueprint_targeting = true
+	release_ability(0)
+	release_ability(1)
+	holster()
+	controls_enabled = true
+	reticle.visible = true
+	if _blueprint_preview == null:
+		_blueprint_preview = MeshInstance3D.new()
+		_blueprint_preview.name = "BlueprintFootprintPreview"
+		_blueprint_preview.top_level = true
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3(
+			SettlementShip.FOOTPRINT.x, 0.18,
+			SettlementShip.FOOTPRINT.z)
+		_blueprint_preview.mesh = mesh
+		add_child(_blueprint_preview)
+	_update_blueprint_preview()
+	return true
+
+
+func cancel_blueprint_targeting() -> void:
+	_blueprint_targeting = false
+	_blueprint_preview_direction = Vector3.ZERO
+	if _blueprint_preview != null:
+		_blueprint_preview.visible = false
+
+
+func submit_blueprint_target() -> StringName:
+	if not _blueprint_targeting \
+			or _blueprint_preview_direction == Vector3.ZERO:
+		return &""
+	var previews := _ensure_blueprint_registry()
+	if previews == null or not previews.valid_placement(
+			_blueprint_preview_direction):
+		return &""
+	var id := previews.add_blueprint(
+		_blueprint_preview_direction, _blueprint_preview_facing)
+	if id == &"":
+		return &""
+	var marker := MeepBlueprintSettlement.new()
+	marker.configure(previews.planet, previews, id,
+		_blueprint_preview_direction, _blueprint_preview_facing)
+	previews.add_child(marker)
+	previews.attach_marker(id, marker)
+	var visual := MeepBlueprintCityVisual.new()
+	visual.configure(previews.planet, id,
+		_blueprint_preview_direction, _blueprint_preview_facing,
+		previews.seed(id))
+	previews.add_child(visual)
+	previews.attach_visual(id, visual)
+	cancel_blueprint_targeting()
+	return id
+
+
+func blueprint_targeting() -> bool:
+	return _blueprint_targeting
+
+
+func blueprint_preview_direction() -> Vector3:
+	return _blueprint_preview_direction
+
+
+func _update_blueprint_preview() -> void:
+	if not _blueprint_targeting or _blueprint_preview == null \
+			or camera == null:
+		return
+	var previews := _ensure_blueprint_registry()
+	var world_planet := previews.planet if previews != null else null
+	if previews == null or world_planet == null \
+			or world_planet.shape == null:
+		_blueprint_preview.visible = false
+		_blueprint_preview_direction = Vector3.ZERO
+		return
+	var from := camera.global_position
+	var query := PhysicsRayQueryParameters3D.create(
+		from, from - camera.global_basis.z * 20000.0)
+	query.exclude = [get_rid()]
+	query.collision_mask = 1
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var point: Vector3 = hit.get("position", Vector3.ZERO)
+	if point == Vector3.ZERO:
+		_blueprint_preview.visible = false
+		_blueprint_preview_direction = Vector3.ZERO
+		return
+	var direction := (point - world_planet.global_position).normalized()
+	_blueprint_preview_direction = direction
+	var height := world_planet.shape.elevation(direction)
+	var centre := world_planet.to_global(direction * (
+		world_planet.shape.radius + height + 0.15))
+	var up := (centre - world_planet.global_position).normalized()
+	var forward := -camera.global_basis.z
+	forward -= up * forward.dot(up)
+	if forward.length_squared() < 0.000001:
+		forward = camera.global_basis.x
+	forward = forward.normalized()
+	var right := forward.cross(up).normalized()
+	_blueprint_preview.global_transform = Transform3D(
+		Basis(right, up, -forward), centre)
+	var unturned := MeepSite.new(
+		direction, world_planet.shape.radius, 0.0, 1.0)
+	_blueprint_preview_facing = rad_to_deg(
+		unturned.north.signed_angle_to(forward, up))
+	var valid := previews.valid_placement(direction)
+	var material := StandardMaterial3D.new()
+	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	material.albedo_color = Color(0.18, 0.72, 1.0, 0.38) \
+		if valid else Color(1.0, 0.12, 0.18, 0.36)
+	material.emission_enabled = valid
+	material.emission = Color(0.04, 0.34, 0.9)
+	material.emission_energy_multiplier = 1.2
+	_blueprint_preview.material_override = material
+	_blueprint_preview.visible = true
+
+
+func open_blueprint_city_menu(id: StringName) -> void:
+	if peer_id != multiplayer.get_unique_id() or _menu_open \
+			or is_instance_valid(_blueprint_menu):
+		return
+	var previews := _ensure_blueprint_registry()
+	if previews == null or not previews.has_blueprint(id):
+		return
+	var menu := BLUEPRINT_CITY_MENU_SCRIPT.new() as BLUEPRINT_CITY_MENU_SCRIPT
+	if menu == null:
+		return
+	menu.configure(func() -> Dictionary:
+		return previews.report(id) if is_instance_valid(previews) else {})
+	menu.population_changed.connect(func(population: int) -> void:
+		if is_instance_valid(previews):
+			previews.set_population(id, population))
+	menu.closed.connect(_on_blueprint_city_menu_closed)
+	_blueprint_menu = menu
+	open_menu()
+	hud.add_child(menu)
+	var world := DamageHit.game_world_of(self)
+	if world != null:
+		world.set_local_pause(true)
+
+
+func blueprint_city_menu() -> BLUEPRINT_CITY_MENU_SCRIPT:
+	return _blueprint_menu if is_instance_valid(_blueprint_menu) else null
+
+
+func _on_blueprint_city_menu_closed() -> void:
+	_blueprint_menu = null
+	if is_instance_valid(_death_screen):
+		open_menu()
+	else:
+		close_menu()
+	var world := NetworkManager.active_world as GameWorld
+	if world != null:
+		world.set_local_pause(false)
+
+
+func open_hat_house(site: StringName, structure_index: int) -> void:
+	_open_specialty_house(SpecialtyShop.Mode.HATS, site, structure_index)
+
+
+func open_abilities_house(site: StringName, structure_index: int) -> void:
+	_open_specialty_house(SpecialtyShop.Mode.ABILITIES, site, structure_index)
+
+
+func open_biomass_harvester(site: StringName, structure_index: int) -> void:
+	if peer_id != multiplayer.get_unique_id() or _menu_open \
+			or is_instance_valid(_harvester_menu):
+		return
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return
+	var menu: Control = BIOMASS_HARVESTER_MENU_SCRIPT.new()
+	menu.call(&"configure", func() -> Dictionary:
+		return world.colony_report(site) if is_instance_valid(world) else {})
+	menu.connect(&"upgrade_requested", func(purchase_id: int) -> void:
+		if is_instance_valid(world):
+			world.request_harvester_upgrade(
+				peer_id, site, structure_index, purchase_id))
+	menu.connect(&"closed", _on_harvester_menu_closed)
+	_harvester_menu = menu
+	open_menu()
+	hud.add_child(menu)
+	world.set_local_pause(true)
+
+
+func open_resident_list(site: StringName, structure_index: int) -> void:
+	if peer_id != multiplayer.get_unique_id() or _menu_open \
+			or is_instance_valid(_resident_list):
+		return
+	var world := DamageHit.game_world_of(self)
+	var colonies := world.meep_colonies() if world != null else null
+	var colony := colonies.colony(site) if colonies != null else null
+	if colony == null:
+		return
+	var overlay := ResidentListOverlay.new()
+	overlay.configure(func() -> Dictionary:
+		return colony.resident_report(structure_index) \
+			if is_instance_valid(colony) else {})
+	overlay.closed.connect(_on_resident_list_closed)
+	_resident_list = overlay
+	open_menu()
+	hud.add_child(overlay)
+	world.set_local_pause(true)
+
+
+func _on_resident_list_closed() -> void:
+	_resident_list = null
+	close_menu()
+	var world := DamageHit.game_world_of(self)
+	if world != null:
+		world.set_local_pause(false)
+
+
+func _on_harvester_menu_closed() -> void:
+	_harvester_menu = null
+	if is_instance_valid(_death_screen):
+		open_menu()
+	else:
+		close_menu()
+	var world := NetworkManager.active_world as GameWorld
+	if world != null:
+		world.set_local_pause(false)
+
+
+func _open_specialty_house(mode: int, site: StringName,
+		structure_index: int) -> void:
+	if peer_id != multiplayer.get_unique_id() or _menu_open \
+			or is_instance_valid(_specialty_shop):
+		return
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return
+	var shop := SpecialtyShop.new()
+	var stats_unlocked := mode == SpecialtyShop.Mode.ABILITIES \
+		and bool(world.colony_report(site).get(
+			"abilities_house_upgraded", false))
+	shop.configure(self, mode, stats_unlocked)
+	shop.hat_purchase_requested.connect(func(item_id: String) -> void:
+		if is_instance_valid(world):
+			world.request_hat_purchase(peer_id, site, structure_index, item_id))
+	shop.ability_action_requested.connect(func(
+			ability_id: String, action: int) -> void:
+		if is_instance_valid(world):
+			world.request_ability_house_action(
+				peer_id, site, structure_index, ability_id, action))
+	shop.ability_stat_upgrade_requested.connect(func(
+			ability_id: String, stat_id: String) -> void:
+		if is_instance_valid(world):
+			world.request_ability_stat_upgrade(
+				peer_id, site, structure_index, ability_id, stat_id))
+	shop.closed.connect(_on_specialty_shop_closed)
+	_specialty_shop = shop
+	open_menu()
+	hud.add_child(shop)
+	world.set_local_pause(true)
+
+
+func _on_specialty_shop_closed() -> void:
+	_specialty_shop = null
 	if is_instance_valid(_death_screen):
 		open_menu()
 	else:
@@ -1479,6 +2209,10 @@ func _on_stat_changed(id: StringName, value: float) -> void:
 	if id == PlayerStats.HEALTH:
 		health_changed.emit(stats.health(), stats.base_of(PlayerStats.HEALTH))
 		return
+	if id == PlayerStats.GOLD:
+		progression_changed.emit()
+		_queue_progression_save()
+		return
 	if id != PlayerStats.SPEED:
 		return
 	var scale := value / maxf(_authored_speeds.x, 0.01)
@@ -1498,6 +2232,8 @@ func _on_status_changed(id: StringName, remaining: float) -> void:
 ## A menu has the mouse. The body keeps being simulated so it still falls and is
 ## still synced, but it stops taking input and the crosshair gets out of the way.
 func open_menu() -> void:
+	if is_instance_valid(_building_wheel):
+		_close_building_wheel_overlay()
 	_menu_open = true
 	controls_enabled = false
 	if _weapon_pose != null:
@@ -1669,12 +2405,637 @@ func apply_hotbar(items: PackedStringArray) -> void:
 
 func apply_abilities(items: PackedStringArray) -> void:
 	for index in abilities.size():
-		abilities.set_item(index, items[index] if index < items.size() else "")
+		var id := items[index] if index < items.size() else ""
+		abilities.set_item(index,
+			id if ItemDB.ability_directly_equippable(id) else "")
 
 
 func apply_backpack(items: PackedStringArray) -> void:
 	for index in backpack.size():
 		backpack.set_item(index, items[index] if index < items.size() else "")
+
+
+func gold() -> float:
+	return stats.base_of(PlayerStats.GOLD)
+
+
+func ability_level(id: String) -> int:
+	if not ItemDB.is_ability(id):
+		return 0
+	if ItemDB.is_one_time_ability(id):
+		return 1 if owns_one_time_ability(id) else 0
+	var default_level := 1 if CharacterDB.ALL_ABILITIES_UNLOCKED else 0
+	return clampi(int(ability_progress.get(id, default_level)), 0,
+		ItemDB.MAX_ABILITY_LEVEL)
+
+
+func ability_stat_levels(id: String) -> Dictionary:
+	var raw: Variant = ability_stat_progress.get(id, {})
+	return (raw as Dictionary).duplicate(true) if raw is Dictionary else {}
+
+
+func ability_stat_level(id: String, stat_id: String) -> int:
+	return clampi(int(ability_stat_levels(id).get(stat_id, 0)),
+		0, ItemDB.MAX_ABILITY_STAT_LEVEL)
+
+
+func ability_stats(id: String) -> Dictionary:
+	return ItemDB.stats_of(id, maxi(ability_level(id), 1),
+		ability_stat_levels(id))
+
+
+func ability_unlocked(id: String) -> bool:
+	return ItemDB.is_ability(id) and (
+		owns_one_time_ability(id)
+		if ItemDB.is_one_time_ability(id)
+		else ability_level(id) > 0
+	)
+
+
+func ability_equipped(id: String) -> bool:
+	return ability_unlocked(id) and abilities.find(id) >= 0
+
+
+func owns_physical_item(item_id: String) -> bool:
+	if item_id.is_empty() or ItemDB.is_ability(item_id):
+		return false
+	return equipment.find(item_id) >= 0 or hotbar.find(item_id) >= 0 \
+		or backpack.find(item_id) >= 0
+
+
+## Local ownership move used by Hat House. Swapping through ItemContainer keeps
+## the displaced hat finite and follows the normal persistence/replication path.
+func toggle_hat(item_id: String) -> bool:
+	if peer_id != multiplayer.get_unique_id() or not owns_physical_item(item_id) \
+			or ItemDB.slot_of(item_id) != "hat" \
+			or not CharacterDB.apparel_fits(_body_id, item_id):
+		return false
+	var equipped_index := equipment.find(item_id)
+	if equipped_index >= 0:
+		return ItemContainer.quick_move(equipment, equipped_index, backpack)
+	var source_index := backpack.find(item_id)
+	if source_index < 0:
+		return false
+	return ItemContainer.transfer(backpack, source_index, equipment, 0)
+
+
+func authoritative_record_hat_purchase(item_id: String) -> bool:
+	if not _is_host_authority() or not item_id in ItemDB.hat_shop_ids() \
+			or _owned_hats.has(item_id):
+		return false
+	_owned_hats[item_id] = true
+	return true
+
+
+func authoritative_toggle_hat(item_id: String) -> bool:
+	if not _is_host_authority() or not owns_hat(item_id) \
+			or not owns_physical_item(item_id) \
+			or not CharacterDB.apparel_fits(_body_id, item_id):
+		return false
+	var was_applying := _applying_loadout
+	if peer_id != multiplayer.get_unique_id():
+		_applying_loadout = true
+	var equipped_index := equipment.find(item_id)
+	var changed := ItemContainer.quick_move(
+		equipment, equipped_index, backpack) if equipped_index >= 0 \
+		else ItemContainer.transfer(
+			backpack, backpack.find(item_id), equipment, 0)
+	_applying_loadout = was_applying
+	if changed:
+		publish_authoritative_loadout()
+	return changed
+
+
+func publish_authoritative_loadout() -> void:
+	if not _is_host_authority():
+		return
+	_inventory_generation += 1
+	if peer_id == multiplayer.get_unique_id():
+		_queue_loadout_save()
+	elif multiplayer.has_multiplayer_peer():
+		_apply_authoritative_loadout.rpc({
+			"equipment": equipment.items(),
+			"hotbar": hotbar.items(),
+			"abilities": abilities.items(),
+			"backpack": backpack.items(),
+		}, _inventory_generation)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _apply_authoritative_loadout(snapshot: Dictionary, generation: int) -> void:
+	if generation < _inventory_generation:
+		return
+	_inventory_generation = generation
+	var clean := _sanitize_loadout_snapshot(snapshot, false)
+	if clean.is_empty():
+		return
+	var was_applying := _applying_loadout
+	_applying_loadout = true
+	apply_worn(clean["equipment"])
+	if peer_id == multiplayer.get_unique_id():
+		apply_hotbar(clean["hotbar"])
+		apply_abilities(clean["abilities"])
+		apply_backpack(clean["backpack"])
+	_applying_loadout = was_applying
+	if peer_id == multiplayer.get_unique_id():
+		_queue_loadout_save()
+
+
+func progression_snapshot() -> Dictionary:
+	return {
+		"gold": gold(),
+		"ability_progress": ability_progress.duplicate(true),
+		"ability_stat_progress": ability_stat_progress.duplicate(true),
+		"abilities": abilities.items(),
+		"owned_hats": owned_hat_ids(),
+		"one_time_abilities": one_time_abilities.duplicate(true),
+	}
+
+
+func loadout_snapshot() -> Dictionary:
+	return {
+		"equipment": equipment.items(),
+		"hotbar": hotbar.items(),
+		"abilities": abilities.items(),
+		"backpack": backpack.items(),
+	}
+
+
+func worn_slot_snapshot() -> Dictionary:
+	var worn: Dictionary = {}
+	for index in mini(equipment.size(), ItemDB.SLOT_ORDER.size()):
+		var item_id := equipment.get_item(index)
+		if not item_id.is_empty():
+			worn[ItemDB.SLOT_ORDER[index]] = item_id
+	return worn
+
+
+## Durable local-player state for a named sandbox save. Short-lived projectiles
+## and animation requests are intentionally absent; their lasting results
+## (damage, scars, drops, and constructs) belong to the surrounding world.
+func sandbox_snapshot() -> Dictionary:
+	return {
+		"peer_id": peer_id,
+		"metadata": {
+			"name": display_name,
+			"body": body_id(),
+			"skin": skin_id(),
+			"worn": worn_slot_snapshot(),
+			"tints": tints(),
+		},
+		"transform": global_transform,
+		"pitch": _pitch,
+		"stance": _stance,
+		"held": held_item(),
+		"combat": combat_snapshot(),
+		"resources": {
+			"biomass": biomass(),
+			"speed": stats.base_of(PlayerStats.SPEED),
+		},
+		"loadout": loadout_snapshot(),
+		"inventory_generation": _inventory_generation,
+		"progression": progression_snapshot(),
+		"progression_generation": _progression_generation,
+		"journal": journal.snapshot(),
+		"poke_ball": {
+			"mob_id": _poke_ball_mob_id,
+			"mob_name": _poke_ball_mob_name,
+		},
+	}
+
+
+func apply_sandbox_snapshot(snapshot: Dictionary) -> void:
+	var metadata_value: Variant = snapshot.get("metadata", {})
+	if metadata_value is Dictionary:
+		var metadata := metadata_value as Dictionary
+		display_name = String(metadata.get("name", display_name))
+		apply_look({
+			"body": metadata.get("body", body_id()),
+			"skin": metadata.get("skin", skin_id()),
+			"worn": metadata.get("worn", worn_slot_snapshot()),
+			"tints": metadata.get("tints", tints()),
+		})
+
+	var loadout_value: Variant = snapshot.get("loadout", {})
+	if loadout_value is Dictionary:
+		_apply_authoritative_loadout(
+			loadout_value as Dictionary,
+			maxi(int(snapshot.get(
+				"inventory_generation", _inventory_generation)),
+				_inventory_generation))
+	var progression_value: Variant = snapshot.get("progression", {})
+	if progression_value is Dictionary:
+		_apply_progression_snapshot(
+			progression_value as Dictionary,
+			maxi(int(snapshot.get(
+				"progression_generation", _progression_generation)),
+				_progression_generation))
+
+	var transform_value: Variant = snapshot.get("transform", global_transform)
+	if transform_value is Transform3D \
+			and (transform_value as Transform3D).is_finite():
+		global_transform = transform_value as Transform3D
+		reset_physics_interpolation()
+		reset_network_state(global_transform)
+	var pitch_value := float(snapshot.get("pitch", _pitch))
+	if is_finite(pitch_value):
+		_pitch = clampf(pitch_value, -1.48, 1.48)
+		if head != null:
+			head.rotation.x = _pitch
+	_apply_stance(clampi(
+		int(snapshot.get("stance", Stance.STAND)),
+		Stance.STAND, COLLIDER_HEIGHTS.size() - 1))
+
+	var resource_value: Variant = snapshot.get("resources", {})
+	if resource_value is Dictionary:
+		var resources := resource_value as Dictionary
+		apply_resource_snapshot(resources)
+		var speed := float(resources.get(
+			"speed", stats.base_of(PlayerStats.SPEED)))
+		if is_finite(speed):
+			stats.set_base(PlayerStats.SPEED, speed)
+	var combat_value: Variant = snapshot.get("combat", {})
+	if combat_value is Dictionary:
+		apply_combat_snapshot(combat_value as Dictionary)
+	apply_held(String(snapshot.get("held", "")))
+	journal.apply_snapshot(snapshot.get("journal", []))
+
+	var poke_value: Variant = snapshot.get("poke_ball", {})
+	if poke_value is Dictionary:
+		_host_poke_ball_sequence += 1
+		_apply_poke_ball_state(
+			_host_poke_ball_sequence,
+			String((poke_value as Dictionary).get("mob_id", "")),
+			String((poke_value as Dictionary).get("mob_name", "")))
+
+
+func owned_hat_ids() -> PackedStringArray:
+	var ids := PackedStringArray()
+	for item_id: String in ItemDB.hat_shop_ids():
+		if _owned_hats.has(item_id):
+			ids.push_back(item_id)
+	return ids
+
+
+func owns_hat(item_id: String) -> bool:
+	return item_id in ItemDB.hat_shop_ids() and _owned_hats.has(item_id)
+
+
+func owns_one_time_ability(id: String) -> bool:
+	return one_time_ability_count(id) > 0
+
+
+func one_time_ability_count(id: String) -> int:
+	if not ItemDB.is_one_time_ability(id):
+		return 0
+	var owned: Variant = one_time_abilities.get(id, [])
+	if owned is Array:
+		return (owned as Array).size()
+	# Compatibility for direct fixtures and profiles not sanitized yet.
+	return 1 if owned is Dictionary else 0
+
+
+func one_time_ability_records(id: String) -> Array[Dictionary]:
+	var records: Array[Dictionary] = []
+	if not ItemDB.is_one_time_ability(id):
+		return records
+	var owned: Variant = one_time_abilities.get(id, [])
+	var raw_records: Array = owned if owned is Array else [owned]
+	for record_variant: Variant in raw_records:
+		if record_variant is Dictionary:
+			records.append((record_variant as Dictionary).duplicate(true))
+	return records
+
+
+func one_time_ability_record(id: String) -> Dictionary:
+	var records := one_time_ability_records(id)
+	return records[0].duplicate(true) if not records.is_empty() else {}
+
+
+func one_time_ability_record_matching(id: String, key: String,
+		value: String) -> Dictionary:
+	for record: Dictionary in one_time_ability_records(id):
+		if String(record.get(key, "")) == value:
+			return record.duplicate(true)
+	return {}
+
+
+func one_time_ability_title(id: String) -> String:
+	var title := String(one_time_ability_record(id).get("title", "")).strip_edges()
+	return title if not title.is_empty() else ItemDB.title(id)
+
+
+## The host appends one unique record after its source transaction succeeds.
+## The base id remains the slot assignment; its FIFO records are the uses.
+func authoritative_grant_one_time_ability(id: String,
+		record: Dictionary) -> bool:
+	if not _is_host_authority() or not _server_has_progression_snapshot \
+			or not ItemDB.is_one_time_ability(id):
+		return false
+	var clean := CharacterDB.sanitize_one_time_abilities({id: [record]})
+	var granted: Variant = clean.get(id, [])
+	if not granted is Array or (granted as Array).is_empty():
+		return false
+	var records := one_time_ability_records(id)
+	records.append(((granted as Array)[0] as Dictionary).duplicate(true))
+	one_time_abilities[id] = records
+	publish_authoritative_progression()
+	return true
+
+
+## Successful host resolution is the only consumption point. Invalid terrain,
+## cancellation, rejected requests, and merely equipping the record leave it
+## untouched.
+func authoritative_consume_one_time_ability(id: String,
+		expected_key := "", expected_value := "") -> bool:
+	if not _is_host_authority() or not owns_one_time_ability(id):
+		return false
+	var records := one_time_ability_records(id)
+	var consumed_index := 0
+	if not expected_key.is_empty():
+		consumed_index = -1
+		for index in records.size():
+			if String(records[index].get(
+					expected_key, "")) == expected_value:
+				consumed_index = index
+				break
+	if consumed_index < 0 or consumed_index >= records.size():
+		return false
+	records.remove_at(consumed_index)
+	if records.is_empty():
+		one_time_abilities.erase(id)
+		for index in abilities.size():
+			if abilities.get_item(index) == id:
+				abilities.set_item(index, "")
+	else:
+		one_time_abilities[id] = records
+	publish_authoritative_progression()
+	return true
+
+
+func authoritative_progression_ready() -> bool:
+	return _server_has_progression_snapshot
+
+
+## Flushes the one owner-provided initial snapshot before a specialty request.
+## After that first handoff only the host mutates progression.
+func sync_progression_to_server() -> void:
+	if peer_id != multiplayer.get_unique_id() or multiplayer.is_server() \
+			or not multiplayer.has_multiplayer_peer():
+		return
+	if _progression_snapshot_queued:
+		_progression_snapshot_queued = false
+		_send_progression_snapshot()
+
+
+func _queue_progression_snapshot() -> void:
+	if peer_id != multiplayer.get_unique_id() or multiplayer.is_server() \
+			or not multiplayer.has_multiplayer_peer() \
+			or _progression_snapshot_queued:
+		return
+	_progression_snapshot_queued = true
+	call_deferred("_flush_progression_snapshot")
+
+
+func _flush_progression_snapshot() -> void:
+	if not _progression_snapshot_queued:
+		return
+	_progression_snapshot_queued = false
+	_send_progression_snapshot()
+
+
+func _send_progression_snapshot() -> void:
+	if peer_id != multiplayer.get_unique_id() or multiplayer.is_server() \
+			or not multiplayer.has_multiplayer_peer():
+		return
+	_progression_snapshot_revision += 1
+	_submit_progression_snapshot.rpc_id(
+		1, progression_snapshot(), _progression_generation,
+		_progression_snapshot_revision)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _submit_progression_snapshot(snapshot: Dictionary, generation: int,
+		revision: int) -> void:
+	if not multiplayer.is_server() \
+			or multiplayer.get_remote_sender_id() != peer_id \
+			or _server_has_progression_snapshot \
+			or generation != _progression_generation \
+			or revision <= _server_progression_revision:
+		return
+	var clean := _sanitize_progression_snapshot(snapshot)
+	if clean.is_empty():
+		return
+	_server_progression_revision = revision
+	_apply_progression_snapshot(clean, generation)
+	_server_has_progression_snapshot = true
+
+
+func _sanitize_progression_snapshot(snapshot: Dictionary) -> Dictionary:
+	var gold_value := float(snapshot.get("gold", 0.0))
+	var progress_raw: Variant = snapshot.get("ability_progress", {})
+	var stat_progress_raw: Variant = snapshot.get("ability_stat_progress", {})
+	var hats_raw: Variant = snapshot.get("owned_hats", [])
+	var one_time_raw: Variant = snapshot.get("one_time_abilities", {})
+	if not is_finite(gold_value) or gold_value < 0.0 \
+			or not progress_raw is Dictionary \
+			or not stat_progress_raw is Dictionary \
+			or (not hats_raw is Array and not hats_raw is PackedStringArray) \
+			or not one_time_raw is Dictionary:
+		return {}
+	var clean_one_time := CharacterDB.sanitize_one_time_abilities(one_time_raw)
+	var clean_progress: Dictionary = {}
+	for id_variant: Variant in progress_raw:
+		var id := str(id_variant)
+		if ItemDB.is_ability(id) and not ItemDB.is_one_time_ability(id):
+			clean_progress[id] = clampi(
+				int((progress_raw as Dictionary)[id_variant]),
+				1, ItemDB.MAX_ABILITY_LEVEL)
+	if CharacterDB.ALL_ABILITIES_UNLOCKED:
+		for id: String in ItemDB.reusable_ability_ids():
+			if not clean_progress.has(id):
+				clean_progress[id] = 1
+	else:
+		for id: String in CharacterDB.DEFAULT_ABILITY_PROGRESS:
+			if not clean_progress.has(id):
+				clean_progress[id] = int(
+					CharacterDB.DEFAULT_ABILITY_PROGRESS[id])
+	var clean_stat_progress: Dictionary = {}
+	for id_variant: Variant in stat_progress_raw:
+		var id := str(id_variant)
+		if not clean_progress.has(id):
+			continue
+		var clean_levels := ItemDB.sanitize_ability_stat_levels(
+			id, (stat_progress_raw as Dictionary)[id_variant])
+		if not clean_levels.is_empty():
+			clean_stat_progress[id] = clean_levels
+	var clean_abilities := PackedStringArray()
+	clean_abilities.resize(abilities.size())
+	var raw_abilities: Variant = snapshot.get("abilities", [])
+	if raw_abilities is Array or raw_abilities is PackedStringArray:
+		for index in mini(raw_abilities.size(), clean_abilities.size()):
+			var id := str(raw_abilities[index])
+			if ItemDB.is_ability(id):
+				if ItemDB.is_one_time_ability(id):
+					if not clean_one_time.has(id):
+						continue
+				elif not clean_progress.has(id):
+					clean_progress[id] = 1
+				clean_abilities[index] = id
+	var clean_hats := PackedStringArray()
+	for item_variant: Variant in hats_raw:
+		var item_id := str(item_variant)
+		if item_id in ItemDB.hat_shop_ids() and not clean_hats.has(item_id):
+			clean_hats.push_back(item_id)
+	return {
+		"gold": clampf(gold_value, 0.0,
+			PlayerStats.maximum_of(PlayerStats.GOLD)),
+		"ability_progress": clean_progress,
+		"ability_stat_progress": clean_stat_progress,
+		"abilities": clean_abilities,
+		"owned_hats": clean_hats,
+		"one_time_abilities": clean_one_time,
+	}
+
+
+func _apply_progression_snapshot(snapshot: Dictionary, generation: int) -> void:
+	var clean := _sanitize_progression_snapshot(snapshot)
+	if clean.is_empty() or generation < _progression_generation:
+		return
+	_progression_generation = generation
+	ability_progress = (clean["ability_progress"] as Dictionary).duplicate(true)
+	ability_stat_progress = (
+		clean["ability_stat_progress"] as Dictionary).duplicate(true)
+	one_time_abilities = (
+		clean["one_time_abilities"] as Dictionary).duplicate(true)
+	_owned_hats.clear()
+	for item_id: String in clean["owned_hats"]:
+		_owned_hats[item_id] = true
+	stats.set_base(PlayerStats.GOLD, float(clean["gold"]))
+	var was_applying := _applying_loadout
+	_applying_loadout = true
+	apply_abilities(clean["abilities"])
+	_applying_loadout = was_applying
+	progression_changed.emit()
+	_queue_progression_save()
+	if peer_id == multiplayer.get_unique_id():
+		_queue_loadout_save()
+
+
+@rpc("authority", "call_remote", "reliable")
+func _apply_authoritative_progression(snapshot: Dictionary,
+		generation: int) -> void:
+	if peer_id != multiplayer.get_unique_id():
+		return
+	_apply_progression_snapshot(snapshot, generation)
+
+
+func _queue_progression_save() -> void:
+	if peer_id != multiplayer.get_unique_id() or _progression_save_queued:
+		return
+	_progression_save_queued = true
+	call_deferred("_persist_progression")
+
+
+func _persist_progression() -> void:
+	_progression_save_queued = false
+	if peer_id != multiplayer.get_unique_id():
+		return
+	var began := Time.get_ticks_usec()
+	CharacterDB.save_progression(
+		gold(), ability_progress, owned_hat_ids(), one_time_abilities,
+		ability_stat_progress)
+	RuntimeTelemetry.record_activity(
+		&"player", &"save_progression", Time.get_ticks_usec() - began)
+
+
+func can_spend_gold(amount: int) -> bool:
+	return amount >= 0 and gold() + 0.001 >= float(amount)
+
+
+## Host-only debit. Publishing is left to the completed transaction so a failed
+## finite-inventory grant cannot charge the player.
+func authoritative_spend_gold(amount: int) -> bool:
+	if not _is_host_authority() or not can_spend_gold(amount):
+		return false
+	if amount > 0:
+		stats.set_base(PlayerStats.GOLD, gold() - float(amount))
+	return true
+
+
+func publish_authoritative_progression() -> void:
+	if not _is_host_authority():
+		return
+	_progression_generation += 1
+	progression_changed.emit()
+	if peer_id == multiplayer.get_unique_id():
+		_queue_progression_save()
+		return
+	if multiplayer.has_multiplayer_peer():
+		_apply_authoritative_progression.rpc_id(
+			peer_id, progression_snapshot(), _progression_generation)
+
+
+## Applies one validated Abilities House operation. Unlock and maximum-level
+## requests are idempotent; equip replacement is deterministic per requested
+## mouse slot.
+func authoritative_ability_action(id: String, action: int) -> bool:
+	if not _is_host_authority() or not _server_has_progression_snapshot \
+			or not ItemDB.is_ability(id) or ItemDB.is_one_time_ability(id):
+		return false
+	var level := ability_level(id)
+	match action:
+		AbilityProgressAction.UNLOCK:
+			if level <= 0:
+				var price := ItemDB.ability_unlock_price(id)
+				if price < 0 or not authoritative_spend_gold(price):
+					return false
+				ability_progress[id] = 1
+		AbilityProgressAction.UPGRADE:
+			if level >= ItemDB.MAX_ABILITY_LEVEL:
+				publish_authoritative_progression()
+				return true
+			var price := ItemDB.ability_upgrade_price(id, level)
+			if level <= 0 or price < 0 \
+					or not authoritative_spend_gold(price):
+				return false
+			ability_progress[id] = level + 1
+		AbilityProgressAction.EQUIP_PRIMARY, \
+				AbilityProgressAction.EQUIP_SECONDARY:
+			if level <= 0 or not ItemDB.ability_directly_equippable(id):
+				return false
+			var target := 0 if action == AbilityProgressAction.EQUIP_PRIMARY else 1
+			var existing := abilities.find(id)
+			var was_applying := _applying_loadout
+			if peer_id != multiplayer.get_unique_id():
+				_applying_loadout = true
+			if existing >= 0 and existing != target:
+				abilities.set_item(existing, "")
+			abilities.set_item(target, id)
+			_applying_loadout = was_applying
+		_:
+			return false
+	publish_authoritative_progression()
+	return true
+
+
+func authoritative_ability_stat_upgrade(id: String, stat_id: String) -> bool:
+	if not _is_host_authority() or not _server_has_progression_snapshot \
+			or not ability_unlocked(id) \
+			or not ItemDB.ability_stat_valid(id, stat_id):
+		return false
+	var level := ability_stat_level(id, stat_id)
+	if level >= ItemDB.MAX_ABILITY_STAT_LEVEL:
+		publish_authoritative_progression()
+		return true
+	var price := ItemDB.ability_stat_upgrade_price(id, stat_id, level)
+	if price < 0 or not authoritative_spend_gold(price):
+		return false
+	var levels := ability_stat_levels(id)
+	levels[stat_id] = level + 1
+	ability_stat_progress[id] = levels
+	publish_authoritative_progression()
+	return true
 
 
 ## Current item in one of the three finite physical containers. Abilities are
@@ -1849,7 +3210,8 @@ func equip_hotbar(item_id: String, index := -1) -> bool:
 
 
 func equip_ability(ability_id: String, index := -1) -> bool:
-	if not ItemDB.accepts_ability(ability_id):
+	if not ItemDB.accepts_ability(ability_id) \
+			or not ItemDB.ability_directly_equippable(ability_id):
 		return false
 	var target := index if index >= 0 else abilities.first_accepting(ability_id)
 	if target < 0 or target >= abilities.size():
@@ -1870,6 +3232,12 @@ func _on_equipment_changed() -> void:
 func _on_abilities_changed() -> void:
 	if _weapon_bar != null:
 		_weapon_bar.refresh()
+	if _is_host_authority() and not _poke_ball_mob_id.is_empty() \
+			and not _poke_ball_release_queued:
+		# A same-frame slot swap emits once per changed slot. Defer until both
+		# halves are complete so moving Poké Ball between hands does not open it.
+		_poke_ball_release_queued = true
+		call_deferred(&"_release_poke_ball_if_unequipped")
 	_queue_loadout_save()
 
 
@@ -1926,6 +3294,7 @@ func _submit_loadout_snapshot(
 	) -> void:
 	if not multiplayer.is_server() \
 			or multiplayer.get_remote_sender_id() != peer_id \
+			or not _server_has_progression_snapshot \
 			or generation != _inventory_generation \
 			or revision <= _server_snapshot_revision:
 		return
@@ -1943,7 +3312,8 @@ func _submit_loadout_snapshot(
 	_server_has_loadout_snapshot = true
 
 
-func _sanitize_loadout_snapshot(snapshot: Dictionary) -> Dictionary:
+func _sanitize_loadout_snapshot(snapshot: Dictionary,
+		enforce_hat_ledger := true) -> Dictionary:
 	var expected_sizes := {
 		"equipment": equipment.size(),
 		"hotbar": hotbar.size(),
@@ -1965,6 +3335,12 @@ func _sanitize_loadout_snapshot(snapshot: Dictionary) -> Dictionary:
 		snapshot["abilities"], abilities)
 	var clean_backpack: PackedStringArray = _sanitize_snapshot_container(
 		snapshot["backpack"], backpack)
+	if enforce_hat_ledger:
+		for items: PackedStringArray in [clean_equipment, clean_backpack]:
+			for index in items.size():
+				var item_id := items[index]
+				if item_id in ItemDB.hat_shop_ids() and not owns_hat(item_id):
+					items[index] = ""
 	return {
 		"equipment": clean_equipment,
 		"hotbar": clean_hotbar,
@@ -2000,6 +3376,7 @@ func _persist_loadout() -> void:
 			or peer_id != multiplayer.get_unique_id():
 		return
 	_saving_loadout = true
+	var began := Time.get_ticks_usec()
 	var look := CharacterDB.load_look()
 	look["body"] = _body_id
 	look["skin"] = _skin_id
@@ -2016,6 +3393,8 @@ func _persist_loadout() -> void:
 	look["backpack"] = _container_array(backpack)
 	CharacterDB.save_look(look)
 	_saving_loadout = false
+	RuntimeTelemetry.record_activity(
+		&"player", &"save_loadout", Time.get_ticks_usec() - began)
 
 
 func _container_array(container: ItemContainer) -> Array:
@@ -2204,10 +3583,23 @@ func _on_weapons_changed() -> void:
 func activate_primary() -> void:
 	if not can_attack():
 		return
-	if _hotbar_drawn and not _held.is_empty():
+	if _ability_overrides_weapon_input(0):
+		activate_ability(0)
+	elif _hotbar_drawn and not _held.is_empty():
 		_attack()
 	else:
 		activate_ability(0)
+
+
+func _ability_overrides_weapon_input(index: int) -> bool:
+	if index < 0 or index >= abilities.size():
+		return false
+	var id := abilities.get_item(index)
+	if not ability_unlocked(id) \
+			or not ItemDB.ability_directly_equippable(id):
+		return false
+	var definition := ItemDB.ability_definition(id)
+	return definition != null and definition.overrides_weapon_input
 
 
 ## Whether this body can begin or continue an offensive action.
@@ -2218,6 +3610,13 @@ func activate_primary() -> void:
 func can_attack() -> bool:
 	return not _dead and not _grabbed and not _lassoed and not _forced_ragdoll \
 		and _stance != Stance.CRASH and _stance != Stance.GRAPPLE
+
+
+## Every host-side cast request passes this private progression/loadout gate.
+## Definition/type validation still happens in each specialized publisher.
+func _host_can_cast_ability(id: String) -> bool:
+	return _is_host_authority() and ability_unlocked(id) \
+		and abilities.find(id) >= 0
 
 
 ## Which of [enum Stance] the body is in. Abilities gate on this — a meteor
@@ -2328,6 +3727,14 @@ func meteor_shock() -> MeteorShock:
 	return _meteor_shock
 
 
+func hero_punch_shock() -> MeteorShock:
+	if not is_instance_valid(_hero_punch_shock):
+		_hero_punch_shock = MeteorShock.new()
+		_hero_punch_shock.name = "HeroPunchWind"
+		add_child(_hero_punch_shock, false, Node.INTERNAL_MODE_BACK)
+	return _hero_punch_shock
+
+
 ## Sends one tick of a beam ability to every peer, including this one.
 ##
 ## The volume is what travels, not its consequences. Each machine applies it to
@@ -2350,7 +3757,8 @@ func fire_beam(id: String, left_eye: Vector3, right_eye: Vector3, at: Vector3,
 
 func _publish_ability_beam(id: String, left_eye: Vector3,
 		right_eye: Vector3, at: Vector3, landed: bool) -> void:
-	if not can_attack() or id != "laser_eyes" or not ItemDB.accepts_ability(id) \
+	if not can_attack() or not _host_can_cast_ability(id) \
+			or id != "laser_eyes" or not ItemDB.accepts_ability(id) \
 			or not left_eye.is_finite() \
 			or not right_eye.is_finite() or not at.is_finite():
 		return
@@ -2404,6 +3812,7 @@ func _uses_launched_projectile(definition: AbilityDefinition) -> bool:
 	return definition != null and definition.projectile_type in [
 		AbilityDefinition.ProjectileType.ENERGY_DISK,
 		AbilityDefinition.ProjectileType.ENERGY_ORB,
+		AbilityDefinition.ProjectileType.POKE_BALL,
 	]
 
 
@@ -2420,7 +3829,7 @@ func _publish_ability_projectile(request_sequence: int, id: String,
 		if along.length_squared() > 0.001 else Vector3.ZERO
 	var spawn_tolerance := maxf(
 		2.5, velocity.length() * SYNC_INTERVAL * 3.0)
-	if not can_attack() or definition == null \
+	if not can_attack() or not _host_can_cast_ability(id) or definition == null \
 			or not _uses_launched_projectile(definition) \
 			or not from.is_finite() or not along.is_finite() \
 			or along.length_squared() < 0.001 \
@@ -2433,12 +3842,14 @@ func _publish_ability_projectile(request_sequence: int, id: String,
 	_host_projectile_sequence += 1
 	_apply_ability_projectile.rpc(
 		_host_projectile_sequence, request_sequence, id,
-		host_from, host_along, authoritative_velocity, variant)
+		host_from, host_along, authoritative_velocity, variant,
+		ability_stats(id))
 	return true
 
 
 func _spawn_ability_projectile(id: String, from: Vector3, along: Vector3,
-		inherited_velocity: Vector3, variant: int) -> bool:
+		inherited_velocity: Vector3, variant: int,
+		resolved_stats: Dictionary = {}) -> bool:
 	var definition := ItemDB.ability_definition(id)
 	if definition == null:
 		return false
@@ -2447,8 +3858,12 @@ func _spawn_ability_projectile(id: String, from: Vector3, along: Vector3,
 	# client-authored packet while retaining responsive local projectile motion.
 	var owns_impact := not multiplayer.has_multiplayer_peer() \
 		or multiplayer.is_server()
+	var poke_ball_releasing := definition.projectile_type \
+		== AbilityDefinition.ProjectileType.POKE_BALL \
+		and not _poke_ball_mob_id.is_empty()
 	var projectile := AbilityProjectile.launch(
-		get_parent(), self, id, from, along, owns_impact, inherited_velocity)
+		get_parent(), self, id, from, along, owns_impact, inherited_velocity,
+		poke_ball_releasing, resolved_stats)
 	if projectile == null:
 		return false
 	var from_left := (variant & 1) != 0
@@ -2464,6 +3879,126 @@ func _spawn_ability_projectile(id: String, from: Vector3, along: Vector3,
 	play_ability_animation(clip,
 		float(definition.stats.get("animation_duration", 0.32)))
 	return true
+
+
+func poke_ball_loaded() -> bool:
+	return not _poke_ball_mob_id.is_empty()
+
+
+func poke_ball_captured_name() -> String:
+	return _poke_ball_mob_name
+
+
+## Called only by the host-owned copy of AbilityProjectile. Whether the ball
+## was loaded when thrown is captured at launch, so overlapping empty throws
+## can never accidentally release a creature caught by another ball.
+func resolve_poke_ball_impact(collider: Node, at: Vector3, normal: Vector3,
+		releasing: bool) -> void:
+	if not _is_host_authority() or not at.is_finite() or not normal.is_finite():
+		return
+	if releasing:
+		if not _poke_ball_mob_id.is_empty():
+			_release_poke_ball_at(at, -global_basis.z)
+		return
+	if not _poke_ball_mob_id.is_empty() \
+			or not _host_can_cast_ability("poke_ball"):
+		return
+	var mob := _fauna_mob_from_collider(collider)
+	if mob == null or not DamageHit.in_same_world(self, mob) \
+			or not mob.can_be_captured():
+		return
+	var stats := ability_stats("poke_ball")
+	var chance := PokeBall.capture_chance(
+		mob.health(), mob.maximum_health(), stats)
+	if randf() > chance:
+		return
+	var spawner := mob.get_parent() as FaunaSpawner
+	if spawner == null or not spawner.capture_actor(mob.mob_id, peer_id):
+		return
+	_publish_poke_ball_state(mob.mob_id, mob.combat_display_name())
+
+
+func _release_poke_ball_if_unequipped() -> void:
+	_poke_ball_release_queued = false
+	if not _is_host_authority() or _poke_ball_mob_id.is_empty() \
+			or abilities.find("poke_ball") >= 0:
+		return
+	_release_poke_ball_beside_owner()
+
+
+## Called by GameWorld while a disconnected body still has a valid position and
+## fauna spawner. This prevents a hidden, pinned creature outliving its owner.
+func release_poke_ball_on_departure() -> void:
+	if _is_host_authority() and not _poke_ball_mob_id.is_empty():
+		_release_poke_ball_beside_owner(false)
+
+
+func _release_poke_ball_beside_owner(publish_state := true) -> bool:
+	var stats := ability_stats("poke_ball")
+	var distance := maxf(float(stats.get("release_distance", 2.5)), 1.0)
+	var up := global_basis.y.normalized()
+	var forward := -global_basis.z
+	forward -= up * forward.dot(up)
+	if forward.length_squared() < 0.001:
+		forward = global_basis.x
+	forward = forward.normalized()
+	return _release_poke_ball_at(
+		global_position + forward * distance + up * 0.15, forward,
+		publish_state)
+
+
+func _release_poke_ball_at(at: Vector3, forward: Vector3,
+		publish_state := true) -> bool:
+	if _poke_ball_mob_id.is_empty() or not at.is_finite() \
+			or not forward.is_finite():
+		return false
+	var spawner := _fauna_spawner()
+	if spawner == null or not spawner.release_captured_actor(
+			_poke_ball_mob_id, peer_id, at, forward):
+		return false
+	if publish_state:
+		_publish_poke_ball_state("", "")
+	else:
+		_poke_ball_mob_id = ""
+		_poke_ball_mob_name = ""
+	return true
+
+
+func _publish_poke_ball_state(mob_id: String, mob_name: String) -> void:
+	if not _is_host_authority():
+		return
+	_host_poke_ball_sequence += 1
+	if _has_listeners():
+		_apply_poke_ball_state.rpc(
+			_host_poke_ball_sequence, mob_id, mob_name)
+	else:
+		_apply_poke_ball_state(
+			_host_poke_ball_sequence, mob_id, mob_name)
+
+
+func _fauna_mob_from_collider(collider: Node) -> FaunaMob:
+	var walk := collider
+	while walk != null:
+		if walk is FaunaMob:
+			return walk as FaunaMob
+		if walk is GameWorld:
+			break
+		walk = walk.get_parent()
+	return null
+
+
+func _fauna_spawner() -> FaunaSpawner:
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return null
+	var named := world.get_node_or_null("Planet/FaunaPopulations") \
+		as FaunaSpawner
+	if named != null:
+		return named
+	for descendant: Node in world.find_children("*", "", true, false):
+		if descendant is FaunaSpawner:
+			return descendant as FaunaSpawner
+	return null
 
 
 func play_ability_animation(clip: StringName, duration: float) -> void:
@@ -2606,6 +4141,64 @@ func status_rows() -> Array[Dictionary]:
 
 func status_snapshot() -> Dictionary:
 	return statuses.to_wire()
+
+
+## Biomass is a player-carried resource until it is contributed to a colony.
+## Keeping it in PlayerStats makes the Hero page enumerate it without a second
+## resource-specific UI model.
+func biomass() -> float:
+	return stats.base_of(PlayerStats.BIOMASS)
+
+
+func resource_snapshot() -> Dictionary:
+	return {
+		"biomass": biomass(),
+	}
+
+
+func apply_resource_snapshot(snapshot: Dictionary) -> void:
+	var carried := float(snapshot.get("biomass", biomass()))
+	if not is_finite(carried):
+		return
+	stats.set_base(PlayerStats.BIOMASS, carried)
+
+
+## Host-only resource mutation. Returns the amount that fitted under the carried
+## cap, which is also the number presented to the owning player.
+func credit_biomass(amount: float, at := Vector3.ZERO) -> float:
+	if not _is_host_authority() or not is_finite(amount) or amount <= 0.0:
+		return 0.0
+	var before := biomass()
+	stats.set_base(PlayerStats.BIOMASS, before + amount)
+	var credited := biomass() - before
+	if credited > 0.0:
+		_publish_resource_state(credited, at)
+	return credited
+
+
+## Removes up to [param amount] from the canonical carried bank. The returned
+## value is what a city may safely credit; a stale or repeated request therefore
+## cannot create biomass.
+func take_biomass(amount: float) -> float:
+	if not _is_host_authority() or not is_finite(amount) or amount <= 0.0:
+		return 0.0
+	var taken := minf(amount, biomass())
+	if taken <= 0.0:
+		return 0.0
+	stats.set_base(PlayerStats.BIOMASS, biomass() - taken)
+	_publish_resource_state(0.0, Vector3.ZERO)
+	return taken
+
+
+func _publish_resource_state(gained: float, at: Vector3) -> void:
+	_resource_sequence += 1
+	var point := at if at.is_finite() else combat_position()
+	if _has_listeners():
+		_apply_resource_state.rpc(
+			_resource_sequence, resource_snapshot(), maxf(gained, 0.0), point)
+	else:
+		_apply_resource_state(
+			_resource_sequence, resource_snapshot(), maxf(gained, 0.0), point)
 
 
 func can_fly() -> bool:
@@ -3007,6 +4600,8 @@ func _cancel_active_abilities() -> void:
 
 func _interrupt_combat_actions() -> void:
 	_cancel_active_abilities()
+	_hero_punch_move_left = 0.0
+	_hero_punch_effect_left = 0.0
 	_parry_window_left = 0.0
 	_parry_perfect_left = 0.0
 	if _weapon_pose != null:
@@ -3127,6 +4722,13 @@ func combat_damage_dealt(target: Node, amount: float, hit: DamageHit) -> void:
 	if not _is_host_authority() or amount <= 0.0:
 		return
 	enemy_damaged.emit(target, amount, hit)
+	# Data-oriented targets can resolve one broad combatant hit into several exact
+	# bodies and publish one number at each body themselves. Keep the gameplay signal
+	# above, but do not add a duplicate aggregate at the target's coarse broad phase.
+	if target != null and target.has_method(
+			&"combat_reports_own_damage_feedback") \
+			and bool(target.call(&"combat_reports_own_damage_feedback")):
+		return
 	_feedback_sequence += 1
 	var target_peer_id := int(target.call(&"combat_peer_id")) \
 		if target != null and target.has_method(&"combat_peer_id") else 0
@@ -3153,7 +4755,8 @@ func activate_ability(index: int) -> bool:
 	if not can_attack() or index < 0 or index >= abilities.size():
 		return false
 	var ability_id := abilities.get_item(index)
-	if not ItemDB.accepts_ability(ability_id):
+	if not ItemDB.accepts_ability(ability_id) \
+			or not ItemDB.ability_directly_equippable(ability_id):
 		return false
 	ability_activated.emit(index, ability_id)
 	return true
@@ -3274,6 +4877,9 @@ func _simulate_local_player(delta: float) -> void:
 			velocity -= _up() * (_gravity() * delta)
 		move_and_slide()
 		_catch_ground()
+		return
+	if _hero_punch_move_left > 0.0:
+		_hero_punch_move(delta)
 		return
 	if _stance == Stance.HERO:
 		_hero_land_move(delta)
@@ -4009,7 +5615,10 @@ func _resolve_flora_contacts(carried: Vector3) -> Dictionary:
 		if not bool(result.get("handled", false)):
 			continue
 		handled[collider.get_instance_id()] = true
-		broke = broke or bool(result.get("broken", false))
+		var just_broke := bool(result.get("broken", false))
+		broke = broke or just_broke
+		if just_broke:
+			_request_flora_biomass(owner, result, hit.get_position())
 		momentum_keep = minf(momentum_keep,
 			float(result.get("momentum_keep", 1.0)))
 		bounce_up = maxf(bounce_up, float(result.get("bounce_up", 0.0)))
@@ -4021,6 +5630,29 @@ func _resolve_flora_contacts(carried: Vector3) -> Dictionary:
 		"momentum_keep": momentum_keep,
 		"bounce_up": bounce_up,
 	}
+
+
+## The field publishes a stable break key only on the frame an instance changes
+## from standing to broken. That transition is the reward token: handled repeat
+## contacts, duplicate trunk/crown shapes, and already-broken plants never ask.
+func _request_flora_biomass(field: Node, result: Dictionary,
+		at: Vector3) -> void:
+	if float(result.get("biomass", 0.0)) <= 0.0:
+		return
+	var key_value: Variant = result.get(
+		"biomass_key", PackedInt32Array())
+	if not key_value is PackedInt32Array:
+		return
+	var key := key_value as PackedInt32Array
+	if key.is_empty():
+		return
+	var world := DamageHit.game_world_of(self)
+	if world == null:
+		return
+	world.request_flora_biomass(
+		peer_id, field, key,
+		float(result.get("biomass_height", 0.0)),
+		at if at.is_finite() else global_position)
 
 
 ## Applies the soft pass-through or the one-use mushroom launch. A bounce
@@ -4494,7 +6126,7 @@ func _ability_grapple_target_valid(target: Node3D, reach: float,
 	var miss := (toward - look * depth).length()
 	if miss > target_radius + GRAPPLE_AIM_PADDING:
 		return false
-	var query := PhysicsRayQueryParameters3D.create(from, target_at)
+	var query := PhysicsRayQueryParameters3D.create(from, target_at, 1)
 	query.exclude = [get_rid()]
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if hit.is_empty():
@@ -4544,8 +6176,11 @@ func _publish_ability_grapple(starting: bool, landed: bool, id: String,
 			or not impact_at.is_finite():
 		return false
 	if starting:
+		if not _host_can_cast_ability(id):
+			return false
 		var target := _grapple_target_from_path(target_path)
-		var reach := maxf(float(definition.stats.get("range", 2.0)), 0.1) \
+		var scaled := ability_stats(id)
+		var reach := maxf(float(scaled.get("range", 2.0)), 0.1) \
 			+ GRAPPLE_HOST_RANGE_MARGIN
 		if target == null \
 				or not _ability_grapple_target_valid(target, reach, true):
@@ -4573,7 +6208,7 @@ func _start_ability_grapple_local(id: String, target_path: String) -> bool:
 	_ability_grapple_id = id
 	_ability_grapple_target = target
 	_ability_grapple_target_path = NodePath(target_path)
-	_ability_grapple_stats = definition.stats
+	_ability_grapple_stats = ability_stats(id)
 	_ability_grapple_origin = global_position
 	_ability_grapple_up = _up()
 	_ability_grapple_return_stance = Stance.FLY \
@@ -4711,7 +6346,7 @@ func host_finish_ability_lasso() -> void:
 	var definition := ItemDB.ability_definition(_ability_lasso_id)
 	if definition != null:
 		throw = throw.limit_length(maxf(float(
-			definition.stats.get("max_speed", 55.0)), 1.0))
+			ability_stats(_ability_lasso_id).get("max_speed", 55.0)), 1.0))
 	_publish_ability_lasso(false, _ability_lasso_id, "", throw)
 
 
@@ -4800,10 +6435,13 @@ func _publish_ability_lasso(starting: bool, id: String,
 			!= AbilityDefinition.GrappleType.PHYSICS_TETHER:
 		return false
 	if starting:
+		if not _host_can_cast_ability(id):
+			return false
 		if not target_path.is_empty():
 			var target := _grapple_target_from_path(target_path)
+			var scaled := ability_stats(id)
 			var reach := maxf(float(
-				definition.stats.get("range", 30.0)), 1.0)
+				scaled.get("range", 30.0)), 1.0)
 			if target == null or not _ability_lasso_target_valid(
 					target, definition, reach, true):
 				# The target may have moved while the request crossed the wire.
@@ -4814,7 +6452,7 @@ func _publish_ability_lasso(starting: bool, id: String,
 	if not throw_velocity.is_finite():
 		throw_velocity = Vector3.ZERO
 	throw_velocity = throw_velocity.limit_length(maxf(float(
-		definition.stats.get("max_speed", 55.0)), 1.0))
+		ability_stats(id).get("max_speed", 55.0)), 1.0))
 	_host_ability_lasso_sequence += 1
 	_apply_ability_lasso.rpc(
 		_host_ability_lasso_sequence, starting, id,
@@ -4905,6 +6543,90 @@ func _clear_ability_lasso() -> void:
 	_ability_lasso_pending_left = 0.0
 
 
+func request_hero_punch(id: String, from: Vector3,
+		along: Vector3, variant: int) -> int:
+	var definition := ItemDB.ability_definition(id)
+	if not _hero_punch_cast_allowed(definition) or not from.is_finite() \
+			or not along.is_finite() or along.length_squared() < 0.001:
+		return 0
+	_hero_punch_request_sequence += 1
+	_hero_punch_result_sequence = _hero_punch_request_sequence
+	_hero_punch_result = ProjectileRequestState.PENDING
+	if not _has_listeners() or multiplayer.is_server():
+		var accepted := _publish_hero_punch(
+			_hero_punch_request_sequence, id, from, along, variant)
+		_hero_punch_result = ProjectileRequestState.ACCEPTED \
+			if accepted else ProjectileRequestState.REJECTED
+		return _hero_punch_request_sequence if accepted else 0
+	_request_hero_punch.rpc_id(
+		1, _hero_punch_request_sequence, id, from, along, variant)
+	return _hero_punch_request_sequence
+
+
+func hero_punch_request_state(request_sequence: int) -> int:
+	if request_sequence <= 0 \
+			or request_sequence != _hero_punch_result_sequence:
+		return ProjectileRequestState.REJECTED
+	return _hero_punch_result
+
+
+func _hero_punch_cast_allowed(definition: AbilityDefinition) -> bool:
+	if not can_attack() or definition == null \
+			or definition.ability_id != "hero_punch" \
+			or definition.activation_type \
+				!= AbilityDefinition.ActivationType.INSTANT \
+			or definition.projectile_type \
+				!= AbilityDefinition.ProjectileType.NONE \
+			or _stance == Stance.SWIM or _stance == Stance.METEOR \
+			or _stagger_left > 0.0:
+		return false
+	if definition.blocked_underwater and submerged_share() > 0.0:
+		return false
+	return definition.allowed_stances.is_empty() \
+		or definition.allowed_stances.has(_stance)
+
+
+func _hero_punch_direction(from: Vector3) -> Vector3:
+	var along := aim_direction(from)
+	if _grounded():
+		var up := _up().normalized()
+		along -= up * along.dot(up)
+	if along.length_squared() < 0.001:
+		along = -global_basis.z
+	return along.normalized()
+
+
+func _publish_hero_punch(request_sequence: int, id: String,
+		from: Vector3, along: Vector3, variant: int) -> bool:
+	var definition := ItemDB.ability_definition(id)
+	if not _hero_punch_cast_allowed(definition) \
+			or not _host_can_cast_ability(id) or not from.is_finite() \
+			or not along.is_finite() or along.length_squared() < 0.001:
+		return false
+	var from_left := (variant & 1) != 0
+	var host_from := hand_point(from_left)
+	var host_along := _hero_punch_direction(host_from)
+	var claimed_along := along.normalized()
+	var spawn_tolerance := maxf(
+		2.5, velocity.length() * SYNC_INTERVAL * 3.0)
+	if from.distance_to(host_from) > spawn_tolerance \
+			or claimed_along.dot(host_along) < 0.35:
+		return false
+	# Hand choice is cosmetic, but hover choice comes from the host's copy of
+	# the body so clients cannot publish a clip that disagrees with their pose.
+	var approved_variant := (variant & 1) | (2 if uses_float_pose() else 0)
+	_host_hero_punch_sequence += 1
+	if not _has_listeners():
+		_apply_hero_punch(
+			_host_hero_punch_sequence, request_sequence, id,
+			host_along, approved_variant)
+	else:
+		_apply_hero_punch.rpc(
+			_host_hero_punch_sequence, request_sequence, id,
+			host_along, approved_variant)
+	return true
+
+
 func place_ability_wall(id: String) -> int:
 	var definition := ItemDB.ability_definition(id)
 	if not can_attack() or definition == null \
@@ -4934,11 +6656,11 @@ func ability_wall_request_state(request_sequence: int) -> int:
 
 func _publish_ability_wall(request_sequence: int, id: String) -> bool:
 	var definition := ItemDB.ability_definition(id)
-	if not can_attack() or definition == null \
+	if not can_attack() or not _host_can_cast_ability(id) or definition == null \
 			or definition.construct_type \
 				!= AbilityDefinition.ConstructType.BARRIER:
 		return false
-	var stats := definition.stats
+	var stats := ability_stats(id)
 	var size := Vector3(
 		maxf(float(stats.get("wall_width", 8.0)), 0.2),
 		maxf(float(stats.get("wall_height", 4.0)), 0.2),
@@ -5032,7 +6754,7 @@ func ability_delayed_blast_request_state(request_sequence: int) -> int:
 func _publish_ability_delayed_blast(request_sequence: int, id: String,
 		from: Vector3, along: Vector3) -> bool:
 	var definition := ItemDB.ability_definition(id)
-	if not can_attack() or definition == null \
+	if not can_attack() or not _host_can_cast_ability(id) or definition == null \
 			or definition.projectile_type \
 				!= AbilityDefinition.ProjectileType.BEAM \
 			or definition.impact_type \
@@ -5046,7 +6768,8 @@ func _publish_ability_delayed_blast(request_sequence: int, id: String,
 	var host_along := aim_direction(host_from).normalized()
 	if host_along.dot(along.normalized()) < 0.35:
 		return false
-	var reach := maxf(float(definition.stats.get("range", 14.0)), 1.0)
+	var stats := ability_stats(id)
+	var reach := maxf(float(stats.get("range", 14.0)), 1.0)
 	var target := host_from + host_along * reach
 	var hit := LaserEyes.terrain_surface(self, host_from, target)
 	if hit.is_empty():
@@ -5138,6 +6861,37 @@ func _land_ability_grapple() -> void:
 			or peer_id == multiplayer.get_unique_id()):
 		AbilityImpact.apply(self, definition, at, up)
 	_settle_into_crater(0.0)
+
+
+func _start_hero_punch_local(along: Vector3, stats: Dictionary) -> void:
+	if peer_id != multiplayer.get_unique_id() or not along.is_finite():
+		return
+	_hero_punch_along = along.normalized()
+	_hero_punch_move_left = maxf(float(stats.get("range", 1.0)), 0.1)
+	_hero_punch_speed = maxf(
+		float(stats.get("speed", 13.0)), _hero_punch_move_left / 0.25)
+
+
+## Moves the capsule by a measured metre without replacing its run or flight
+## velocity. The previous velocity resumes as soon as this brief displacement
+## ends; only a solid body can shorten it.
+func _hero_punch_move(delta: float) -> void:
+	if _hero_punch_move_left <= 0.0 or _hero_punch_speed <= 0.0 \
+			or not _hero_punch_along.is_finite():
+		_hero_punch_move_left = 0.0
+		return
+	var motion := _hero_punch_along * minf(
+		_hero_punch_move_left, _hero_punch_speed * maxf(delta, 0.0))
+	if motion.length_squared() < 0.000001:
+		return
+	var before := global_position
+	var collision := move_and_collide(motion)
+	_hero_punch_move_left = maxf(
+		_hero_punch_move_left - global_position.distance_to(before), 0.0)
+	if collision != null or _hero_punch_move_left <= 0.001:
+		_hero_punch_move_left = 0.0
+	if _stance != Stance.FLY:
+		_catch_ground()
 
 
 ## Throws the body forward, fist first. Returns whether the punch started.
@@ -6288,6 +8042,16 @@ func _update_meteor_shock() -> void:
 	meteor_shock().aim(fist_point(), along, speed)
 
 
+func _update_hero_punch_shock() -> void:
+	if _hero_punch_effect_left <= 0.0:
+		if is_instance_valid(_hero_punch_shock):
+			_hero_punch_shock.stop()
+		return
+	hero_punch_shock().aim(
+		hand_point(_hero_punch_from_left),
+		_hero_punch_along, _hero_punch_speed)
+
+
 func _update_animation(delta: float) -> void:
 	var airborne := not _grounded_for_display()
 	var took_off := not _was_airborne and airborne
@@ -6416,7 +8180,7 @@ func _dust_ground_point() -> Vector3:
 		var query := PhysicsRayQueryParameters3D.create(
 			global_position + up * 0.45, global_position - up * 2.5)
 		query.exclude = [get_rid()]
-		query.collision_mask = collision_mask
+		query.collision_mask = 1
 		query.collide_with_areas = false
 		var hit := get_world_3d().direct_space_state.intersect_ray(query)
 		if hit.has("position"):
@@ -6473,7 +8237,7 @@ func _update_hud(delta: float) -> void:
 	if _weapon_bar != null:
 		var cell := ItemDB.cell_size(_held)
 		_weapon_bar.show_cell("cell  %d / %d" % [_charge(), cell] if cell > 0 else "")
-	if not _menu_open:
+	if not _menu_open and not is_instance_valid(_building_wheel):
 		var target := _interact_target()
 		prompt_plate.visible = target != null
 		if target != null:
@@ -6597,6 +8361,11 @@ func _submit_state(next_transform: Transform3D, next_velocity: Vector3, look_pit
 func _wear(worn: PackedStringArray) -> void:
 	if multiplayer.get_remote_sender_id() != peer_id:
 		return
+	if multiplayer.is_server():
+		for index in worn.size():
+			var item_id := worn[index]
+			if item_id in ItemDB.hat_shop_ids() and not owns_hat(item_id):
+				worn[index] = ""
 	apply_worn(worn)
 
 
@@ -6683,7 +8452,8 @@ func _reject_ability_projectile(request_sequence: int) -> void:
 @rpc("authority", "call_local", "reliable")
 func _apply_ability_projectile(event_sequence: int, request_sequence: int,
 		id: String, from: Vector3, along: Vector3,
-		inherited_velocity: Vector3, variant: int) -> void:
+		inherited_velocity: Vector3, variant: int,
+		resolved_stats: Dictionary = {}) -> void:
 	if event_sequence <= _last_projectile_sequence:
 		return
 	_last_projectile_sequence = event_sequence
@@ -6695,11 +8465,22 @@ func _apply_ability_projectile(event_sequence: int, request_sequence: int,
 			or along.length_squared() < 0.001:
 		return
 	var spawned := _spawn_ability_projectile(
-		id, from, along.normalized(), inherited_velocity, clampi(variant, 0, 3))
+		id, from, along.normalized(), inherited_velocity, clampi(variant, 0, 3),
+		resolved_stats)
 	if peer_id == multiplayer.get_unique_id() \
 			and request_sequence == _projectile_result_sequence:
 		_projectile_result = ProjectileRequestState.ACCEPTED \
 			if spawned else ProjectileRequestState.REJECTED
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_poke_ball_state(event_sequence: int, mob_id: String,
+		mob_name: String) -> void:
+	if event_sequence <= _last_poke_ball_sequence:
+		return
+	_last_poke_ball_sequence = event_sequence
+	_poke_ball_mob_id = mob_id
+	_poke_ball_mob_name = mob_name if not mob_id.is_empty() else ""
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -6852,6 +8633,79 @@ func _apply_ability_wall(event_sequence: int, request_sequence: int,
 
 
 @rpc("any_peer", "call_remote", "reliable")
+func _request_hero_punch(request_sequence: int, id: String,
+		from: Vector3, along: Vector3, variant: int) -> void:
+	if not multiplayer.is_server():
+		return
+	var sender := multiplayer.get_remote_sender_id()
+	if sender != peer_id \
+			or request_sequence <= _last_hero_punch_request_sequence:
+		return
+	_last_hero_punch_request_sequence = request_sequence
+	if not _publish_hero_punch(
+			request_sequence, id, from, along, variant):
+		_reject_hero_punch.rpc_id(sender, request_sequence)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _reject_hero_punch(request_sequence: int) -> void:
+	if request_sequence == _hero_punch_result_sequence:
+		_hero_punch_result = ProjectileRequestState.REJECTED
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_hero_punch(event_sequence: int, request_sequence: int,
+		id: String, along: Vector3, variant: int) -> void:
+	if event_sequence <= _last_hero_punch_sequence or not along.is_finite() \
+			or along.length_squared() < 0.001:
+		return
+	var definition := ItemDB.ability_definition(id)
+	if definition == null or definition.ability_id != "hero_punch" \
+			or definition.projectile_type \
+				!= AbilityDefinition.ProjectileType.NONE:
+		return
+	_last_hero_punch_sequence = event_sequence
+	var stats := ability_stats(id)
+	var from_left := (variant & 1) != 0
+	var hovering := (variant & 2) != 0
+	var clip := definition.animation
+	if from_left:
+		clip = definition.alternate_hover_animation \
+			if hovering and not definition.alternate_hover_animation.is_empty() \
+			else definition.alternate_animation
+	elif hovering and not definition.hover_animation.is_empty():
+		clip = definition.hover_animation
+	if clip.is_empty():
+		clip = definition.animation
+	var animation_duration := maxf(
+		float(stats.get("animation_duration", 0.3)), 0.05)
+	play_ability_animation(clip, animation_duration)
+	_hero_punch_from_left = from_left
+	_hero_punch_along = along.normalized()
+	_hero_punch_speed = maxf(float(stats.get("speed", 13.0)), 0.1)
+	_hero_punch_effect_left = animation_duration
+	hero_punch_shock().configure(
+		maxf(float(stats.get("radius", 0.75)), 0.05),
+		definition.tint,
+		maxf(float(stats.get("wind_length", 1.7)), 0.1))
+
+	if _is_host_authority():
+		var damage_from := hand_point(from_left)
+		var hit := DamageHit.beam(
+			damage_from,
+			damage_from + _hero_punch_along * maxf(
+				float(stats.get("punch_reach", 2.25)), 0.1),
+			maxf(float(stats.get("radius", 0.75)), 0.05),
+			maxf(float(stats.get("damage", 300.0)), 0.0))
+		hit.ability_id = id
+		deal_authoritative_ability_damage(hit)
+	if peer_id == multiplayer.get_unique_id():
+		_start_hero_punch_local(_hero_punch_along, stats)
+		if request_sequence == _hero_punch_result_sequence:
+			_hero_punch_result = ProjectileRequestState.ACCEPTED
+
+
+@rpc("any_peer", "call_remote", "reliable")
 func _request_ability_delayed_blast(request_sequence: int, id: String,
 		from: Vector3, along: Vector3) -> void:
 	if not multiplayer.is_server():
@@ -6963,8 +8817,11 @@ func _request_hero_combat_hit(request_sequence: int,
 	_last_combat_request_sequence = request_sequence
 	if not can_attack():
 		return
-	_publish_hero_combat_hit(
-		DamageHit.sanitize_player_packet(wire, sender, self))
+	var hit := DamageHit.sanitize_player_packet(wire, sender, self)
+	if not hit.ability_id.is_empty() \
+			and not _host_can_cast_ability(hit.ability_id):
+		return
+	_publish_hero_combat_hit(hit)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -7040,6 +8897,23 @@ func _apply_combat_state(event_sequence: int, snapshot: Dictionary,
 		_combat_feedback.parry_feedback(perfect, at)
 		if perfect and _parry_shield != null:
 			_parry_shield.celebrate_perfect()
+
+
+@rpc("authority", "call_local", "reliable")
+func _apply_resource_state(event_sequence: int, snapshot: Dictionary,
+		gained: float, at: Vector3) -> void:
+	if event_sequence <= _last_resource_sequence:
+		return
+	_last_resource_sequence = event_sequence
+	# The server mutated its canonical copy before publishing. Clients, including
+	# the body's owner, learn the same carried balance from this packet.
+	if not _is_host_authority():
+		apply_resource_snapshot(snapshot)
+	if peer_id != multiplayer.get_unique_id() or _combat_feedback == null \
+			or gained <= 0.0:
+		return
+	_combat_feedback.biomass_gained(
+		gained, at if at.is_finite() else combat_position())
 
 
 @rpc("authority", "call_local", "reliable")

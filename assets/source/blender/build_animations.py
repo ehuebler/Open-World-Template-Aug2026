@@ -107,13 +107,16 @@ def arm_hang(pose, side, sign, out, swing=0.0, flex=0.0):
     pose[side + "LowerArm"] = rot(("Y", sign * elbow_tuck), ("X", flex))
 
 
-def clench_hand(pose, side, sign):
+def clench_hand(pose, side, sign, strength=1.0):
     """Close the optional settler finger chain; the astronaut ignores the keys."""
     for finger in ("Index", "Middle", "Ring", "Little"):
         for joint in range(1, 4):
-            pose["{0}{1}{2}".format(side, finger, joint)] = rot(("Y", sign * 52.0))
-    pose[side + "Thumb1"] = rot(("Z", -sign * 24.0), ("Y", sign * 34.0))
-    pose[side + "Thumb2"] = rot(("Y", sign * 48.0))
+            pose["{0}{1}{2}".format(side, finger, joint)] = rot(
+                ("Y", sign * 52.0 * strength))
+    pose[side + "Thumb1"] = rot(
+        ("Z", -sign * 24.0 * strength),
+        ("Y", sign * 34.0 * strength))
+    pose[side + "Thumb2"] = rot(("Y", sign * 48.0 * strength))
 
 
 def leg_fold(drop, ankle_forward=0.0):
@@ -707,6 +710,69 @@ def starfire_float_left_pose(t):
     return _starfire_float_pose(t, "Left")
 
 
+def _hero_punch_pose(t, active_side):
+    """Fast centre-line fist strike, authored once and mirrored."""
+    if t < 0.28:
+        share = t / 0.28
+        swing = 10.0 + (-38.0 - 10.0) * share
+        flex = 14.0 + (62.0 - 14.0) * share
+    elif t < 0.58:
+        share = (t - 0.28) / 0.30
+        share = share * share * (3.0 - 2.0 * share)
+        swing = -38.0 + (108.0 + 38.0) * share
+        flex = 62.0 + (4.0 - 62.0) * share
+    else:
+        share = (t - 0.58) / 0.42
+        share = share * share * (3.0 - 2.0 * share)
+        swing = 108.0 + (12.0 - 108.0) * share
+        flex = 4.0 + (16.0 - 4.0) * share
+
+    active_sign = 1.0 if active_side == "Right" else -1.0
+    pulse = math.sin(math.pi * t)
+    pose = {
+        "Spine": rot(("X", -6.0 * pulse),
+                     ("Y", active_sign * 5.0 * pulse)),
+        "Chest": rot(("X", -4.0 * pulse),
+                     ("Y", active_sign * 10.0 * pulse)),
+        "Head": rot(("X", 3.0 * pulse),
+                    ("Y", -active_sign * 4.0 * pulse)),
+    }
+    for side, sign, _offset in SIDES:
+        if side == active_side:
+            # Nearly on the body's centre line, unlike Starfire's open side cast.
+            arm_hang(pose, side, sign, out=8.0 + 4.0 * pulse,
+                     swing=swing, flex=flex)
+            clench_hand(pose, side, sign, 1.55)
+        else:
+            arm_hang(pose, side, sign, out=18.0,
+                     swing=-14.0 * pulse, flex=32.0 + 8.0 * pulse)
+            clench_hand(pose, side, sign)
+    return pose
+
+
+def hero_punch_right_pose(t):
+    return _hero_punch_pose(t, "Right")
+
+
+def hero_punch_left_pose(t):
+    return _hero_punch_pose(t, "Left")
+
+
+def _hero_punch_float_pose(t, active_side):
+    """Keep Float's bent knee under the same mirrored upper-body strike."""
+    pose = float_pose(t / 6.0)
+    pose.update(_hero_punch_pose(t, active_side))
+    return pose
+
+
+def hero_punch_float_right_pose(t):
+    return _hero_punch_float_pose(t, "Right")
+
+
+def hero_punch_float_left_pose(t):
+    return _hero_punch_float_pose(t, "Left")
+
+
 def nuke_throw_pose(t):
     """Heavy right-hand wind-up and committed palm launch."""
     if t < 0.42:
@@ -966,6 +1032,10 @@ ANIMATIONS = [
     ("StarfireLeft", 10, False, starfire_left_pose),
     ("StarfireFloatRight", 10, False, starfire_float_right_pose),
     ("StarfireFloatLeft", 10, False, starfire_float_left_pose),
+    ("HeroPunchRight", 10, False, hero_punch_right_pose),
+    ("HeroPunchLeft", 10, False, hero_punch_left_pose),
+    ("HeroPunchFloatRight", 10, False, hero_punch_float_right_pose),
+    ("HeroPunchFloatLeft", 10, False, hero_punch_float_left_pose),
     ("NukeThrow", 16, False, nuke_throw_pose),
     ("NukeFloatThrow", 16, False, nuke_float_throw_pose),
     ("LassoThrow", 9, False, lasso_throw_pose),

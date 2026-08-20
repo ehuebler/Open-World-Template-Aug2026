@@ -1,0 +1,28 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://shaders/vivid/vivid_surface.gdshader" id="1_surface"]
+
+[resource]
+resource_name = "SandwormVividRim"
+shader = ExtResource("1_surface")
+shader_parameter/base_color = Color(1, 1, 1, 1)
+shader_parameter/base_uv_scale = Vector2(1, 1)
+shader_parameter/use_vertex_color = true
+shader_parameter/saturation = 1.08
+shader_parameter/brightness = 1.02
+shader_parameter/roughness = 0.92
+shader_parameter/metallic = 0.0
+shader_parameter/specular = 0.38
+shader_parameter/roughness_variation = 0.0
+shader_parameter/texture_relief = 0.0
+shader_parameter/detail_amount = 0.0
+shader_parameter/bump_strength = 0.0
+shader_parameter/macro_amount = 0.0
+shader_parameter/region_albedo = 0.0
+shader_parameter/region_sheen = 0.0
+shader_parameter/region_rim = 0.0
+shader_parameter/camera_rim_color = Color(1, 0.32, 0.08, 1)
+shader_parameter/camera_rim_energy = 1.15
+shader_parameter/camera_rim_dark = 0.69
+shader_parameter/camera_rim_light = 0.86
+shader_parameter/emission_energy = 0.0

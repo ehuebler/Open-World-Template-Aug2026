@@ -1,12 +1,14 @@
 class_name BossAdapter
 extends RefCounted
 
-## Small read-only adapter for a boss node in group [code]bigfoot_boss[/code].
+## Small read-only adapter for any arena boss in group [code]bosses[/code].
 ##
-## The concurrently-built controller may expose slightly different method names;
-## this layer normalises them so HUD code stays stable.
+## Multiple authored encounters live on the same planet. Discovery therefore
+## selects the locally relevant boss rather than returning whichever group member
+## happened to enter the scene tree first.
 
-const GROUP := &"bigfoot_boss"
+const GROUP := &"bosses"
+const LEGACY_GROUP := &"bigfoot_boss"
 const DEFAULT_RADIUS := 200.0
 const FADE_MARGIN := 20.0
 
@@ -15,21 +17,70 @@ static func find_in_tree(from: Node) -> Node:
 	if from == null or not from.is_inside_tree():
 		return null
 	var local_world := DamageHit.game_world_of(from)
-	for node: Node in from.get_tree().get_nodes_in_group(GROUP):
-		if node != null and is_instance_valid(node) \
-				and (local_world == null
-					or DamageHit.in_same_world(from, node)):
-			return node
-	return null
+	var body := from as Node3D
+	var best: Node = null
+	var best_score := INF
+	var seen: Dictionary = {}
+	var candidates := from.get_tree().get_nodes_in_group(GROUP)
+	# Compatibility for stripped fixtures and saves authored before the generic
+	# group existed. Live Bigfoot joins both and is de-duplicated below.
+	candidates.append_array(
+		from.get_tree().get_nodes_in_group(LEGACY_GROUP))
+	for node: Node in candidates:
+		if node == null or not is_instance_valid(node) \
+				or seen.has(node.get_instance_id()) \
+				or (local_world != null
+					and not DamageHit.in_same_world(from, node)):
+			continue
+		seen[node.get_instance_id()] = true
+		var distance := arena_distance_to(node, body) \
+			if body != null else 0.0
+		# An encounter already in progress keeps ownership of the bar through its
+		# five-second exit warning. Otherwise the geographically nearest arena is
+		# the one the player is approaching.
+		var score := distance - (1000000.0 if is_engaged(node) else 0.0)
+		if score < best_score:
+			best_score = score
+			best = node
+	return best
+
+
+static func is_boss(node: Node) -> bool:
+	return node != null and (
+		node.is_in_group(GROUP) or node.is_in_group(LEGACY_GROUP))
+
+
+static func display_name(boss: Node) -> String:
+	if boss == null:
+		return "Boss"
+	for method: StringName in [&"boss_display_name", &"combat_display_name"]:
+		if boss.has_method(method):
+			var value := String(boss.call(method)).strip_edges()
+			if not value.is_empty():
+				return value
+	var fallback := String(boss.name).strip_edges()
+	return fallback if not fallback.is_empty() else "Boss"
 
 
 static func is_engaged(boss: Node) -> bool:
 	if boss == null:
 		return false
+	if is_defeated(boss):
+		return false
 	if boss.has_method(&"is_engaged"):
 		return bool(boss.call(&"is_engaged"))
 	if boss.has_method(&"engaged"):
 		return bool(boss.call(&"engaged"))
+	return false
+
+
+static func is_defeated(boss: Node) -> bool:
+	if boss == null:
+		return false
+	if boss.has_method(&"is_defeated"):
+		return bool(boss.call(&"is_defeated"))
+	if boss.has_method(&"defeated"):
+		return bool(boss.call(&"defeated"))
 	return false
 
 

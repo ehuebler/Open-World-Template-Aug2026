@@ -3,7 +3,7 @@ extends VBoxContainer
 
 ## Read-only in-game character overview for the red menu.
 ##
-## Call [method configure] before adding the page to the tree. Apparel is the one
+## Call [method configure] before adding the page to the tree. Hats are the one
 ## deliberate exception to the read-only presentation: shift-clicking a worn tile
 ## uses [method ItemContainer.quick_move] to stow it in the backpack.
 
@@ -26,10 +26,6 @@ const NARROW_HOTBAR_EDGE := 54.0
 const HOTBAR_BADGES := ["LMB", "RMB", "1", "2", "3"]
 const APPAREL_GLYPHS := [
 	RedMenuGlyph.Glyph.HAT,
-	RedMenuGlyph.Glyph.GOGGLES,
-	RedMenuGlyph.Glyph.BODY_TUNIC,
-	RedMenuGlyph.Glyph.PANTS,
-	RedMenuGlyph.Glyph.BOOTS,
 ]
 
 var _player: OnlinePlayer
@@ -389,7 +385,7 @@ func _build_apparel_frame() -> PanelContainer:
 	var column := VBoxContainer.new()
 	column.name = "ApparelContent"
 	column.add_theme_constant_override(&"separation", 8)
-	column.add_child(_section_heading("EQUIPPED APPAREL"))
+	column.add_child(_section_heading("EQUIPPED HAT"))
 	column.add_child(_rule())
 
 	var centre := CenterContainer.new()
@@ -399,7 +395,7 @@ func _build_apparel_frame() -> PanelContainer:
 
 	_apparel_grid = GridContainer.new()
 	_apparel_grid.name = "ApparelSlots"
-	_apparel_grid.columns = 5
+	_apparel_grid.columns = 1
 	_apparel_grid.add_theme_constant_override(&"h_separation", 7)
 	_apparel_grid.add_theme_constant_override(&"v_separation", 7)
 	centre.add_child(_apparel_grid)
@@ -705,7 +701,7 @@ func _update_responsive_layout() -> void:
 		else Vector2(410.0, 350.0)
 	)
 
-	_apparel_grid.columns = 5
+	_apparel_grid.columns = 1
 	for slot: RedItemSlot in _apparel_slots:
 		slot.set_edge(
 			NARROW_APPAREL_EDGE if narrow else WIDE_APPAREL_EDGE

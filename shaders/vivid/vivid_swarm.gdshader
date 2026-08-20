@@ -187,5 +187,6 @@ void fragment() {
 	// Thin wings catch light from either side without requiring transparency.
 	BACKLIGHT = albedo * translucency;
 	EMISSION = emission
-		+ camera_rim_color * camera_rim_energy * camera_rim * v_visibility;
+		+ vivid_camera_rim_colour(camera_rim_color)
+			* camera_rim_energy * camera_rim * v_visibility;
 }

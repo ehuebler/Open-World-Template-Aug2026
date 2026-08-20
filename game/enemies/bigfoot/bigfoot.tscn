@@ -8,7 +8,7 @@ resource_local_to_scene = true
 radius = 0.72
 height = 3.16
 
-[node name="Bigfoot" type="CharacterBody3D" groups=["bigfoot_boss"]]
+[node name="Bigfoot" type="CharacterBody3D" groups=["bigfoot_boss", "bosses"]]
 floor_snap_length = 0.35
 safe_margin = 0.04
 max_slides = 6

@@ -12,6 +12,8 @@ description = "Sweep a short blue eye laser across terrain. Each glowing patch w
 implementation = ExtResource("2_implementation")
 icon = ExtResource("3_icon")
 tint = Color(0.184314, 0.470588, 1.000000, 1.000000)
+use_type = 0
+direct_equip = true
 activation_type = 1
 projectile_type = 1
 impact_type = 6
@@ -21,6 +23,7 @@ reaction_type = 3
 affects_players = true
 self_launch = false
 blast_occlusion = true
+overrides_weapon_input = false
 animation = &""
 alternate_animation = &""
 hover_animation = &""
@@ -34,8 +37,8 @@ stats = {
 "damage": 2500.0,
 "player_damage": 12.0,
 "duration": 0.75,
-"range": 14.0,
-"radius": 5.0,
+"range": 60.0,
+"radius": 18.0,
 "cooldown": 7.0,
 "delay": 1.0,
 "beam_radius": 0.1,

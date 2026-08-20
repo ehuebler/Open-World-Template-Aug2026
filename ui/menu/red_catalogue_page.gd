@@ -30,6 +30,8 @@ const SOURCE_BACKPACK := "backpack"
 const SOURCE_HOTBAR := "hotbar"
 const SOURCE_ABILITIES := "abilities"
 const SOURCE_KNOWN := "known"
+const SOURCE_LOCKED := "locked"
+const SOURCE_ONE_TIME := "one_time"
 
 const NARROW_WIDTH := 780.0
 const TILE_EDGE := 82.0
@@ -40,16 +42,20 @@ const CATALOGUE_NARROW_HEIGHT := 280.0
 const DETAIL_NARROW_HEIGHT := 390.0
 
 const APPAREL_FILTERS := [
-	{"id": "", "label": "All", "glyph": RedMenuGlyph.Glyph.APPAREL_ALL},
-	{"id": "hat", "label": "Head", "glyph": RedMenuGlyph.Glyph.HAT},
-	{"id": "goggles", "label": "Eyes", "glyph": RedMenuGlyph.Glyph.GOGGLES},
-	{"id": "long_sleeve", "label": "Body", "glyph": RedMenuGlyph.Glyph.BODY_TUNIC},
-	{"id": "pants", "label": "Legs", "glyph": RedMenuGlyph.Glyph.PANTS},
-	{"id": "shoes", "label": "Feet", "glyph": RedMenuGlyph.Glyph.BOOTS},
+	{"id": "", "label": "Hats", "glyph": RedMenuGlyph.Glyph.HAT},
 ]
 const ITEM_FILTERS := [
 	{"id": ItemDB.KIND_WEAPON, "label": "Weapons", "glyph": RedMenuGlyph.Glyph.WEAPONS},
 	{"id": ItemDB.KIND_ITEM, "label": "Items", "glyph": RedMenuGlyph.Glyph.ITEMS},
+]
+const ABILITY_FILTER_REUSABLE := "reusable"
+const ABILITY_FILTER_ONE_TIME := "one_time"
+const ABILITY_FILTERS := [
+	{"id": "", "label": "All", "glyph": RedMenuGlyph.Glyph.ABILITIES},
+	{"id": ABILITY_FILTER_REUSABLE, "label": "Reusable",
+		"glyph": RedMenuGlyph.Glyph.ABILITIES},
+	{"id": ABILITY_FILTER_ONE_TIME, "label": "One-Time",
+		"glyph": RedMenuGlyph.Glyph.ITEMS},
 ]
 
 var _player: OnlinePlayer
@@ -203,12 +209,17 @@ func _connect_sources() -> void:
 	for source: ItemContainer in _sources():
 		if not source.changed.is_connected(refresh):
 			source.changed.connect(refresh)
+	if _player != null \
+			and not _player.progression_changed.is_connected(refresh):
+		_player.progression_changed.connect(refresh)
 
 
 func _disconnect_sources() -> void:
 	for source: ItemContainer in _sources():
 		if source.changed.is_connected(refresh):
 			source.changed.disconnect(refresh)
+	if _player != null and _player.progression_changed.is_connected(refresh):
+		_player.progression_changed.disconnect(refresh)
 
 
 func _build() -> void:
@@ -227,7 +238,7 @@ func _build_header() -> PanelContainer:
 	row.name = "CatalogueHeaderContent"
 	row.add_theme_constant_override(&"separation", 12)
 
-	_header_title = _label("ALL APPAREL", 22, RED_BRIGHT)
+	_header_title = _label("HATS", 22, RED_BRIGHT)
 	_header_title.name = "CatalogueHeading"
 	_header_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(_header_title)
@@ -330,7 +341,7 @@ func _build_catalogue_frame() -> PanelContainer:
 	glyph_center.add_child(_empty_glyph)
 	empty_column.add_child(glyph_center)
 
-	_empty_title = _label("NO OWNED APPAREL", 18, GREEN)
+	_empty_title = _label("NO OWNED HATS", 18, GREEN)
 	_empty_title.name = "EmptyStateTitle"
 	_empty_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	empty_column.add_child(_empty_title)
@@ -385,12 +396,7 @@ func _fill_filters() -> void:
 		Mode.ITEMS:
 			definitions = ITEM_FILTERS
 		Mode.ABILITIES:
-			var notice := _label("ABILITIES  //  LMB + RMB ASSIGNMENT", 12, GREEN_TEXT)
-			notice.name = "AbilityFilterNotice"
-			notice.custom_minimum_size = Vector2(300.0, 46.0)
-			notice.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-			_filter_row.add_child(notice)
-			return
+			definitions = ABILITY_FILTERS
 
 	for definition: Dictionary in definitions:
 		var id := String(definition["id"])
@@ -490,23 +496,29 @@ func _append_abilities(entries: Array[Dictionary]) -> void:
 	if _abilities != null:
 		for index in _abilities.size():
 			var id := _abilities.get_item(index)
-			if id.is_empty() or not ItemDB.is_ability(id) or seen.has(id):
+			if id.is_empty() or not ItemDB.is_ability(id) \
+					or (ItemDB.is_one_time_ability(id) \
+						and not _player.owns_one_time_ability(id)) \
+					or seen.has(id):
 				continue
 			seen[id] = true
 			entries.append(_entry(id, SOURCE_ABILITIES, _abilities, index))
 
 	var library_ids: Array = []
 	for id: String in ItemDB.ability_ids():
-		if seen.has(id):
+		if seen.has(id) or (ItemDB.is_one_time_ability(id) \
+				and not _player.owns_one_time_ability(id)):
 			continue
 		seen[id] = true
 		library_ids.append(id)
 	_ability_library = ItemContainer.new(library_ids.size(), library_ids)
 	for index in _ability_library.size():
 		_ability_library.set_filter(index, ItemDB.ABILITY)
+		var id := _ability_library.get_item(index)
 		entries.append(_entry(
-			_ability_library.get_item(index),
-			SOURCE_KNOWN,
+			id,
+			SOURCE_ONE_TIME if ItemDB.is_one_time_ability(id) else (
+				SOURCE_KNOWN if _player.ability_unlocked(id) else SOURCE_LOCKED),
 			_ability_library,
 			index
 		))
@@ -534,6 +546,10 @@ func _matches_filter(entry: Dictionary) -> bool:
 		return ItemDB.slot_of(id) == _filter
 	if _mode == Mode.ITEMS:
 		return ItemDB.kind_of(id) == _filter
+	if _mode == Mode.ABILITIES:
+		return ItemDB.is_one_time_ability(id) \
+			if _filter == ABILITY_FILTER_ONE_TIME \
+			else not ItemDB.is_one_time_ability(id)
 	return true
 
 
@@ -617,7 +633,7 @@ func _fill_catalogue() -> void:
 			and int(entry["index"]) == _selected_index
 		)
 		slot.tooltip_text = "%s\n%s\nCLICK TO INSPECT // SHIFT+CLICK TO QUICK EQUIP" % [
-			ItemDB.title(String(entry["id"])).to_upper(),
+			_entry_title(entry).to_upper(),
 			_entry_state(entry),
 		]
 		slot.picked.connect(_on_slot_picked)
@@ -634,12 +650,12 @@ func _fill_empty_state() -> void:
 				else _glyph_for_body_slot(_filter)
 			)
 			_empty_title.text = (
-				"NO OWNED APPAREL"
+				"NO OWNED HATS"
 				if _filter.is_empty()
-				else "NO OWNED %s APPAREL" % _filter_label(_filter)
+				else "NO OWNED %s HATS" % _filter_label(_filter)
 			)
 			_empty_body.text = (
-				"APPAREL APPEARS ONLY WHEN IT IS WORN OR STORED IN YOUR BACKPACK."
+				"HATS APPEAR ONLY WHEN WORN OR STORED IN YOUR BACKPACK."
 			)
 		Mode.ITEMS:
 			_empty_glyph.glyph = (
@@ -657,10 +673,14 @@ func _fill_empty_state() -> void:
 			)
 		Mode.ABILITIES:
 			_empty_glyph.glyph = RedMenuGlyph.Glyph.ABILITIES
-			_empty_title.text = "ABILITY CHANNELS STANDBY"
+			_empty_title.text = "NO ONE-TIME ABILITIES OWNED" \
+				if _filter == ABILITY_FILTER_ONE_TIME \
+				else "ABILITY CHANNELS STANDBY"
 			_empty_body.text = (
-				"NO ABILITIES MATCH THIS VIEW.\n"
-				+ "LMB AND RMB ASSIGNMENTS REMAIN AVAILABLE."
+				"PURCHASE A UNIQUE ONE-USE ABILITY TO STORE IT HERE."
+				if _filter == ABILITY_FILTER_ONE_TIME
+				else "NO ABILITIES MATCH THIS VIEW.\n"
+					+ "LMB AND RMB ASSIGNMENTS REMAIN AVAILABLE."
 			)
 
 
@@ -743,7 +763,7 @@ func _detail_record(entry: Dictionary, id: String, description: String) -> HBoxC
 	copy.add_theme_constant_override(&"separation", 4)
 	row.add_child(copy)
 
-	var title := _label(ItemDB.title(id), 21, GREEN, true)
+	var title := _label(_entry_title(entry), 21, GREEN, true)
 	title.name = "SelectedItemTitle"
 	copy.add_child(title)
 
@@ -758,11 +778,20 @@ func _detail_record(entry: Dictionary, id: String, description: String) -> HBoxC
 
 	var detail_text := "DETAIL //\n%s" % description
 	if ItemDB.is_ability(id):
+		if ItemDB.is_one_time_ability(id):
+			detail_text += "\n\nOWNERSHIP //  UNIQUE  •  ONE USE"
+			if not ItemDB.ability_directly_equippable(id):
+				detail_text += "\nACCESS //  BUILDING WHEEL"
+		else:
+			detail_text += "\n\nLEVEL //  %d / %d" % [
+				_player.ability_level(id) if _player != null else 1,
+				ItemDB.MAX_ABILITY_LEVEL]
 		var profile := ItemDB.ability_profile(id)
 		if not profile.is_empty():
 			detail_text += "\n\nPROFILE //  %s" % profile
 		var written_stats := PackedStringArray()
-		for line: String in ItemDB.stat_lines(id):
+		for line: String in ItemDB.stat_lines(
+				id, _player.ability_level(id) if _player != null else 1):
 			written_stats.append(line.replace("\t", "  "))
 		if not written_stats.is_empty():
 			detail_text += "\nSTATS //  %s" % "   |   ".join(written_stats)
@@ -773,11 +802,18 @@ func _detail_record(entry: Dictionary, id: String, description: String) -> HBoxC
 	return row
 
 
+func _entry_title(entry: Dictionary) -> String:
+	var id := String(entry.get("id", ""))
+	if _player != null and ItemDB.is_one_time_ability(id):
+		return _player.one_time_ability_title(id)
+	return ItemDB.title(id)
+
+
 func _fill_empty_detail() -> void:
 	var title_text := "NO ITEM SELECTED"
 	var body_text := "SELECT AN OWNED ENTRY TO OPEN ITS LOADOUT RECORD."
 	if _mode == Mode.APPAREL:
-		title_text = "NO APPAREL SELECTED"
+		title_text = "NO HAT SELECTED"
 	elif _mode == Mode.ABILITIES:
 		title_text = "NO ABILITY SELECTED"
 		body_text = (
@@ -931,6 +967,13 @@ func _build_actions(entry: Dictionary) -> Control:
 func _equip_label(entry: Dictionary) -> String:
 	if entry.is_empty():
 		return "HOLD TO EQUIP"
+	var id := String(entry.get("id", ""))
+	if _mode == Mode.ABILITIES \
+			and not ItemDB.ability_directly_equippable(id):
+		return "AVAILABLE IN BUILDING"
+	if _mode == Mode.ABILITIES \
+			and String(entry.get("source", "")) == SOURCE_LOCKED:
+		return "LOCKED // ABILITIES HOUSE"
 	if _mode == Mode.APPAREL and String(entry["source"]) == SOURCE_EQUIPMENT:
 		return "HOLD TO UNEQUIP"
 	if _selected_at_target(entry):
@@ -949,7 +992,11 @@ func _can_equip(entry: Dictionary) -> bool:
 				and _target_index < _hotbar.size()
 		Mode.ABILITIES:
 			return _abilities != null and _target_index >= 0 \
-				and _target_index < _abilities.size()
+				and _target_index < _abilities.size() \
+				and _player != null \
+				and _player.ability_unlocked(String(entry.get("id", ""))) \
+				and ItemDB.ability_directly_equippable(
+					String(entry.get("id", "")))
 	return false
 
 
@@ -1031,12 +1078,20 @@ func _move_ability(entry: Dictionary) -> void:
 	if _abilities == null or _target_index < 0 or _target_index >= _abilities.size():
 		_feedback = "ABILITY TARGET UNAVAILABLE"
 		return
+	var id := String(entry.get("id", ""))
+	if _player == null or not _player.ability_unlocked(id):
+		_feedback = "LOCKED // VISIT THE ABILITIES HOUSE"
+		return
+	if not ItemDB.ability_directly_equippable(id):
+		_feedback = "STORED IN BUILDING WHEEL"
+		return
 	var source := String(entry["source"])
-	if source == SOURCE_KNOWN:
-		# Known powers are definitions, not physical ownership. Replacing an
-		# assignment cannot destroy the displaced definition.
-		_abilities.set_item(_target_index, String(entry["id"]))
-		var assigned := _abilities.get_item(_target_index) == String(entry["id"])
+	if source == SOURCE_KNOWN or source == SOURCE_ONE_TIME:
+		# Catalogue powers are definitions/ownership records, not physical stack
+		# slots. Assignment copies the id; a one-time record is consumed only by
+		# its successful host-resolved effect.
+		_abilities.set_item(_target_index, id)
+		var assigned := _abilities.get_item(_target_index) == id
 		_feedback = (
 			"ABILITY ASSIGNED // %s" % _target_label(_target_index)
 			if assigned
@@ -1135,6 +1190,10 @@ func _entry_badge(entry: Dictionary) -> String:
 			return ["LMB", "RMB"][index] if index >= 0 and index < 2 else "A"
 		SOURCE_KNOWN:
 			return "KNOWN"
+		SOURCE_LOCKED:
+			return "LOCKED"
+		SOURCE_ONE_TIME:
+			return _one_time_uses_label(String(entry.get("id", "")))
 	return ""
 
 
@@ -1149,25 +1208,47 @@ func _entry_state(entry: Dictionary) -> String:
 		SOURCE_HOTBAR:
 			return "HOTBAR // SLOT %d" % (index + 1)
 		SOURCE_ABILITIES:
-			return "ASSIGNED // %s" % (
+			var assigned := "ASSIGNED // %s" % (
 				["LMB", "RMB"][index] if index >= 0 and index < 2 else "ABILITY"
 			)
+			return assigned + (" // %s" % _one_time_uses_label(
+					String(entry.get("id", ""))) \
+				if ItemDB.is_one_time_ability(
+					String(entry.get("id", ""))) else "")
 		SOURCE_KNOWN:
 			return "KNOWN // UNASSIGNED"
+		SOURCE_LOCKED:
+			return "LOCKED // ABILITIES HOUSE"
+		SOURCE_ONE_TIME:
+			var id := String(entry.get("id", ""))
+			return "%s // UNIQUE // %s" % [
+				"BUILDING WHEEL"
+					if not ItemDB.ability_directly_equippable(id)
+					else "OWNED",
+				_one_time_uses_label(id),
+			]
 	return "UNASSIGNED"
+
+
+func _one_time_uses_label(id: String) -> String:
+	var count := _player.one_time_ability_count(id) if _player != null else 1
+	return "1 USE" if count == 1 else "%d USES" % count
 
 
 func _update_header(total_count: int) -> void:
 	var heading := ""
 	match _mode:
 		Mode.APPAREL:
-			heading = "ALL APPAREL" if _filter.is_empty() else _filter_label(_filter)
+			heading = "HATS" if _filter.is_empty() else _filter_label(_filter)
 		Mode.ITEMS:
 			heading = "ALL ITEMS" if _filter.is_empty() else _filter_label(_filter)
 		Mode.ABILITIES:
-			heading = "ABILITIES"
+			heading = "ONE-TIME ABILITIES" \
+				if _filter == ABILITY_FILTER_ONE_TIME else (
+					"REUSABLE ABILITIES" \
+					if _filter == ABILITY_FILTER_REUSABLE else "ABILITIES")
 	_header_title.text = heading.to_upper()
-	var noun := "KNOWN" if _mode == Mode.ABILITIES else "OWNED"
+	var noun := "CATALOGUED" if _mode == Mode.ABILITIES else "OWNED"
 	_header_count.text = "%02d / %02d %s" % [
 		_visible_entries.size(),
 		total_count,

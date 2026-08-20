@@ -27,6 +27,8 @@ driver/enable_input=true
 [autoload]
 
 SettingsManager="*res://core/settings_manager.gd"
+RuntimeTelemetry="*res://core/runtime_telemetry.gd"
+SaveManager="*res://core/save_manager.gd"
 SteamLobby="*res://core/steam_lobby.gd"
 NetworkManager="*res://core/network_manager.gd"
 ChatManager="*res://core/chat_manager.gd"
@@ -180,6 +182,7 @@ weapon_3={
 
 [physics]
 
+common/max_physics_steps_per_frame=2
 3d/default_gravity=34.0
 common/physics_interpolation=true
 
@@ -228,6 +231,10 @@ region_chroma={
 air_chroma={
 "type": "float",
 "value": 1.0
+}
+camera_rim_user_color={
+"type": "vec3",
+"value": Vector3(0.0331048, 1, 0.2957)
 }
 frost_axis={
 "type": "vec3",

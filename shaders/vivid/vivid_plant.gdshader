@@ -547,7 +547,8 @@ void fragment() {
 	// scorched instance still read as healthy at night, so it goes out with the
 	// albedo rather than after it.
 	EMISSION = (region_color * fresnel * region_sheen * region.y * 0.5
-		+ camera_rim_color * camera_rim_energy * camera_rim
+		+ vivid_camera_rim_colour(camera_rim_color)
+			* camera_rim_energy * camera_rim
 		+ albedo * v_glow * glow_strength * glow_visibility
 		+ day_emission + night_emission) * lit * (1.0 - v_char);
 }

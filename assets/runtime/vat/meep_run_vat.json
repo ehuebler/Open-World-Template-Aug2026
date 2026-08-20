@@ -1,0 +1,96 @@
+{
+  "format": "normalized_position_delta_vat",
+  "version": 1,
+  "mesh_node": "MeepRunVAT",
+  "mesh_data": "MeepRunVATMesh",
+  "vertex_color": "Color",
+  "coordinate_space": "godot_y_up_object_local",
+  "axis_conversion": "Blender (x, y, z) -> Godot/glTF (x, z, -y)",
+  "vertex_count": 1356,
+  "triangle_count": 2800,
+  "frame_count": 20,
+  "frame_start": 1,
+  "frame_end": 20,
+  "fps": 30.0,
+  "width": 1356,
+  "height": 20,
+  "delta_min": [
+    -0.01944074034690857,
+    -0.15742573142051697,
+    -0.44721609354019165
+  ],
+  "delta_max": [
+    0.019448615610599518,
+    0.18304723501205444,
+    0.30512818694114685
+  ],
+  "delta_range": [
+    0.03888935595750809,
+    0.3404729664325714,
+    0.7523442804813385
+  ],
+  "bounds_min": [
+    -0.3185857832431793,
+    0.014279961585998535,
+    -0.29054710268974304
+  ],
+  "bounds_max": [
+    0.3338368237018585,
+    1.1948368549346924,
+    0.241665318608284
+  ],
+  "topology_sha256": "6d4369a499b48775f0e440219c13ac0f7b6a1c2b7419f8061cfcdef9bb5d8d29",
+  "texture": {
+    "file": "meep_run_vat.exr",
+    "format": "OpenEXR",
+    "channels": "RGBA32F",
+    "payload_channels": "RGB",
+    "normalization": "delta = delta_min + texel.rgb * (delta_max - delta_min)",
+    "row_zero": "frame_start at V=(0.5/height)",
+    "padding_vertices": 0,
+    "padding_frames": 0
+  },
+  "uv2": {
+    "layer": "VAT_ID",
+    "gltf_attribute": "TEXCOORD_1",
+    "x": "(vertex_id + 0.5) / width",
+    "y": 0.5,
+    "domain": "CORNER (same x copied to every loop of each vertex)"
+  },
+  "animation": {
+    "frames": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20
+    ],
+    "loop": true,
+    "loop_endpoint": 21,
+    "loop_endpoint_stored": false,
+    "loop_endpoint_max_error": 0.0,
+    "loop_note": "The duplicate endpoint matches frame_start and is omitted; after frame_end, interpolate/wrap to texture row zero."
+  },
+  "files": {
+    "mesh": "meep_run_vat.glb",
+    "texture": "meep_run_vat.exr",
+    "metadata": "meep_run_vat.json"
+  },
+  "glb_vertex_count": 3759,
+  "glb_triangle_count": 2800
+}

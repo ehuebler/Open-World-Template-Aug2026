@@ -1,5 +1,5 @@
 class_name BigfootBoss
-extends CharacterBody3D
+extends BossController
 
 ## Host-authoritative forest boss. Clients present replicated motion, clips, and
 ## VFX only; every hit and scar is decided on the host (or offline session).
@@ -9,9 +9,13 @@ signal engaged_changed(engaged: bool)
 signal damaged_flash(strength: float)
 signal arena_reset
 
+const BOSS_SPEC := preload(
+	"res://game/enemies/boss/generated/bigfoot_spec.gd")
 const GROUP := &"bigfoot_boss"
+const BOSS_GROUP := &"bosses"
+const BOSS_ID := BOSS_SPEC.BOSS_ID
 ## What the boss bar calls him, and what a death notice calls him.
-const DISPLAY_NAME := "Bigfoot"
+const DISPLAY_NAME := BOSS_SPEC.DISPLAY_NAME
 const ROAR_WAVE := preload("res://game/enemies/bigfoot/bigfoot_roar_wave.gd")
 const ARENA_BOUNDARY := preload(
 	"res://game/enemies/bigfoot/bigfoot_arena_boundary.gd")
@@ -24,11 +28,11 @@ const RIM_SURFACE := preload(
 ## script failing to parse is the boss missing from the world.
 const ROCK := preload("res://game/enemies/bigfoot/bigfoot_rock.gd")
 
-const MAX_HEALTH := 10000.0
+const MAX_HEALTH := BOSS_SPEC.MAX_HEALTH
 ## A 400 m diameter gives his fifty-metre sprint room to cross, flank, and
 ## disappear into cover without the encounter resetting after one long pass.
-const ARENA_RADIUS := 200.0
-const DETECT_RADIUS := 190.0
+const ARENA_RADIUS := BOSS_SPEC.ARENA_RADIUS
+const DETECT_RADIUS := BOSS_SPEC.DETECT_RADIUS
 ## The red line belongs to the encounter, not to Bigfoot's pathfinding. Keep his
 ## body and most of a meteor shock inside it, then begin bending a sprint home
 ## early enough that the hard limit is only a last-resort guard.
@@ -37,7 +41,7 @@ const ARENA_RUN_RADIUS := ARENA_RADIUS - ARENA_RUN_MARGIN
 const ARENA_STEER_BAND := 45.0
 ## Leaving is a warning, not an instant wipe. If the whole living party stays
 ## outside for this long the encounter resets; any return clears the countdown.
-const RESET_DEBOUNCE := 5.0
+const RESET_DEBOUNCE := BOSS_SPEC.RESET_DELAY
 const SYNC_INTERVAL := 1.0 / 20.0
 ## Reference pace for the Walk clip's playback rate, not a speed he travels at.
 const WANDER_SPEED := 2.2
@@ -112,8 +116,9 @@ const BLOCKED_AFTER := 0.2
 ## his shoulders past it. Dropping the avoidance as soon as one tangential step
 ## counted as movement made him turn straight back into a broad trunk.
 const OBSTACLE_CLEAR_TIME := 0.45
-## Outward lean mixed into the tangent around a wall. Without it he can follow a
-## round canopy trunk forever at exactly his own collision radius.
+## Forward lean mixed into the tangent around a wall. The physics slide removes
+## the component still aimed into the trunk; as soon as his shoulder clears, the
+## retained forward share carries him past it instead of orbiting the bark.
 const OBSTACLE_CLEAR_BIAS := 0.65
 ## Contacts flatter than this are ground, including crater walls he is allowed
 ## to climb. Only near-vertical faces are obstacles to steer around.
@@ -315,9 +320,18 @@ const DEFEAT_FALL := 1.0
 const DEFEAT_PITCH := 1.50
 const DEFEAT_LIFT := 0.62
 
-const CLIP_IDLE := "Idle"
-const CLIP_WALK := "Walk"
-const CLIP_RUN := "Run"
+const CLIP_IDLE := BOSS_SPEC.ANIMATIONS["rest"]
+const CLIP_WALK := BOSS_SPEC.ANIMATIONS["walk"]
+const CLIP_RUN := BOSS_SPEC.ANIMATIONS["run"]
+const CLIP_ROAR := BOSS_SPEC.ANIMATIONS["roar"]
+const CLIP_METEOR_WINDUP := BOSS_SPEC.ANIMATIONS["meteor"]["windup"]
+const CLIP_METEOR_FLY := BOSS_SPEC.ANIMATIONS["meteor"]["travel"]
+const CLIP_METEOR_IMPACT := BOSS_SPEC.ANIMATIONS["meteor"]["impact"]
+const CLIP_PUNCH := BOSS_SPEC.ANIMATIONS["punch"]
+const CLIP_GRAB := BOSS_SPEC.ANIMATIONS["grab"]
+const CLIP_THROW := BOSS_SPEC.ANIMATIONS["throw"]
+const CLIP_HIT_REACT := BOSS_SPEC.ANIMATIONS["hit_react"]
+const CLIP_DEFEAT := BOSS_SPEC.ANIMATIONS["defeat"]
 const CLIP_BLEND := 0.12
 
 enum Phase { WANDER, AGGRO, DEFEATED }
@@ -432,7 +446,9 @@ var _extrapolated := 0.0
 
 
 func _ready() -> void:
+	super._ready()
 	add_to_group(GROUP)
+	add_to_group(BOSS_GROUP)
 	add_to_group(DamageHit.COMBATANT_GROUP)
 	_bind_visuals()
 	var site := get_parent()
@@ -495,6 +511,16 @@ func _upright_basis(forward: Vector3, up: Vector3) -> Basis:
 
 
 func _physics_process(delta: float) -> void:
+	if not RuntimeTelemetry.deep_enabled():
+		_tick(delta)
+		return
+	var began := Time.get_ticks_usec()
+	_tick(delta)
+	RuntimeTelemetry.record_physics_step(
+		&"bosses", &"bigfoot_tick", Time.get_ticks_usec() - began)
+
+
+func _tick(delta: float) -> void:
 	if _grappled:
 		_tick_grappled(delta)
 		_update_presentation(delta)
@@ -1144,6 +1170,14 @@ func _probe_obstacle(wanted: Vector3) -> void:
 			best_facing = facing
 			best_wall = wall
 	if best_wall == Vector3.ZERO:
+		# Once the shoulder fan and the previous slide are both clear, the
+		# remembered wall is behind him. Keeping `_blocked` from the sideways
+		# clearing stride would immediately restart the same avoidance turn and
+		# make him orbit a trunk instead of resuming his route.
+		if _avoid_left > 0.0 and get_slide_collision_count() == 0:
+			_blocked = 0.0
+			_blocked_wall = Vector3.ZERO
+			_avoid_left = 0.0
 		return
 	_blocked_wall = best_wall
 	_blocked = maxf(_blocked, BLOCKED_AFTER)
@@ -1165,7 +1199,7 @@ func _probe_hit_is_breakable_cover(result: Dictionary) -> bool:
 	if owner_id < 0:
 		return false
 	var shape := body.shape_owner_get_owner(owner_id) as CollisionShape3D
-	if shape == null or shape.get_meta(&"impact_break_owner", null) == null:
+	if shape == null or not shape.has_meta(&"impact_break_owner"):
 		return false
 	var height := float(shape.get_meta(&"impact_break_height", INF))
 	return height >= TRAMPLE_SHORTEST and height <= TRAMPLE_TALLEST
@@ -1220,7 +1254,7 @@ func _around_obstacle(along: Vector3) -> Vector3:
 		return along
 	var wall := _blocked_wall.normalized()
 	var side := _up().cross(wall).normalized() * _avoid_side
-	return (side + wall * OBSTACLE_CLEAR_BIAS).normalized()
+	return (side + along.normalized() * OBSTACLE_CLEAR_BIAS).normalized()
 
 
 ## Flattens the stretch of undergrowth he has just crossed.
@@ -1277,11 +1311,11 @@ func _start_attack(id: StringName) -> void:
 	_ground_speed = 0.0
 	match id:
 		&"roar":
-			_play_clip("Roar")
+			_play_clip(CLIP_ROAR)
 			_roar_origin = _mouth.global_position
 			_publish_event({"kind": "roar_start", "at": _roar_origin})
 		&"meteor":
-			_play_clip("MeteorWindup")
+			_play_clip(CLIP_METEOR_WINDUP)
 			_meteor_along = _steer_inside_arena(_flat_on_surface(
 				_target_player().global_position - global_position))
 			if _meteor_along.length_squared() < 0.01:
@@ -1289,16 +1323,16 @@ func _start_attack(id: StringName) -> void:
 			_meteor_along = _meteor_along.normalized()
 			_face_along(_meteor_along, 0.0, 999.0)
 		&"punch":
-			_play_clip("Punch", MELEE_CLIP_SPEED)
+			_play_clip(CLIP_PUNCH, MELEE_CLIP_SPEED)
 		&"grab":
 			_grab_pending = false
-			_play_clip("Grab", MELEE_CLIP_SPEED)
+			_play_clip(CLIP_GRAB, MELEE_CLIP_SPEED)
 		&"throw":
-			_play_clip("Throw", MELEE_CLIP_SPEED)
+			_play_clip(CLIP_THROW, MELEE_CLIP_SPEED)
 		&"rock":
 			# The same overhand the grab throw ends on, hurried: this is one
 			# stride's pause in the middle of a run, not a set piece.
-			_play_clip("Throw", THROW_CLIP_DURATION / ROCK_DURATION)
+			_play_clip(CLIP_THROW, THROW_CLIP_DURATION / ROCK_DURATION)
 	_publish_event({"kind": "attack_start", "attack": String(id),
 		"sequence": _attack_sequence})
 
@@ -1503,7 +1537,7 @@ func _tick_meteor(delta: float, target: Node) -> void:
 		return
 	if not _meteor_landed:
 		if elapsed < METEOR_WINDUP + 0.05:
-			_play_clip("MeteorFly")
+			_play_clip(CLIP_METEOR_FLY)
 			_meteor_fist = _right_fist.global_position
 			_meteor_flora_from = _meteor_fist
 		velocity = _meteor_along * METEOR_FLY_SPEED
@@ -1588,7 +1622,7 @@ func _land_meteor(target: Node) -> void:
 	if _meteor_landed:
 		return
 	_meteor_landed = true
-	_play_clip("MeteorImpact")
+	_play_clip(CLIP_METEOR_IMPACT)
 	var at := _right_fist.global_position
 	# Flora runs at half the actor sampling rate. A landing can happen on the
 	# odd sample; flush that final stretch instead of abandoning up to twelve
@@ -1793,8 +1827,8 @@ func _tick_grab_throw(delta: float, target: Node) -> void:
 	_face_along(_flat_on_surface(
 		_combat_position(target) - global_position), delta, 5.0)
 	if _grabbed_peer > 0 and elapsed >= GRAB_DURATION:
-		if _clip != "Throw":
-			_play_clip("Throw", MELEE_CLIP_SPEED)
+		if _clip != CLIP_THROW:
+			_play_clip(CLIP_THROW, MELEE_CLIP_SPEED)
 	if elapsed >= GRAB_DURATION + THROW_RELEASE and _grabbed_peer > 0 \
 			and not _throw_released:
 		_throw_released = true
@@ -1857,6 +1891,10 @@ func _process_cooldowns(delta: float) -> void:
 
 # --- Public API -------------------------------------------------------------
 
+func boss_id() -> String:
+	return BOSS_ID
+
+
 func maximum_health() -> float:
 	return MAX_HEALTH
 
@@ -1901,6 +1939,7 @@ func flash_damage(strength := 1.0) -> void:
 
 func boss_snapshot() -> Dictionary:
 	return {
+		"boss_id": BOSS_ID,
 		"health": _health,
 		"maximum_health": MAX_HEALTH,
 		"engaged": _engaged,
@@ -1931,6 +1970,8 @@ func boss_snapshot() -> Dictionary:
 
 func apply_boss_snapshot(wire: Dictionary) -> void:
 	if wire.is_empty():
+		return
+	if wire.has("boss_id") and String(wire.get("boss_id", "")) != BOSS_ID:
 		return
 	var sequence := int(wire.get("sync_sequence", 0))
 	if sequence > 0:
@@ -2239,7 +2280,7 @@ func apply_damage(hit: DamageHit) -> float:
 		_defeat_basis = global_basis.orthonormalized()
 		_ground_speed = 0.0
 		velocity = Vector3.ZERO
-		_play_clip("Defeat")
+		_play_clip(CLIP_DEFEAT)
 		_publish_event({"kind": "defeated"})
 		_publish_sync(true)
 	return amount
@@ -2388,7 +2429,8 @@ func _bind_visuals() -> void:
 	_left_fist = get_node_or_null(left_fist_marker) as Marker3D
 	_grab_socket = get_node_or_null(grab_marker) as Marker3D
 	if _animator != null:
-		for clip_name in ["Idle", "Walk", "Run", "MeteorFly"]:
+		for clip_name in [
+				CLIP_IDLE, CLIP_WALK, CLIP_RUN, CLIP_METEOR_FLY]:
 			if _animator.has_animation(clip_name):
 				_animator.get_animation(clip_name).loop_mode = Animation.LOOP_LINEAR
 	_meteor_shock = MeteorShock.new()

@@ -162,8 +162,8 @@ func _time_of_day(at: Vector3, planet: Planet) -> String:
 	var cycle := _celestial_cycle()
 	if cycle == null or cycle.sun == null:
 		return "day  no cycle"
-	# Phase zero puts the sun over the landing, so that is the hour the clock is
-	# anchored to and midday is what a fresh game starts at.
+	# Phase zero puts the sun over the landing, so the clock is anchored to noon.
+	# GameWorld deliberately begins at phase 0.75, which this reports as 06:00.
 	var hours := fposmod(cycle.phase() * 24.0 + 12.0, 24.0)
 	var up := (at - planet.global_position).normalized()
 	# The light's +Z is the way to the sun; its sine against local up is the
@@ -256,10 +256,10 @@ func _degrees(value: float, positive: String, negative: String) -> String:
 
 
 func _nearest_place(at: Vector3) -> String:
-	var closest: Landmark = null
+	var closest: Node3D = null
 	var nearest := INF
 	for node in get_tree().get_nodes_in_group(Landmark.GROUP):
-		var landmark := node as Landmark
+		var landmark := LandmarkAccess.as_location(node)
 		if landmark == null:
 			continue
 		var span := landmark.global_position.distance_to(at)
@@ -268,7 +268,8 @@ func _nearest_place(at: Vector3) -> String:
 			closest = landmark
 	if closest == null:
 		return "nowhere named"
-	return "%s  %s" % [closest.title, Landmark.distance_text(nearest)]
+	return "%s  %s" % [
+		LandmarkAccess.title(closest), Landmark.distance_text(nearest)]
 
 
 func _write(row: int, text: String) -> void:

@@ -75,6 +75,46 @@ const ITEMS := {
 		"scene": "res://assets/runtime/apparel/apparel_c3_hair.glb",
 		"tint": Color(0.10, 0.11, 0.20),
 	},
+	"c3_sun_hat": {
+		"title": "Wide Sun Hat",
+		"description": "A broad, low brim for long walks between settlements.",
+		"kind": KIND_APPAREL,
+		"slot": "hat",
+		"scene": "res://assets/runtime/apparel/placeholder_c3_sun_hat.tscn",
+		"tint": Color(0.93, 0.70, 0.31),
+		"price": 0,
+		"shop": true,
+	},
+	"c3_wizard_hat": {
+		"title": "Wayfinder Hat",
+		"description": "A tall crooked cone made for dramatic directions.",
+		"kind": KIND_APPAREL,
+		"slot": "hat",
+		"scene": "res://assets/runtime/apparel/placeholder_c3_wizard_hat.tscn",
+		"tint": Color(0.34, 0.23, 0.62),
+		"price": 0,
+		"shop": true,
+	},
+	"c3_crown": {
+		"title": "Settlement Crown",
+		"description": "A broad gold circlet with deliberately oversized points.",
+		"kind": KIND_APPAREL,
+		"slot": "hat",
+		"scene": "res://assets/runtime/apparel/placeholder_c3_crown.tscn",
+		"tint": Color(1.0, 0.74, 0.18),
+		"price": 0,
+		"shop": true,
+	},
+	"c3_beanie": {
+		"title": "Harbor Beanie",
+		"description": "A soft round cap and rolled band for windy coasts.",
+		"kind": KIND_APPAREL,
+		"slot": "hat",
+		"scene": "res://assets/runtime/apparel/placeholder_c3_beanie.tscn",
+		"tint": Color(0.18, 0.58, 0.68),
+		"price": 0,
+		"shop": true,
+	},
 	"c3_goggles": {
 		"title": "Settler Goggles",
 		"description": "Smoked slate lenses on a wide band. Cut for the settler's skull, which is a different shape entirely.",
@@ -130,7 +170,10 @@ const ITEMS := {
 ## Anything an ability declares that is not listed here is still shown, using
 ## its own key and a plain number, so a new stat is never silently swallowed.
 const STAT_ORDER := ["damage", "player_damage", "impact", "speed", "duration",
-	"range", "radius", "cooldown", "delay", "launch_height", "launch_speed",
+	"range", "radius", "cooldown", "punch_reach", "wind_length",
+	"capture_full_health",
+	"capture_low_health", "release_distance", "delay",
+	"launch_height", "launch_speed",
 	"slam_speed", "rope_length", "swing_acceleration", "max_speed",
 	"impact_speed", "knockback", "lift", "self_launch_speed",
 	"crater_radius", "crater_depth", "crater_warp",
@@ -147,6 +190,11 @@ const STAT_LABELS := {
 	"range": "Range",
 	"radius": "Radius",
 	"cooldown": "Cooldown",
+	"punch_reach": "Punch Reach",
+	"wind_length": "Wind Tunnel",
+	"capture_full_health": "Full-Health Capture",
+	"capture_low_health": "Low-Health Capture",
+	"release_distance": "Unequip Release",
 	"delay": "Delay",
 	"launch_height": "Launch Height",
 	"launch_speed": "Launch Speed",
@@ -183,6 +231,11 @@ const STAT_UNITS := {
 	"range": " m",
 	"radius": " m",
 	"cooldown": " s",
+	"punch_reach": " m",
+	"wind_length": " m",
+	"capture_full_health": "%",
+	"capture_low_health": "%",
+	"release_distance": " m",
 	"delay": " s",
 	"launch_height": " m",
 	"launch_speed": " m/s",
@@ -210,19 +263,46 @@ const STAT_UNITS := {
 	"apex_time": " s",
 }
 
-## The body slots the equipment column shows, top to bottom.
-const SLOT_ORDER := ["hat", "goggles", "long_sleeve", "pants", "shoes"]
+## The active loadout is intentionally hat-only. Legacy item definitions keep
+## their explicit apparel kind so old saves remain parseable in the backpack.
+const SLOT_ORDER := ["hat"]
+const MAX_ABILITY_LEVEL := 5
+const MAX_ABILITY_STAT_LEVEL := 5
+const ABILITY_STAT_ORDER := [
+	"power", "cooldown", "size", "speed", "range", "duration",
+]
+const ABILITY_STAT_LABELS := {
+	"power": "POWER",
+	"cooldown": "COOLDOWN",
+	"size": "SIZE",
+	"speed": "SPEED",
+	"range": "RANGE",
+	"duration": "DURATION",
+}
+const ABILITY_STAT_KEYS := {
+	"power": ["damage", "impact", "knockback", "lift"],
+	"cooldown": ["cooldown"],
+	"size": [
+		"radius", "projectile_radius", "crater_radius", "beam_radius",
+		"paint_radius", "wall_width", "wall_height", "punch_reach",
+		"wind_length", "rope_length",
+	],
+	"speed": [
+		"speed", "launch_speed", "slam_speed", "swing_acceleration",
+		"max_speed", "self_launch_speed",
+	],
+	"range": ["range"],
+	"duration": ["duration", "fade_duration", "explosion_duration"],
+}
+const ABILITY_STAT_GAIN := 0.10
+const ABILITY_COOLDOWN_REDUCTION := 0.08
 
 const ATTACK_SWING := "swing"
 const ATTACK_SHOOT := "shoot"
 
 ## Shown on an equipment slot that has nothing in it yet.
 const SLOT_LABELS := {
-	"hat": "Head",
-	"goggles": "Eyes",
-	"long_sleeve": "Body",
-	"pants": "Legs",
-	"shoes": "Feet",
+	"hat": "Hat",
 }
 
 
@@ -339,6 +419,108 @@ static func ability_ids() -> PackedStringArray:
 	return AbilityCatalog.ids()
 
 
+static func ability_use_type(id: String) -> int:
+	var definition := ability_definition(id)
+	return definition.use_type if definition != null \
+		else AbilityDefinition.UseType.REUSABLE
+
+
+static func is_one_time_ability(id: String) -> bool:
+	return is_ability(id) \
+		and ability_use_type(id) == AbilityDefinition.UseType.ONE_TIME
+
+
+## Whether this definition may occupy LMB or RMB directly. A false entry still
+## remains an owned/catalogued ability record; another utility can consume it.
+static func ability_directly_equippable(id: String) -> bool:
+	var definition := ability_definition(id)
+	return definition != null and definition.direct_equip
+
+
+static func reusable_ability_ids() -> PackedStringArray:
+	var ids := PackedStringArray()
+	for id: String in ability_ids():
+		if not is_one_time_ability(id):
+			ids.append(id)
+	return ids
+
+
+static func one_time_ability_ids() -> PackedStringArray:
+	var ids := PackedStringArray()
+	for id: String in ability_ids():
+		if is_one_time_ability(id):
+			ids.append(id)
+	return ids
+
+
+static func hat_shop_ids() -> PackedStringArray:
+	var ids := PackedStringArray()
+	for id: String in ITEMS:
+		if bool(_field(id, "shop", false)) and slot_of(id) == "hat":
+			ids.append(id)
+	return ids
+
+
+## Prices are data-backed even while this phase intentionally makes every
+## transaction free. Keeping the authoritative debit path now avoids replacing
+## the protocol when economy balancing begins.
+static func hat_price(id: String) -> int:
+	return maxi(int(_field(id, "price", 0)), 0) if id in hat_shop_ids() else -1
+
+
+static func ability_unlock_price(id: String) -> int:
+	return 0 if is_ability(id) and not is_one_time_ability(id) else -1
+
+
+static func ability_upgrade_price(id: String, current_level: int) -> int:
+	if not is_ability(id) or is_one_time_ability(id) \
+			or current_level < 1 or current_level >= MAX_ABILITY_LEVEL:
+		return -1
+	return 0
+
+
+static func ability_stat_ids(id: String) -> PackedStringArray:
+	var definition := ability_definition(id)
+	var out := PackedStringArray()
+	if definition == null or is_one_time_ability(id):
+		return out
+	for stat_id: String in ABILITY_STAT_ORDER:
+		var keys: Array = ABILITY_STAT_KEYS.get(stat_id, [])
+		for key: String in keys:
+			if definition.stats.has(key) and float(definition.stats[key]) > 0.0:
+				out.push_back(stat_id)
+				break
+	return out
+
+
+static func ability_stat_valid(id: String, stat_id: String) -> bool:
+	return stat_id in ability_stat_ids(id)
+
+
+static func ability_stat_label(stat_id: String) -> String:
+	return String(ABILITY_STAT_LABELS.get(stat_id, stat_id.to_upper()))
+
+
+static func sanitize_ability_stat_levels(id: String, raw: Variant) -> Dictionary:
+	var out: Dictionary = {}
+	if not raw is Dictionary or not is_ability(id) or is_one_time_ability(id):
+		return out
+	for stat_variant: Variant in raw:
+		var stat_id := str(stat_variant)
+		var level := int((raw as Dictionary)[stat_variant])
+		if ability_stat_valid(id, stat_id) and level > 0:
+			out[stat_id] = clampi(level, 1, MAX_ABILITY_STAT_LEVEL)
+	return out
+
+
+static func ability_stat_upgrade_price(
+		id: String, stat_id: String, current_level: int) -> int:
+	if not ability_stat_valid(id, stat_id) or current_level < 0 \
+			or current_level >= MAX_ABILITY_STAT_LEVEL:
+		return -1
+	return 0
+
+
 ## Complete authored definition, shared by runtime, menu, and effect factories.
 static func ability_definition(id: String) -> AbilityDefinition:
 	return AbilityCatalog.definition(id)
@@ -357,9 +539,56 @@ static func ability_script(id: String) -> String:
 ## three together are the whole of what a slot needs to describe itself, and
 ## splitting the numbers into the ability script would mean the menu had to load
 ## and instance an ability to find out what it does.
-static func stats_of(id: String) -> Dictionary:
+static func stats_of(id: String, level := 1,
+		stat_levels: Dictionary = {}) -> Dictionary:
 	var definition := ability_definition(id)
-	return definition.stats if definition != null else {}
+	if definition == null:
+		return {}
+	var stats := definition.stats.duplicate(true)
+	var added_levels := clampi(level, 1, MAX_ABILITY_LEVEL) - 1
+	if added_levels > 0:
+		var effect_scale := 1.0 + 0.08 * float(added_levels)
+		var cooldown_scale := 1.0 - 0.05 * float(added_levels)
+		# These are PvE outputs. `player_damage` is deliberately never scaled;
+		# Nuke's radius remains authored until the explicit Size track is trained.
+		for key: String in ["damage", "impact"]:
+			if stats.has(key) and float(stats[key]) > 0.0:
+				stats[key] = float(stats[key]) * effect_scale
+		if id == "wall" and stats.has("duration"):
+			stats["duration"] = float(stats["duration"]) * effect_scale
+		if stats.has("cooldown"):
+			stats["cooldown"] = maxf(
+				float(stats["cooldown"]) * cooldown_scale, 0.0)
+	var clean_levels := sanitize_ability_stat_levels(id, stat_levels)
+	for stat_id: String in clean_levels:
+		var trained := int(clean_levels[stat_id])
+		var scale := 1.0 - ABILITY_COOLDOWN_REDUCTION * float(trained) \
+			if stat_id == "cooldown" \
+			else 1.0 + ABILITY_STAT_GAIN * float(trained)
+		for key: String in ABILITY_STAT_KEYS.get(stat_id, []):
+			if stats.has(key) and float(stats[key]) > 0.0:
+				stats[key] = maxf(float(stats[key]) * scale, 0.0)
+	return stats
+
+
+static func ability_stat_preview(id: String, ability_level: int,
+		stat_levels: Dictionary, stat_id: String) -> String:
+	if not ability_stat_valid(id, stat_id):
+		return ""
+	var current_level := clampi(int(stat_levels.get(stat_id, 0)),
+		0, MAX_ABILITY_STAT_LEVEL)
+	var next_levels := stat_levels.duplicate(true)
+	next_levels[stat_id] = mini(current_level + 1, MAX_ABILITY_STAT_LEVEL)
+	var current := stats_of(id, ability_level, stat_levels)
+	var next := stats_of(id, ability_level, next_levels)
+	var pieces := PackedStringArray()
+	for key: String in ABILITY_STAT_KEYS.get(stat_id, []):
+		if not current.has(key) or float(current[key]) <= 0.0:
+			continue
+		pieces.push_back("%s %s → %s" % [
+			STAT_LABELS.get(key, key.capitalize()),
+			_stat_value(current, key), _stat_value(next, key)])
+	return "  •  ".join(pieces)
 
 
 static func ability_profile(id: String) -> String:
@@ -376,8 +605,9 @@ static func ability_icon(id: String) -> Texture2D:
 ##
 ## Label and value are separated by a tab so a caller can lay them out in two
 ## columns without parsing anything back out of the string.
-static func stat_lines(id: String) -> PackedStringArray:
-	var stats := stats_of(id)
+static func stat_lines(id: String, level := 1,
+		stat_levels: Dictionary = {}) -> PackedStringArray:
+	var stats := stats_of(id, level, stat_levels)
 	var lines := PackedStringArray()
 	if stats.is_empty():
 		return lines

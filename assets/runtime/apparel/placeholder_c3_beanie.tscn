@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_hat"]
+albedo_color = Color(0.18, 0.58, 0.68, 1)
+roughness = 0.9
+
+[sub_resource type="SphereMesh" id="Mesh_hat"]
+material = SubResource("Material_hat")
+radius = 0.285
+height = 0.38
+radial_segments = 20
+rings = 10
+
+[node name="PlaceholderBeanie" type="Node3D"]
+
+[node name="HatMesh" type="MeshInstance3D" parent="."]
+position = Vector3(0, 1.62, 0)
+mesh = SubResource("Mesh_hat")
+metadata/wardrobe_preserve_transform = true

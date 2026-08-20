@@ -110,6 +110,11 @@ func _poll_boss(delta: float) -> void:
 	if found != _boss:
 		_set_boss_boundary(false)
 		_boss = found
+		_session_engaged = false
+		_last_boss_health = -1.0
+		_boss_bar.reset_display()
+		if _boss != null:
+			_boss_bar.set_title(BossAdapter.display_name(_boss))
 	if _boss == null:
 		_session_engaged = false
 		_last_boss_health = -1.0
@@ -180,8 +185,14 @@ func _flash_boss() -> void:
 func _on_enemy_damaged(target: Node, amount: float, _hit: DamageHit) -> void:
 	if amount <= 0.0 or target == null:
 		return
-	if not target.is_in_group(BossAdapter.GROUP):
+	if not BossAdapter.is_boss(target):
 		return
+	if target != _boss:
+		_set_boss_boundary(false)
+		_boss = target
+		_last_boss_health = -1.0
+		_boss_bar.reset_display()
+		_boss_bar.set_title(BossAdapter.display_name(target))
 	_session_engaged = true
 	CombatantFlash.flash(BossAdapter.model_root(target))
 	# The host-side damage signal and the replicated-health poll describe the

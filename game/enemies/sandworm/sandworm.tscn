@@ -1,0 +1,25 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://game/enemies/sandworm/sandworm.gd" id="1_script"]
+[ext_resource type="PackedScene" path="res://assets/runtime/characters/sandworm.glb" id="2_model"]
+
+[sub_resource type="SphereShape3D" id="SphereShape_sandworm"]
+resource_local_to_scene = true
+radius = 50.0
+
+[node name="Sandworm" type="CharacterBody3D" groups=["bosses", "sandworm_boss"]]
+safe_margin = 0.05
+max_slides = 4
+script = ExtResource("1_script")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 42, 0)
+shape = SubResource("SphereShape_sandworm")
+
+; The generated GLB is grounded, 120 metres across, and faces Godot -Z.
+[node name="Model" parent="." instance=ExtResource("2_model")]
+
+; Driven from the animated Head bone after import. This authored fallback keeps
+; stripped tests useful before the Skeleton3D is available.
+[node name="Mouth" type="Marker3D" parent="."]
+position = Vector3(-26.35, 71, -49.5)

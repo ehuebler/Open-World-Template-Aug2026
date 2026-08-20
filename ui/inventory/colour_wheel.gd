@@ -11,14 +11,15 @@ extends Control
 ## continuum.
 ##
 ## **The commit is on release, not during the drag**, and that is a cost decision
-## rather than a matter of feel. Both owners of [signal picked] write the look to
-## `user://settings.cfg`, and the in-game one reads it back first, so a signal per
-## frame of a drag would be a file round trip per frame. The swatch along the
-## bottom is what the drag feeds instead: you see the colour you are about to
-## commit without anything outside this control being told about it.
+## rather than a matter of feel. Owners that write `user://settings.cfg` connect
+## [signal picked] so dragging never becomes a file round trip per frame. A
+## lightweight visual effect may also connect [signal previewed] for live shader
+## feedback; the character designer deliberately relies on the swatch instead.
 
-## The colour was let go of. Continuous feedback is the swatch, not this.
+## The colour was let go of. Persistent owners commit from this signal.
 signal picked(colour: Color)
+## The disc or light bar moved. Never use this signal for persistent writes.
+signal previewed(colour: Color)
 
 const PALETTE: UIPalette = preload("res://ui/themes/ui_palette.tres")
 
@@ -104,6 +105,7 @@ func _take(at: Vector2) -> void:
 	else:
 		_value = clampf((at.x - _bar().position.x) / _bar().size.x, 0.0, 1.0)
 	queue_redraw()
+	previewed.emit(colour())
 
 
 func _centre() -> Vector2:

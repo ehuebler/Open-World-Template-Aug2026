@@ -12,16 +12,22 @@ extends Resource
 ## Health a fresh settler is released with. Small: a Meep is not a fighter, and the
 ## point of the number is that losing them to an uncleared nest has to hurt.
 @export var maximum_health := 24.0
-## Metres per second on open ground. A little under a walking player, so a player
-## can always catch up with one to watch what it is doing.
-@export var walk_speed := 2.4
+## Metres per second on open ground. Meeps cover a hundred-metre town all day; at the
+## old 2.4 m/s, most of what a player saw was the walk to work rather than the work.
+## Still well under the player's 9 m/s walk, so one is easy to catch and inspect.
+@export var walk_speed := 5.0
 ## How fast the same Meep moves when it is frightened.
-@export var flee_speed := 3.6
+@export var flee_speed := 7.2
 ## Radius of the body, for hit tests and for the size it is drawn at.
 @export var body_radius := 0.35
+## Ground-to-head height of the authored creature and its physical proxy capsule.
+@export var body_height := 1.2
+## Radius of the upright proxy capsule. Kept separate from combat's historical
+## body radius so adding crowd collision does not change damage policy.
+@export var collision_radius := 0.32
 ## Work done per second on a job, in job seconds. Reserved for the construction
 ## passes; the board already divides progress by it.
-@export var work_rate := 1.0
+@export var work_rate := 1.25
 ## How far a Meep notices things on its own, in metres. Reserved for the mobs pass.
 @export var sight_range := 16.0
 ## Metres from a target that count as arrived. A little over one grid cell, so a

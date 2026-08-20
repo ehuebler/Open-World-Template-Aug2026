@@ -166,6 +166,79 @@
       "paint_size_bytes": 82593,
       "close_preview_size_bytes": 229715,
       "gameplay_preview_size_bytes": 150123
+    },
+    "cinder_plate_rhino": {
+      "name": "cinder_plate_rhino",
+      "display_name": "Cinder-Plate Rhino",
+      "category": "land_fauna",
+      "form": "rhino",
+      "seed": 20268134,
+      "generator": "assets/source/blender/build_rhino.py",
+      "source_sculpt": "assets/source/meshmaker/rhino.blend",
+      "work_blend": "assets/work/rhino_rigged.blend",
+      "glb": "assets/runtime/fauna/models/cinder_plate_rhino.glb",
+      "color_paint": "assets/runtime/biomes/paint/cinder_plate_rhino_paint.png",
+      "close_preview": "assets/previews/fauna/cinder_plate_rhino_close.png",
+      "gameplay_distance_preview": "assets/previews/fauna/cinder_plate_rhino_gameplay.png",
+      "authored_height": 1.850883,
+      "triangle_count": 8000,
+      "collision_hint": {
+        "shape": "capsule",
+        "radius": 0.52,
+        "height": 1.1,
+        "centre": [
+          0.0,
+          0.66,
+          0.0
+        ]
+      },
+      "color_paint_style": "pebbled slate-violet hide, broad grey-blue plate strata over the back and flanks, banded amber horn, near-black hooves, dusty rose belly, and mip-safe molten ember seams carried in PNG alpha",
+      "emission_style": "plate seams and horn base glow like cooling slag after sunset",
+      "emission_strength": 1.9,
+      "runtime_contract": {
+        "mesh_node": "Character",
+        "vertex_colour": "COLOR_0 semantic region colors",
+        "color_paint_uv": "TEXCOORD_0",
+        "emission_mask": "assets/runtime/biomes/paint/cinder_plate_rhino_paint.png alpha; never transparency",
+        "ground_axis": "Godot/glTF +Y",
+        "forward_axis": "Godot local -Z",
+        "skins": 1,
+        "bones": 20,
+        "animations": [
+          "Idle",
+          "Walk",
+          "Run",
+          "Paw",
+          "Charge",
+          "Gore",
+          "HitReact",
+          "Defeat"
+        ]
+      },
+      "file_size_bytes": 1756200,
+      "paint_size_bytes": 105714
+    },
+    "cinder_plate_rhino_den": {
+      "name": "cinder_plate_rhino_den",
+      "display_name": "Cinder-Plate Rhino Den",
+      "category": "fauna_den",
+      "form": "non-enterable cliff cave facade",
+      "seed": 20268135,
+      "generator": "assets/source/blender/build_rhino_den.py",
+      "runtime_geometry": "game/fauna/rhino_den.gd primitive arch",
+      "color_paint": "assets/runtime/biomes/paint/cinder_plate_rhino_den_paint.png",
+      "close_preview": "assets/previews/fauna/cinder_plate_rhino_den_close.png",
+      "gameplay_distance_preview": "assets/previews/fauna/cinder_plate_rhino_den_gameplay.png",
+      "color_paint_style": "broad blue-slate cliff strata, dusty violet mineral blooms, dark soot pockets, and wide amber horn scrapes; all marks are mip-safe",
+      "runtime_contract": {
+        "geometry": "Godot primitive meshes with TEXCOORD_0 UVs",
+        "paint_texture": "assets/runtime/biomes/paint/cinder_plate_rhino_den_paint.png",
+        "collision": "solid backing slab; entrance is never traversable",
+        "placement": "host-authored steep terrain near frontier rhinos"
+      },
+      "paint_size_bytes": 87065,
+      "close_preview_size_bytes": 1057462,
+      "gameplay_preview_size_bytes": 973216
     }
   }
 }

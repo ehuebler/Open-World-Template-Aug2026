@@ -42,8 +42,10 @@ static func create(world: Node, caster: OnlinePlayer,
 
 func _ready() -> void:
 	top_level = true
+	var stats := source.ability_stats(definition.ability_id) \
+		if is_instance_valid(source) else definition.stats
 	var paint_radius := maxf(float(
-		definition.stats.get("paint_radius", 0.8)), 0.1)
+		stats.get("paint_radius", 0.8)), 0.1)
 	_marker_material = _energy_material(definition.tint, 2.0, 0.58)
 	var marker_mesh := CylinderMesh.new()
 	marker_mesh.top_radius = paint_radius

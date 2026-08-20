@@ -30,6 +30,9 @@ enum AttackStyle {
 	BODY_SLAP,
 	## Spits a short-lived ball of liquid at whoever provoked it.
 	SPIT,
+	## Paws the ground, then runs a straight line with the horn down and gores
+	## whatever it catches on the way through.
+	HORN_CHARGE,
 }
 
 enum Move {
@@ -118,11 +121,42 @@ enum Move {
 @export_range(0.0, 500.0) var colony_near := 28.0
 @export_range(0.0, 800.0) var colony_far := 80.0
 
+@export_group("Settlement frontier")
+## Rings the colony population around the edge of the settlement's claim instead
+## of scattering it in the annulus above. The distances then mean "beyond the
+## boundary" rather than "from the ship", and the ring is spread evenly by
+## bearing so the herd surrounds the town rather than clumping on one side.
+@export var settlement_edge := false
+@export_range(0.0, 200.0) var edge_margin_near := 6.0
+@export_range(0.0, 200.0) var edge_margin_far := 26.0
+
 @export_category("Vitality")
 @export var health := 100.0
 @export var health_per_metre := 18.0
 @export var toughness: PlantSpecies.Toughness = PlantSpecies.Toughness.SOFT
-@export_range(0.0, 120.0) var respawn_delay := 14.0
+
+@export_category("Reproduction")
+## Applies to every temperament, including hostile species. Sexes are not
+## modelled: any two live adults of the same species may pair.
+@export var reproduces := true
+## Hard ecological ceiling for this spawner. It counts adults and juveniles, so
+## several simultaneous courtships cannot grow a population without bound.
+@export_range(2, 128) var population_limit := 16
+## How far an unattached adult will consider walking to meet another.
+@export_range(1.0, 500.0) var mate_search_range := 70.0
+## Feet-to-feet separation at which both animals stop and face one another.
+## Their physical radii remain a lower bound when a particularly wide species
+## needs more room than this authored distance.
+@export_range(0.1, 20.0) var mate_distance := 1.25
+## Rest between successful pairings. Initial adults receive a deterministic
+## fraction of this delay so a whole herd does not court on its spawn frame.
+@export_range(1.0, 1200.0) var mate_cooldown := 75.0
+## Time spent face-to-face before the heart and newborn appear.
+@export_range(0.1, 20.0) var courtship_seconds := 1.6
+## A newborn is the same authored creature at this share of its eventual size.
+@export_range(0.1, 0.9) var newborn_scale := 0.42
+## Real seconds from newborn size to full adult size.
+@export_range(1.0, 3600.0) var growth_seconds := 120.0
 
 @export_category("Movement")
 @export_range(0.0, 30.0) var walk_speed := 1.8
@@ -186,6 +220,11 @@ enum Move {
 @export var clip_attack := "Spit"
 @export var clip_hit := "HitReact"
 @export var clip_dead := "Defeat"
+## Held while an attack is being telegraphed, and played while it is being run
+## in. Only charging creatures have either; everything else attacks from a
+## standstill and shows [member clip_attack] the whole time.
+@export var clip_windup := "Paw"
+@export var clip_charge := "Charge"
 ## Cadence trim, applied on top of matching playback rate to ground speed. It
 ## exists so a stride can be tuned against the terrain without a rebake.
 @export_range(0.1, 4.0) var clip_speed_scale := 1.0
@@ -215,6 +254,23 @@ enum Move {
 @export_range(0.05, 4.0) var spit_hit_radius := 0.62
 @export var spit_color := Color(0.58, 0.93, 1.0)
 @export_range(0.0, 8.0) var spit_glow := 1.8
+
+@export_group("Horn charge")
+## The band it will start a charge from. Too near and there is no room to build
+## up, so it backs off and comes again; beyond it, it closes at a walk or a run
+## like anything else hunting.
+@export_range(0.0, 200.0) var charge_from := 22.0
+@export_range(0.0, 60.0) var charge_minimum := 5.0
+@export_range(0.0, 80.0) var charge_speed := 13.0
+## How long it will keep running once committed. The line is locked in when the
+## run starts, so this is also how far past a dodging target it will carry.
+@export_range(0.1, 12.0) var charge_seconds := 2.2
+## Steering left while committed, in radians a second. Small on purpose: a
+## charge that tracks perfectly cannot be side-stepped, and side-stepping one is
+## the whole answer to it.
+@export_range(0.0, 6.0) var charge_turn := 0.55
+## Slowing down afterwards, whether it connected or ran past.
+@export_range(0.0, 6.0) var charge_recover := 0.9
 
 var _template_material: ShaderMaterial
 var _template_mesh: Mesh
@@ -347,6 +403,18 @@ func validate() -> PackedStringArray:
 	if global_population and maximum_instances > 0 \
 			and despawn_beyond <= spawn_within:
 		problems.append("%s despawn_beyond must exceed spawn_within" % species_id)
+	if reproduces and population_limit < 2:
+		problems.append("%s reproduces but population_limit is below two" % species_id)
+	if reproduces and population_limit < colony_count:
+		problems.append(
+			"%s population_limit is below its colony population" % species_id)
+	if reproduces and mate_search_range <= mate_distance:
+		problems.append(
+			"%s mate_search_range must exceed mate_distance" % species_id)
+	if reproduces and (newborn_scale <= 0.0 or newborn_scale >= 1.0):
+		problems.append("%s newborn_scale must be between zero and one" % species_id)
+	if reproduces and growth_seconds <= 0.0:
+		problems.append("%s growth_seconds must be positive" % species_id)
 	if attack_style != AttackStyle.NONE and not has_move(Move.ATTACK):
 		problems.append("%s has an attack style but no Attack move" % species_id)
 	if skeletal_clips and quadruped_gait:
@@ -357,4 +425,19 @@ func validate() -> PackedStringArray:
 			"%s fights back when provoked but has no attack" % species_id)
 	if bound_when_fleeing and not has_move(Move.RUN):
 		problems.append("%s bounds when fleeing but cannot run" % species_id)
+	if attack_style == AttackStyle.HORN_CHARGE:
+		if not has_move(Move.RUN):
+			problems.append("%s charges but cannot run" % species_id)
+		if charge_from <= charge_minimum:
+			problems.append(
+				"%s charge_from must exceed charge_minimum" % species_id)
+		if charge_speed <= run_speed:
+			problems.append(
+				"%s charges no faster than it runs" % species_id)
+	if settlement_edge and colony_count <= 0:
+		problems.append(
+			"%s rings the settlement edge but has no colony count" % species_id)
+	if settlement_edge and edge_margin_near > edge_margin_far:
+		problems.append(
+			"%s edge_margin_near exceeds edge_margin_far" % species_id)
 	return problems

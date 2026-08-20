@@ -21,10 +21,14 @@ enum Tab {
 	INVENTORY,
 	QUESTS,
 	ACHIEVEMENTS,
+	SAVE,
+	LOAD,
 }
 
 const THEME: Theme = preload("res://ui/themes/main_theme.tres")
 const MENU_BACKGROUND: Texture2D = preload("res://assets/runtime/ui/menu_background.png")
+const SandboxSavePanelScript := preload(
+	"res://ui/menu/sandbox_save_panel.gd")
 
 const RED := Color("ef151f")
 const RED_BRIGHT := Color("ff3445")
@@ -39,12 +43,12 @@ const EDGE_GAP := 28.0
 ## The page consumes the width formerly reserved for the side actions. Navigation
 ## and the circular session actions share the band directly beneath it.
 const CONTENT_RECT := Rect2(0.065, 0.035, 0.870, 0.715)
-const SELECTOR_RECT := Rect2(0.250, 0.765, 0.220, 0.210)
+const SELECTOR_RECT := Rect2(0.250, 0.765, 0.220, 0.175)
 const ADMIN_RECT := Rect2(0.035, 0.875, 0.135, 0.090)
-const ACTIONS_RECT := Rect2(0.545, 0.765, 0.390, 0.140)
+const ACTIONS_RECT := Rect2(0.475, 0.765, 0.490, 0.140)
 
 var _player: OnlinePlayer
-var _tab: Tab = Tab.ITEMS
+var _tab: Tab = Tab.HERO
 var _data_kind: StringName = JournalDB.QUEST
 var _closing := false
 
@@ -54,6 +58,8 @@ var _active_page: Control
 var _selector_buttons: Dictionary = {}
 var _admin_button: Button
 var _settings_action: Button
+var _save_action: Button
+var _load_action: Button
 
 
 ## Called before the menu enters the tree. Each routed page is configured from
@@ -93,8 +99,8 @@ func close() -> void:
 	queue_free()
 
 
-## Opens a canonical page. Legacy aliases remain source-compatible:
-## INVENTORY -> Items, QUESTS -> Data/Quests, ACHIEVEMENTS -> Data/Achievements.
+## Opens a canonical page. The retired Items/Inventory route lands on Hero;
+## combat hotbar readout remains there while no general Items page is exposed.
 func show_tab(tab: Tab) -> void:
 	if tab == Tab.QUESTS:
 		_data_kind = JournalDB.QUEST
@@ -121,15 +127,16 @@ func current_tab() -> Tab:
 
 
 func _canonical_tab(tab: Tab) -> Tab:
-	if tab == Tab.INVENTORY:
-		return Tab.ITEMS
+	if tab == Tab.INVENTORY or tab == Tab.ITEMS:
+		return Tab.HERO
 	if tab == Tab.QUESTS or tab == Tab.ACHIEVEMENTS:
 		return Tab.DATA
-	if tab == Tab.HERO or tab == Tab.APPAREL or tab == Tab.ITEMS \
+	if tab == Tab.HERO or tab == Tab.APPAREL \
 			or tab == Tab.ABILITIES or tab == Tab.DATA \
-			or tab == Tab.SETTINGS or tab == Tab.ADMIN:
+			or tab == Tab.SETTINGS or tab == Tab.ADMIN \
+			or tab == Tab.SAVE or tab == Tab.LOAD:
 		return tab
-	return Tab.ITEMS
+	return Tab.HERO
 
 
 # --- Shell ------------------------------------------------------------------
@@ -227,11 +234,10 @@ func _build_bottom_selector() -> void:
 	_add_selector_button(
 		stack,
 		"TabApparel",
-		"Apparel",
+		"Hats",
 		RedMenuGlyph.Glyph.APPAREL_ALL,
 		Tab.APPAREL
 	)
-	_add_selector_button(stack, "TabItems", "Items", RedMenuGlyph.Glyph.ITEMS, Tab.ITEMS)
 	_add_selector_button(
 		stack,
 		"TabAbilities",
@@ -303,7 +309,7 @@ func _build_right_actions() -> void:
 	var cluster := HBoxContainer.new()
 	cluster.name = "SessionActions"
 	cluster.alignment = BoxContainer.ALIGNMENT_CENTER
-	cluster.add_theme_constant_override(&"separation", 28)
+	cluster.add_theme_constant_override(&"separation", 8)
 	_apply_anchor_rect(cluster, ACTIONS_RECT)
 	_shell.add_child(cluster)
 
@@ -311,6 +317,23 @@ func _build_right_actions() -> void:
 	close_action.tooltip_text = "Close menu"
 	close_action.pressed.connect(close)
 	cluster.add_child(_action_entry(close_action, "CLOSE"))
+
+	var saves_available := _sandbox_saves_available()
+	_save_action = _action_button("SaveAction", RedMenuGlyph.Glyph.SAVE)
+	_save_action.tooltip_text = (
+		"Create or overwrite a sandbox save"
+		if saves_available else "Saves are currently for single-player Sandbox mode")
+	_save_action.disabled = not saves_available
+	_save_action.pressed.connect(func() -> void: show_tab(Tab.SAVE))
+	cluster.add_child(_action_entry(_save_action, "SAVE"))
+
+	_load_action = _action_button("LoadAction", RedMenuGlyph.Glyph.LOAD)
+	_load_action.tooltip_text = (
+		"Load a sandbox save"
+		if saves_available else "Loads are currently for single-player Sandbox mode")
+	_load_action.disabled = not saves_available
+	_load_action.pressed.connect(func() -> void: show_tab(Tab.LOAD))
+	cluster.add_child(_action_entry(_load_action, "LOAD"))
 
 	_settings_action = _action_button("SettingsAction", RedMenuGlyph.Glyph.SETTINGS)
 	_settings_action.tooltip_text = "Open settings"
@@ -368,7 +391,7 @@ func _action_button(node_name: String, glyph_kind: RedMenuGlyph.Glyph) -> Button
 
 func _action_entry(control: Control, label_text: String) -> VBoxContainer:
 	var entry := VBoxContainer.new()
-	entry.custom_minimum_size = Vector2(118.0, 82.0)
+	entry.custom_minimum_size = Vector2(88.0, 82.0)
 	entry.alignment = BoxContainer.ALIGNMENT_CENTER
 	entry.add_theme_constant_override(&"separation", 4)
 	entry.add_child(control)
@@ -425,8 +448,6 @@ func _build_page(tab: Tab) -> Control:
 			return hero
 		Tab.APPAREL:
 			return _catalogue_page(RedCataloguePage.Mode.APPAREL)
-		Tab.ITEMS:
-			return _catalogue_page(RedCataloguePage.Mode.ITEMS)
 		Tab.ABILITIES:
 			return _catalogue_page(RedCataloguePage.Mode.ABILITIES)
 		Tab.DATA:
@@ -439,10 +460,19 @@ func _build_page(tab: Tab) -> Control:
 			settings.name = "InGameSettings"
 			settings.configure(true)
 			return settings
+		Tab.SAVE, Tab.LOAD:
+			var saves := SandboxSavePanelScript.new()
+			saves.configure(
+				SandboxSavePanelScript.Action.SAVE \
+					if tab == Tab.SAVE else SandboxSavePanelScript.Action.LOAD,
+				String(NetworkManager.session_options.get("save_id", "")))
+			saves.save_requested.connect(_on_sandbox_save_requested)
+			saves.load_requested.connect(_on_sandbox_load_requested)
+			return saves
 		Tab.ADMIN:
-			var blank := Control.new()
-			blank.name = "AdminBlank"
-			return blank
+			var admin := AdminPage.new()
+			admin.configure(_player)
+			return admin
 	return null
 
 
@@ -466,6 +496,40 @@ func _on_drop_requested(source: String, index: int, item_id: String) -> void:
 	var world := _surrounding_world()
 	if world != null and world.has_method(&"request_drop"):
 		world.call(&"request_drop", _player.peer_id, source, index, item_id)
+
+
+func _on_sandbox_save_requested(save_id: String, display_name: String) -> void:
+	var world := _surrounding_world()
+	var result := (
+		world.call(&"save_sandbox", save_id, display_name) as Dictionary
+		if world != null and world.has_method(&"save_sandbox")
+		else {
+			"ok": false,
+			"message": "The active world cannot be saved.",
+		})
+	if _active_page != null and _active_page.has_method(&"show_result"):
+		_active_page.call(&"show_result", result)
+
+
+func _on_sandbox_load_requested(save_id: String) -> void:
+	var world := _surrounding_world()
+	var result := (
+		world.call(&"load_sandbox_save", save_id) as Dictionary
+		if world != null and world.has_method(&"load_sandbox_save")
+		else {
+			"ok": false,
+			"message": "The active world cannot load saves.",
+		})
+	if not bool(result.get("ok", false)) \
+			and _active_page != null \
+			and _active_page.has_method(&"show_result"):
+		_active_page.call(&"show_result", result)
+
+
+func _sandbox_saves_available() -> bool:
+	return NetworkManager.state == NetworkManager.SessionState.IN_GAME \
+		and NetworkManager.is_single_player and NetworkManager.is_host \
+		and String(NetworkManager.session_options.get("mode", "")) == "sandbox"
 
 
 func _surrounding_world() -> Node:
@@ -495,10 +559,6 @@ func _refresh_navigation() -> void:
 		_tab == Tab.APPAREL
 	)
 	_style_selector_button(
-		_selector_buttons[Tab.ITEMS] as Button,
-		_tab == Tab.ITEMS
-	)
-	_style_selector_button(
 		_selector_buttons[Tab.ABILITIES] as Button,
 		_tab == Tab.ABILITIES
 	)
@@ -508,6 +568,8 @@ func _refresh_navigation() -> void:
 	)
 	_style_admin_button(_tab == Tab.ADMIN)
 	_style_action_button(_settings_action, _tab == Tab.SETTINGS)
+	_style_action_button(_save_action, _tab == Tab.SAVE)
+	_style_action_button(_load_action, _tab == Tab.LOAD)
 
 
 func _style_selector_button(button: Button, selected: bool) -> void:

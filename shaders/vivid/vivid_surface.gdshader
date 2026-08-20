@@ -256,6 +256,7 @@ void fragment() {
 	}
 	EMISSION = emission_color * emission_energy
 		+ region_color * fresnel * region_sheen * region.y * 0.5
-		+ camera_rim_color * camera_rim_energy * camera_rim
+		+ vivid_camera_rim_colour(camera_rim_color)
+			* camera_rim_energy * camera_rim
 		+ night_emission;
 }

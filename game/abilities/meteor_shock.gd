@@ -49,6 +49,11 @@ const RINGS := 14
 
 ## Metres across, matched to the fist's damage cylinder by whoever builds this.
 var radius := 4.0
+## A short ordinary punch is narrower than Meteor Punch but leaves a longer
+## tunnel behind its fist. Zero preserves the speed-shaped Meteor default.
+var minimum_reach := 0.0
+var tint := Color(1.0, 0.09, 0.04)
+var light_tint := Color(1.0, 0.24, 0.12)
 
 var _shell: MeshInstance3D
 var _material: ShaderMaterial
@@ -61,6 +66,7 @@ var _wanted := 0.0
 func _ready() -> void:
 	_material = ShaderMaterial.new()
 	_material.shader = SHADER
+	_material.set_shader_parameter(&"tint", Vector3(tint.r, tint.g, tint.b))
 
 	_shell = MeshInstance3D.new()
 	_shell.mesh = _build_dome()
@@ -77,7 +83,7 @@ func _ready() -> void:
 	# top of the near terrain, so anything generous enough to see from a
 	# distance is a flood that washes the whole frame pink.
 	_lamp = OmniLight3D.new()
-	_lamp.light_color = Color(1.0, 0.24, 0.12)
+	_lamp.light_color = light_tint
 	_lamp.light_energy = 0.0
 	_lamp.omni_range = 6.0
 	_lamp.shadow_enabled = false
@@ -87,6 +93,20 @@ func _ready() -> void:
 	# not be applied on top of it.
 	top_level = true
 	visible = false
+
+
+## Reuses the same compressed-air shell for a smaller authored fist effect.
+func configure(shell_radius: float, shell_tint: Color,
+		minimum_length := 0.0) -> void:
+	radius = maxf(shell_radius, 0.05)
+	tint = shell_tint
+	light_tint = shell_tint
+	minimum_reach = maxf(minimum_length, 0.0)
+	if _material != null:
+		_material.set_shader_parameter(
+			&"tint", Vector3(tint.r, tint.g, tint.b))
+	if _lamp != null:
+		_lamp.light_color = light_tint
 
 
 ## The shock surface: a paraboloid of revolution, nose at +Y, opening out to a
@@ -146,8 +166,8 @@ func aim(fist: Vector3, along: Vector3, speed: float) -> void:
 	if side.length_squared() < 0.000001:
 		return
 	side = side.normalized()
-	var reach := radius * lerpf(BLUNT, DRAWN,
-		clampf(inverse_lerp(SLOW, FAST, speed), 0.0, 1.0))
+	var reach := maxf(minimum_reach, radius * lerpf(BLUNT, DRAWN,
+		clampf(inverse_lerp(SLOW, FAST, speed), 0.0, 1.0)))
 	# The mesh's own +Y is its nose, so the basis puts that along the travel
 	# direction and carries the dome's size in the same step. The two across
 	# axes are the hit box's radius exactly; only the axial one moves.

@@ -32,7 +32,18 @@ const ABILITY_DISPLAY_NAMES := {
 	"bigfoot_throw": "Grab Throw",
 	"bigfoot_roar": "Roar",
 	"bigfoot_trample": "Trample",
+	"fauna_body_slap": "Body Slam",
+	"fauna_horn_charge": "Horn Charge",
+	"fauna_quills": "Quills",
+	"fauna_spit": "Spit",
+	"sandworm_bite": "Burrowing Bite",
+	"volcanic_fire_spout": "Caldera Fire Spout",
+	"volcanic_lava_ball": "Falling Lava",
+	"volcanoronomous_swoop": "Swoop",
+	"volcanoronomous_eye_beam": "Eye Beam",
+	"volcanoronomous_claw": "Claw Strike",
 	"grapple": "Grapple",
+	"hero_punch": "Hero Punch",
 	"lasso": "Lasso",
 	"laser_eyes": "Laser Eyes",
 	"meteor_punch": "Meteor Punch",
@@ -258,28 +269,57 @@ static func apply_to_world(anywhere: Node, hit: DamageHit) -> float:
 static func apply_to_fields(anywhere: Node, hit: DamageHit) -> float:
 	if anywhere == null or hit == null or not anywhere.is_inside_tree():
 		return 0.0
-	if game_world_of(anywhere) == null:
+	var world := game_world_of(anywhere)
+	if world == null:
 		return 0.0
+	var fields := anywhere.get_tree().get_nodes_in_group(FIELD_GROUP)
+	var tracing := RuntimeTelemetry.deep_enabled()
+	# Counted before the clock starts, so the recorder's own bookkeeping is not part
+	# of what it reports.
+	var broke_before := _breaks_across(fields) if tracing else 0
+	var began := Time.get_ticks_usec() if tracing else 0
 	var absorbed := 0.0
-	for field in anywhere.get_tree().get_nodes_in_group(FIELD_GROUP):
-		if field is Node and in_same_world(anywhere, field) \
+	for field in fields:
+		if field is Node and game_world_of(field) == world \
 				and field.has_method(&"apply_damage"):
 			absorbed += float(field.call(&"apply_damage", hit))
+	if tracing:
+		RuntimeTelemetry.record_activity(
+			&"flora_damage", _telemetry_label(hit),
+			Time.get_ticks_usec() - began,
+			float(_breaks_across(fields) - broke_before))
 	return absorbed
+
+
+## Plants lost across every flora field, for the recorder to difference. Zero for a
+## field that does not keep the count, which costs that field's row its quantity and
+## nothing else.
+static func _breaks_across(fields: Array) -> int:
+	var broken := 0
+	for field in fields:
+		if field is Node and field.has_method(&"breaks_recorded"):
+			broken += int(field.call(&"breaks_recorded"))
+	return broken
 
 
 ## The actor half on its own. Host authority, as every hit on a body is.
 static func apply_to_combatants(anywhere: Node, hit: DamageHit) -> float:
 	if anywhere == null or hit == null or not anywhere.is_inside_tree():
 		return 0.0
-	if game_world_of(anywhere) == null or not _is_host(anywhere):
+	var world := game_world_of(anywhere)
+	if world == null or not _is_host(anywhere):
 		return 0.0
+	var began := Time.get_ticks_usec() if RuntimeTelemetry.deep_enabled() else 0
 	var absorbed := 0.0
 	var source := hit.source_node(anywhere)
 	for combatant_variant: Variant in anywhere.get_tree().get_nodes_in_group(
 			COMBATANT_GROUP):
 		var combatant := combatant_variant as Node
-		if combatant == null or not in_same_world(anywhere, combatant) \
+		# The world is resolved once above rather than for both ends of every
+		# pair: this loop runs for each frame of a sustained attack, and walking
+		# the attacker's ancestors again for each of fifty combatants is work
+		# whose answer cannot have changed.
+		if combatant == null or game_world_of(combatant) != world \
 				or combatant == source or not hit.affects_combatant(combatant):
 			continue
 		# Resolve radial falloff against the target's body bounds before handing
@@ -296,7 +336,25 @@ static func apply_to_combatants(anywhere: Node, hit: DamageHit) -> float:
 		if dealt > 0.0 and source != null \
 				and source.has_method(&"combat_damage_dealt"):
 			source.call(&"combat_damage_dealt", combatant, dealt, delivered)
+	if began > 0:
+		RuntimeTelemetry.record_activity(
+			&"combat", _telemetry_label(hit),
+			Time.get_ticks_usec() - began, absorbed)
 	return absorbed
+
+
+static func _telemetry_label(hit: DamageHit) -> StringName:
+	if hit != null and not hit.ability_id.is_empty():
+		return StringName(hit.ability_id)
+	if hit == null:
+		return &"unknown"
+	match hit.kind:
+		Kind.BEAM:
+			return &"unnamed_beam"
+		Kind.AREA:
+			return &"unnamed_area"
+		_:
+			return &"unnamed_impact"
 
 
 static func game_world_of(node: Node) -> GameWorld:
@@ -355,7 +413,10 @@ func affects_combatant(combatant: Node) -> bool:
 	var target_faction := int(combatant.call(&"combat_faction"))
 	match faction:
 		Faction.PLAYER:
-			if target_faction != Faction.ENEMY:
+			var accepts_player_damage := combatant.has_method(
+				&"combat_accepts_player_damage") \
+				and bool(combatant.call(&"combat_accepts_player_damage"))
+			if target_faction != Faction.ENEMY and not accepts_player_damage:
 				return false
 		Faction.ENEMY:
 			if target_faction != Faction.PLAYER:
@@ -415,6 +476,23 @@ func share_at(point: Vector3) -> float:
 ## Damage a point receives, before the target's own toughness.
 func damage_at(point: Vector3) -> float:
 	return amount * share_at(point)
+
+
+## Damage received by a spherical piece of a target rather than by its centre
+## point. Data-oriented actors can combine a few of these into a capsule without
+## having to pretend their whole population shares one combat radius.
+func damage_for_sphere(at: Vector3, bounds: float) -> float:
+	if not at.is_finite():
+		return 0.0
+	bounds = maxf(bounds, 0.0)
+	var away := 0.0
+	if shape == Shape.CYLINDER:
+		if _cylinder_solid_distance(at) > bounds:
+			return 0.0
+		away = maxf(_radial_axis_distance(at) - bounds, 0.0)
+	else:
+		away = maxf(distance_to(at) - bounds, 0.0)
+	return amount * _share_for_distance(away)
 
 
 ## A per-combatant copy whose amount includes radial falloff at the nearest

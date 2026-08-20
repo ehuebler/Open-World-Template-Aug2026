@@ -254,8 +254,8 @@
         "damage": 2500.0,
         "player_damage": 12.0,
         "duration": 0.75,
-        "range": 14.0,
-        "radius": 5.0,
+        "range": 60.0,
+        "radius": 18.0,
         "cooldown": 7.0,
         "delay": 1.0,
         "beam_radius": 0.1,
@@ -267,6 +267,117 @@
         "knockback": 18.0,
         "lift": 6.0,
         "explosion_duration": 0.5
+      }
+    },
+    {
+      "id": "poke_ball",
+      "title": "Poké Ball",
+      "description": "Throw an empty ball at a living fauna mob for a health-weighted chance to capture that exact creature. The next throw releases it where the ball lands; unequipping Poké Ball releases it safely beside you.",
+      "implementation": "res://game/abilities/poke_ball.gd",
+      "icon": "res://assets/runtime/abilities/icons/poke_ball.svg",
+      "tint": "#EF3D43FF",
+      "activation_type": "INSTANT",
+      "projectile_type": "POKE_BALL",
+      "impact_type": "NONE",
+      "grapple_type": "NONE",
+      "construct_type": "NONE",
+      "reaction_type": "NONE",
+      "animations": {
+        "primary": "NukeThrow",
+        "hover": "NukeFloatThrow"
+      },
+      "blocked_underwater": true,
+      "allowed_stances": ["STAND", "CROUCH", "SLIDE", "FLY"],
+      "stats": {
+        "damage": 0.0,
+        "speed": 34.0,
+        "range": 45.0,
+        "cooldown": 2.0,
+        "projectile_radius": 0.28,
+        "animation_duration": 0.42,
+        "capture_full_health": 20.0,
+        "capture_low_health": 90.0,
+        "release_distance": 2.5
+      }
+    },
+    {
+      "id": "hero_punch",
+      "title": "Hero Punch",
+      "description": "Snap forward one metre behind an alternating right-left punch. A compact tunnel of compressed air runs ahead of the active fist and deals light damage. Works standing, crouched, sliding, airborne, flying, or out of a hero landing, but never while swimming.",
+      "implementation": "res://game/abilities/hero_punch.gd",
+      "icon": "res://assets/runtime/abilities/icons/hero_punch.svg",
+      "tint": "#BDEBFFFF",
+      "activation_type": "INSTANT",
+      "projectile_type": "NONE",
+      "impact_type": "NONE",
+      "grapple_type": "NONE",
+      "construct_type": "NONE",
+      "reaction_type": "NONE",
+      "animations": {
+        "primary": "HeroPunchRight",
+        "alternate": "HeroPunchLeft",
+        "hover": "HeroPunchFloatRight",
+        "alternate_hover": "HeroPunchFloatLeft"
+      },
+      "blocked_underwater": true,
+      "allowed_stances": ["STAND", "CROUCH", "SLIDE", "FLY", "HERO"],
+      "stats": {
+        "damage": 300.0,
+        "speed": 13.0,
+        "range": 1.0,
+        "radius": 0.75,
+        "cooldown": 0.35,
+        "punch_reach": 2.25,
+        "wind_length": 1.7,
+        "animation_duration": 0.3
+      }
+    },
+    {
+      "id": "building",
+      "title": "Building",
+      "description": "Hold to open the building wheel, point at a utility, and release. Open the nearest city, choose an owned settlement launch authorization by its parent city, or inspect future blueprints.",
+      "implementation": "res://game/abilities/building.gd",
+      "icon": "res://assets/runtime/abilities/icons/building.svg",
+      "tint": "#F0B85AFF",
+      "activation_type": "SUSTAINED",
+      "projectile_type": "NONE",
+      "impact_type": "NONE",
+      "grapple_type": "NONE",
+      "construct_type": "NONE",
+      "reaction_type": "NONE",
+      "animations": {},
+      "overrides_weapon_input": true,
+      "blocked_underwater": false,
+      "allowed_stances": ["STAND", "CROUCH", "SLIDE", "FLY", "SWIM", "HERO"],
+      "stats": {
+        "damage": 0.0,
+        "range": 0.0,
+        "cooldown": 0.0
+      }
+    },
+    {
+      "id": "settlement_launcher",
+      "title": "Settlement Launcher",
+      "description": "A unique one-use launch authorization bought by a specific colony. It is stored in the Building ability's settlement list, where its parent city can be chosen before placing a landing site. It disappears only after a valid launch.",
+      "implementation": "res://game/abilities/settlement_launcher.gd",
+      "icon": "res://assets/runtime/abilities/icons/settlement_launcher.svg",
+      "tint": "#72F0C5FF",
+      "use_type": "ONE_TIME",
+      "direct_equip": false,
+      "activation_type": "INSTANT",
+      "projectile_type": "NONE",
+      "impact_type": "NONE",
+      "grapple_type": "NONE",
+      "construct_type": "NONE",
+      "reaction_type": "NONE",
+      "animations": {},
+      "overrides_weapon_input": false,
+      "blocked_underwater": true,
+      "allowed_stances": ["STAND", "CROUCH", "SLIDE", "FLY", "HERO"],
+      "stats": {
+        "damage": 0.0,
+        "range": 20000.0,
+        "cooldown": 0.0
       }
     }
   ]

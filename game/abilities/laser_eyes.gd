@@ -217,7 +217,7 @@ static func apply_effect(shooter: OnlinePlayer, id: String, left_eye: Vector3,
 	if shooter == null:
 		return
 	shooter.laser_beams().aim(left_eye, right_eye, at)
-	var stats := ItemDB.stats_of(id)
+	var stats := shooter.ability_stats(id)
 	var per_tick := float(stats.get("damage", 0.0)) * DAMAGE_STEP
 	var radius := float(stats.get("radius", 0.4))
 	var from: Vector3 = (left_eye + right_eye) * 0.5

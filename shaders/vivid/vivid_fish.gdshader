@@ -87,6 +87,7 @@ void fragment() {
 	vec3 night_glow = night_emission_color * night_emission_energy * night
 		* pulse * mix(vec3(1.0), own_color, night_emission_albedo);
 	EMISSION = albedo * rim * sheen * daylight
-		+ camera_rim_color * camera_rim_energy * camera_rim
+		+ vivid_camera_rim_colour(camera_rim_color)
+			* camera_rim_energy * camera_rim
 		+ night_glow;
 }

@@ -427,6 +427,21 @@ const RESOLVE_FLOOR := 0.33
 var _town_up: PackedVector3Array = []
 var _town_cap: PackedFloat32Array = []
 
+## The towns bucketed into a coarse grid over the sphere, so a height sample tests
+## against its own neighbourhood rather than against every settlement on the
+## planet. See [method _bucket_towns].
+##
+## Cells are the six cube faces cut into [member _town_side] squared squares each,
+## which is the same subdivision the terrain quadtree uses, so a cell is a shape
+## the rest of the planet already thinks in. Buckets are stored end to end in
+## [member _town_bucket] with [member _town_cell_start] holding each cell's offset —
+## a flat pair of packed arrays rather than a dictionary of lists, because this is
+## read a few thousand times per chunk on four worker threads and every allocation
+## avoided there is one that cannot fragment under them.
+var _town_side := 1
+var _town_cell_start: PackedInt32Array = []
+var _town_bucket: PackedInt32Array = []
+
 ## The native height field. Built in [method prepare] and read-only afterwards,
 ## which is what makes it safe on the mesh worker threads.
 ##
@@ -507,7 +522,143 @@ func prepare() -> void:
 		var live := bounds != Vector4.ZERO
 		_town_up.append(Vector3(bounds.x, bounds.y, bounds.z) if live else Vector3.UP)
 		_town_cap.append(bounds.w if live else UNREACHABLE_CAP)
+	_bucket_towns()
 	_built = true
+
+
+## Sorts the town caps into a grid over the sphere. Read-only afterwards, like
+## everything else the worker threads sample through.
+##
+## One bucket per cell holding every town whose cap reaches into that cell, in
+## ascending town order so that a bucket walked front to back finds the same town
+## the flat scan would have found first. A town straddling a cell boundary is in
+## both buckets; the cost of that is a few duplicate entries and the benefit is
+## that a query is a cell lookup with no neighbours to also check.
+func _bucket_towns() -> void:
+	_town_cell_start.clear()
+	_town_bucket.clear()
+	# Roughly four cells per town, so the grid tracks how crowded the planet
+	# actually is instead of paying for a fixed resolution the handful of
+	# hand-placed settlements would never use. Capped because past this the cells
+	# are finer than a town is wide and every town lands in all of them anyway.
+	_town_side = 1
+	while _town_side < 16 and 6 * _town_side * _town_side < 4 * _town_up.size():
+		_town_side *= 2
+	var cells := 6 * _town_side * _town_side
+	_town_cell_start.resize(cells + 1)
+	if _town_up.is_empty():
+		_town_cell_start.fill(0)
+		return
+	# Angular radius of each town's cap, once, so the pass below is comparisons.
+	var spans := PackedFloat32Array()
+	spans.resize(_town_up.size())
+	for index in _town_up.size():
+		spans[index] = acos(clampf(_town_cap[index], -1.0, 1.0)) \
+			if _town_cap[index] <= 1.0 else -1.0
+	for cell in cells:
+		_town_cell_start[cell] = _town_bucket.size()
+		var centre := _cell_centre(cell)
+		var corner := _cell_span(cell, centre)
+		for index in _town_up.size():
+			if spans[index] < 0.0:
+				continue
+			# A cap and a cell meet when their centres are closer than the two
+			# radii together. Compared as an angle rather than as a cosine
+			# because the sum can pass a half turn, which no cosine can say.
+			var apart := acos(clampf(centre.dot(_town_up[index]), -1.0, 1.0))
+			if apart <= spans[index] + corner + 1e-4:
+				_town_bucket.append(index)
+	_town_cell_start[cells] = _town_bucket.size()
+
+
+## Which grid cell a direction falls in. The face is the axis it leans on most and
+## the cell is the direction's position across that face, which is the same
+## projection [Planet] builds its chunks on.
+func _town_cell_of(direction: Vector3) -> int:
+	var lean := direction.abs()
+	var reach := 0.0
+	var face := 0
+	var across := 0.0
+	var along := 0.0
+	if lean.x >= lean.y and lean.x >= lean.z:
+		face = 0 if direction.x >= 0.0 else 1
+		reach = lean.x
+		across = direction.y
+		along = direction.z
+	elif lean.y >= lean.z:
+		face = 2 if direction.y >= 0.0 else 3
+		reach = lean.y
+		across = direction.z
+		along = direction.x
+	else:
+		face = 4 if direction.z >= 0.0 else 5
+		reach = lean.z
+		across = direction.x
+		along = direction.y
+	if reach <= 0.0:
+		return 0
+	var side := _town_side
+	var column := clampi(
+		int((across / reach * 0.5 + 0.5) * float(side)), 0, side - 1)
+	var row := clampi(
+		int((along / reach * 0.5 + 0.5) * float(side)), 0, side - 1)
+	return (face * side + column) * side + row
+
+
+## The unit direction at a point on a cube face, in the face layout
+## [method _town_cell_of] reads.
+func _face_direction(face: int, across: float, along: float) -> Vector3:
+	match face:
+		0: return Vector3(1.0, across, along).normalized()
+		1: return Vector3(-1.0, across, along).normalized()
+		2: return Vector3(along, 1.0, across).normalized()
+		3: return Vector3(along, -1.0, across).normalized()
+		4: return Vector3(across, along, 1.0).normalized()
+	return Vector3(across, along, -1.0).normalized()
+
+
+func _cell_centre(cell: int) -> Vector3:
+	var side := _town_side
+	var row := cell % side
+	var column := (cell / side) % side
+	var face := cell / (side * side)
+	var step := 2.0 / float(side)
+	return _face_direction(face,
+		-1.0 + (float(column) + 0.5) * step,
+		-1.0 + (float(row) + 0.5) * step)
+
+
+## Angular radius of a cell about its own centre, which is the angle to its
+## furthest corner: the cell is a convex patch, so nothing inside it is further
+## out than a corner is.
+func _cell_span(cell: int, centre: Vector3) -> float:
+	var side := _town_side
+	var row := cell % side
+	var column := (cell / side) % side
+	var face := cell / (side * side)
+	var step := 2.0 / float(side)
+	var nearest := 1.0
+	for corner in 4:
+		var edge := _face_direction(face,
+			-1.0 + float(column + (corner & 1)) * step,
+			-1.0 + float(row + (corner >> 1)) * step)
+		nearest = minf(nearest, centre.dot(edge))
+	return acos(clampf(nearest, -1.0, 1.0))
+
+
+## The town whose pad covers a direction, or -1. The bucketed form of the flat scan
+## the hot paths used to run, and identical to it: the first town in ascending
+## order whose cap contains the direction.
+func _town_at(direction: Vector3) -> int:
+	if _town_bucket.is_empty():
+		return -1
+	var cell := _town_cell_of(direction)
+	var last := _town_cell_start[cell + 1]
+	for slot in range(_town_cell_start[cell], last):
+		var index := _town_bucket[slot]
+		if direction.dot(_town_up[index]) >= _town_cap[index]:
+			return index
+	return -1
 
 
 ## How arctic a direction is: 0 outside the polar cap, 1 inside it, and a ramp
@@ -734,10 +885,9 @@ func elevation(direction: Vector3, spacing := 0.0) -> float:
 	var height: float = _field.elevation(direction, spacing)
 	if not _native_volcano:
 		height = _volcano_height(direction, height, spacing)
-	for index in _town_up.size():
-		if direction.dot(_town_up[index]) >= _town_cap[index]:
-			height = cities[index].elevation(direction, height)
-			break
+	var town := _town_at(direction)
+	if town >= 0:
+		height = cities[town].elevation(direction, height)
 	return height - scars.depth_at(direction, spacing)
 
 
@@ -759,10 +909,10 @@ func sample(direction: Vector3) -> Dictionary:
 			parts["rough"] = maxf(float(parts.get("rough", 0.0)), volcanic)
 			parts["arid"] = maxf(float(parts.get("arid", 0.0)), volcanic)
 			parts["volcano"] = volcanic
-	for index in _town_up.size():
-		if direction.dot(_town_up[index]) >= _town_cap[index]:
-			parts["elevation"] = cities[index].elevation(direction, parts["elevation"])
-			break
+	var town := _town_at(direction)
+	if town >= 0:
+		parts["elevation"] = cities[town].elevation(
+			direction, parts["elevation"])
 	parts["elevation"] = float(parts["elevation"]) - scars.depth_at(direction)
 	return parts
 
@@ -860,10 +1010,9 @@ func color_at(direction: Vector3, height: float, normal: Vector3) -> Color:
 		return ground
 	if not _native_volcano:
 		ground = _volcano_color(direction, ground)
-	for index in _town_up.size():
-		if direction.dot(_town_up[index]) >= _town_cap[index]:
-			ground = cities[index].tint(direction, ground)
-			break
+	var town := _town_at(direction)
+	if town >= 0:
+		ground = cities[town].tint(direction, ground)
 	return scars.tint(direction, ground)
 
 

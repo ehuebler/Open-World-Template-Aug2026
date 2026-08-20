@@ -30,8 +30,8 @@ static func apply(shooter: OnlinePlayer, definition: AbilityDefinition,
 
 static func _crater_blast(shooter: OnlinePlayer,
 		definition: AbilityDefinition, at: Vector3, facing: Vector3) -> void:
-	var stats := definition.stats
 	var ability_id := definition.ability_id
+	var stats := shooter.ability_stats(ability_id)
 	var direct_radius := maxf(float(stats.get("projectile_radius", 0.5)) * 2.0, 0.5)
 	var direct := DamageHit.impact(at, direct_radius,
 		maxf(float(stats.get("damage", 0.0)), 0.0))
@@ -91,8 +91,8 @@ static func _massive_blast(shooter: OnlinePlayer,
 	if shooter.multiplayer.has_multiplayer_peer() \
 			and not shooter.multiplayer.is_server():
 		return
-	var stats := definition.stats
 	var ability_id := definition.ability_id
+	var stats := shooter.ability_stats(ability_id)
 	var blast_radius := maxf(float(stats.get("radius", 1.0)), 0.1)
 	# Move the damage origin just off the struck surface. This is important for
 	# occlusion: a barrier hit on its near face should protect actors behind it
@@ -133,7 +133,7 @@ static func _massive_blast(shooter: OnlinePlayer,
 		shooter.deal_authoritative_player_damage(player_blast)
 
 	if definition.self_launch:
-		_launch_source(shooter, definition, effect_at, blast_radius, facing)
+		_launch_source(shooter, stats, effect_at, blast_radius, facing)
 
 	var nuclear := definition.impact_type \
 		== AbilityDefinition.ImpactType.MASSIVE_BLAST
@@ -190,7 +190,7 @@ static func _rim_seed(at: Vector3) -> float:
 
 
 static func _launch_source(shooter: OnlinePlayer,
-		definition: AbilityDefinition, at: Vector3, radius: float,
+		stats: Dictionary, at: Vector3, radius: float,
 		facing: Vector3) -> void:
 	var source_at := shooter.combat_position()
 	var bounds := maxf(shooter.combat_radius(), 0.0)
@@ -206,8 +206,8 @@ static func _launch_source(shooter: OnlinePlayer,
 	outward = outward.normalized()
 	var up := shooter.global_basis.y.normalized()
 	var speed := maxf(float(
-		definition.stats.get("self_launch_speed", 0.0)), 0.0)
-	var lift := maxf(float(definition.stats.get("lift", 0.0)), 0.0)
+		stats.get("self_launch_speed", 0.0)), 0.0)
+	var lift := maxf(float(stats.get("lift", 0.0)), 0.0)
 	shooter.force_full_ragdoll(
 		outward * speed * share + up * lift * share)
 

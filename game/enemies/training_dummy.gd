@@ -30,16 +30,65 @@ var _state_sequence := 0
 var _last_state_sequence := 0
 var _flash_left := 0.0
 var _knockback_left := 0.0
+var _restored_from_save := false
 
 
 func _ready() -> void:
 	add_to_group(DamageHit.COMBATANT_GROUP)
+	add_to_group(&"sandbox_save_state")
 	_health = maximum_health
 	call_deferred(&"_place_near_anchor")
 	_update_presentation()
 
 
+func sandbox_snapshot() -> Dictionary:
+	return {
+		"health": _health,
+		"alive": _alive,
+		"respawn_left": _respawn_left,
+		"transform": global_transform,
+		"velocity": velocity,
+		"flash": _flash_left,
+		"knockback_left": _knockback_left,
+	}
+
+
+func apply_sandbox_snapshot(state: Dictionary) -> void:
+	_restored_from_save = true
+	_health = clampf(float(state.get("health", maximum_health)),
+		0.0, maximum_health)
+	_alive = bool(state.get("alive", _health > 0.0))
+	_respawn_left = maxf(float(state.get("respawn_left", 0.0)), 0.0)
+	_flash_left = clampf(float(state.get("flash", 0.0)), 0.0, 0.12)
+	_knockback_left = maxf(float(state.get("knockback_left", 0.0)), 0.0)
+	var transform_value: Variant = state.get("transform", global_transform)
+	if transform_value is Transform3D \
+			and (transform_value as Transform3D).is_finite():
+		global_transform = transform_value as Transform3D
+		reset_physics_interpolation()
+	var velocity_value: Variant = state.get("velocity", Vector3.ZERO)
+	velocity = velocity_value as Vector3 \
+		if velocity_value is Vector3 and (velocity_value as Vector3).is_finite() \
+		else Vector3.ZERO
+	_grappled = false
+	_carrier = null
+	_lassoed = false
+	_lasso_source_peer = 0
+	_update_presentation()
+	health_changed.emit(_health, maximum_health)
+
+
 func _physics_process(delta: float) -> void:
+	if not RuntimeTelemetry.deep_enabled():
+		_tick(delta)
+		return
+	var began := Time.get_ticks_usec()
+	_tick(delta)
+	RuntimeTelemetry.record_physics_step(
+		&"combat", &"dummy_tick", Time.get_ticks_usec() - began)
+
+
+func _tick(delta: float) -> void:
 	_flash_left = maxf(_flash_left - delta, 0.0)
 	if is_instance_valid(_visuals):
 		var pulse := 1.0 + 0.08 * (_flash_left / 0.12) \
@@ -288,6 +337,8 @@ func _update_presentation() -> void:
 
 
 func _place_near_anchor() -> void:
+	if _restored_from_save:
+		return
 	var anchor := get_node_or_null(anchor_path) as Node3D
 	var world_planet := _planet()
 	if anchor == null or world_planet == null or world_planet.shape == null:

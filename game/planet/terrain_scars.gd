@@ -128,19 +128,28 @@ class Scar extends RefCounted:
 		return scar
 
 
+## One immutable registry generation.
+##
+## Terrain and ground-cover workers pin this RefCounted owner before touching a
+## Dictionary or Array inside it. Publishing the next generation can therefore
+## never release a container while an older generation is still being read.
+## Keeping the containers themselves directly on TerrainScars was not enough:
+## assigning a replacement Dictionary could race Array::_ref() in a worker that
+## had just fetched one of its buckets.
+class RegistryState extends RefCounted:
+	var scars: Array[Scar] = []
+	var buckets: Dictionary = {}
+	var count := 0
+
+
 ## Planet radius in metres, needed to turn an angle into a distance across the
 ## ground. Set by [method PlanetShape.prepare] before anything reads a height.
 var planet_radius := 8000.0
 
-## Oldest first. The order is the eviction order and nothing else reads it.
-var _scars: Array[Scar] = []
-## Cube cell to the scars filed in it. Replaced wholesale on every write; see
-## the class note on why it is never mutated in place.
-var _buckets: Dictionary = {}
-## Read instead of `_scars.is_empty()` on the hot path, because an empty-array
-## check on a typed array still touches the array object and this is the branch
-## every one of a few hundred thousand samples per chunk takes.
-var _count := 0
+## Oldest-first records and cube-cell buckets published as one generation. A
+## writer never mutates a published state; readers retain their local state
+## reference until the query is complete.
+var _state := RegistryState.new()
 ## Bumped on every change. Anything caching a view of the ground — a built
 ## chunk, a collision body — can compare this to know it is out of date.
 var revision := 0
@@ -153,9 +162,10 @@ var revision := 0
 ## spot for five seconds commits several marks over the same ground, and adding
 ## them would bore a shaft through the crust.
 func depth_at(direction: Vector3, spacing := 0.0) -> float:
-	if _count == 0:
+	var state := _state
+	if state.count == 0:
 		return 0.0
-	var found: Variant = _buckets.get(_cell_of(direction))
+	var found: Variant = state.buckets.get(_cell_of(direction))
 	if found == null:
 		return 0.0
 	var deepest := 0.0
@@ -181,9 +191,10 @@ func depth_at(direction: Vector3, spacing := 0.0) -> float:
 
 ## The ground colour with any burning over it laid on top.
 func tint(direction: Vector3, ground: Color) -> Color:
-	if _count == 0:
+	var state := _state
+	if state.count == 0:
 		return ground
-	var found: Variant = _buckets.get(_cell_of(direction))
+	var found: Variant = state.buckets.get(_cell_of(direction))
 	if found == null:
 		return ground
 	for scar: Scar in found:
@@ -222,10 +233,11 @@ func tint(direction: Vector3, ground: Color) -> Color:
 ## the slow path with exactly the terrain the fast path produces. Passing zero
 ## asks the unqualified question, for callers that have no mesh in mind.
 func overlaps(centre: Vector3, arc: float, spacing := 0.0) -> bool:
-	if _count == 0:
+	var state := _state
+	if state.count == 0:
 		return false
 	var direction := centre.normalized()
-	for scar: Scar in _scars:
+	for scar: Scar in state.scars:
 		if not resolves(scar.radius, spacing):
 			continue
 		if direction.distance_to(scar.direction) * planet_radius \
@@ -245,37 +257,42 @@ func resolves(radius: float, spacing: float) -> bool:
 ## touched; this deliberately knows nothing about the scene.
 func add(scar: Scar) -> Scar:
 	scar.settle()
-	var buckets := _buckets.duplicate()
-	if _scars.size() >= LIMIT:
-		_unfile(buckets, _scars.pop_front())
+	var previous := _state
+	var scars: Array[Scar] = previous.scars.duplicate()
+	var buckets := previous.buckets.duplicate()
+	if scars.size() >= LIMIT:
+		_unfile(buckets, scars.pop_front())
 	scar.cells = _cells_for(scar)
 	for cell in scar.cells:
 		var filed: Array = (buckets.get(cell, []) as Array).duplicate()
 		filed.append(scar)
 		buckets[cell] = filed
-	_scars.append(scar)
-	_buckets = buckets
-	_count = _scars.size()
+	scars.append(scar)
+	var next := RegistryState.new()
+	next.scars = scars
+	next.buckets = buckets
+	next.count = scars.size()
+	_state = next
 	revision += 1
 	return scar
 
 
 ## Forgets everything. For harnesses and for leaving a session.
 func clear() -> void:
-	_scars.clear()
-	_buckets = {}
-	_count = 0
+	_state = RegistryState.new()
 	revision += 1
 
 
 func count() -> int:
-	return _count
+	var state := _state
+	return state.count
 
 
 ## Every scar, oldest first, for the join snapshot a late peer receives.
 func to_wire() -> Array:
+	var state := _state
 	var wire := []
-	for scar: Scar in _scars:
+	for scar: Scar in state.scars:
 		wire.append(scar.to_wire())
 	return wire
 

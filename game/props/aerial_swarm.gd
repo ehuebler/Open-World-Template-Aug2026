@@ -701,6 +701,16 @@ func _formation(count: int, base_scale: float,
 # --- Frame budget and closed-form posing -----------------------------------
 
 func _process(delta: float) -> void:
+	if not RuntimeTelemetry.deep_enabled():
+		_advance(delta)
+		return
+	var began := Time.get_ticks_usec()
+	_advance(delta)
+	RuntimeTelemetry.record_process_step(
+		&"aerial", &"swarm_process", Time.get_ticks_usec() - began)
+
+
+func _advance(delta: float) -> void:
 	_clock += delta
 	_since_survey += delta
 	_since_light_assignment += delta

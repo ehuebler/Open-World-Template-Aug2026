@@ -51,6 +51,11 @@
 [ext_resource type="PackedScene" path="res://game/fauna/fauna_populations.tscn" id="49_fauna"]
 [ext_resource type="Script" path="res://game/meeps/meep_colonies.gd" id="50_meeps"]
 [ext_resource type="Script" path="res://game/props/ability_test_site.gd" id="51_test_site"]
+[ext_resource type="Script" path="res://game/enemies/sandworm/sandworm_site.gd" id="52_sandworm_site"]
+[ext_resource type="PackedScene" path="res://game/enemies/sandworm/sandworm.tscn" id="53_sandworm"]
+[ext_resource type="Script" path="res://game/enemies/volcanoronomous/volcanoronomous_site.gd" id="54_volcano_boss_site"]
+[ext_resource type="PackedScene" path="res://game/enemies/volcanoronomous/volcanoronomous.tscn" id="55_volcano_boss"]
+[ext_resource type="Script" path="res://game/enemies/boss/boss_director.gd" id="56_boss_director"]
 
 [sub_resource type="ShaderMaterial" id="SkyMaterial"]
 shader = ExtResource("4_space")
@@ -143,6 +148,9 @@ settled = false
 
 [node name="World" type="Node3D" unique_id=111020355]
 script = ExtResource("1_world")
+
+[node name="BossDirector" type="Node" parent="."]
+script = ExtResource("56_boss_director")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=876704567]
 environment = SubResource("Environment_world")
@@ -294,6 +302,14 @@ script = ExtResource("43_volcano")
 script = ExtResource("45_bigfoot_site")
 
 [node name="Bigfoot" parent="Planet/BigfootTerritory" instance=ExtResource("46_bigfoot")]
+
+; Surveyed by dev/_sandworm_site.gd: a completely dry, flat 370 m-wide desert
+; table 88 degrees from the ColonyShip and clear of every authored settlement.
+; The waypoint names the encounter while the boss itself begins below the sand.
+[node name="SandwormTerritory" type="Node3D" parent="Planet"]
+script = ExtResource("52_sandworm_site")
+
+[node name="Sandworm" parent="Planet/SandwormTerritory" instance=ExtResource("53_sandworm")]
 
 [node name="SurfaceAnchor" type="Node3D" parent="Planet" unique_id=1597429631]
 transform = Transform3D(-0.9997214, 0.023402292, 0.0030863807, 0.022417346, 0.9822242, -0.18636784, -0.007392953, -0.18624672, -0.9824752, 187.93507, 7887.876, -1495.6777)
@@ -462,6 +478,7 @@ tile_size = 34.0
 clear_of = NodePath("../ColonyShip")
 additional_clear_of = Array[NodePath]([NodePath("../AbilityTestingSite")])
 keep_back = 26.0
+harvest_yield = 4.0
 wind_heading = 35.0
 ; Temporarily disabled with the master aerial terrain wash. Ground-level bloom
 ; emission and the nearby real-light pool below remain active.
@@ -862,15 +879,13 @@ title = "North Pole"
 tint = Color(0.988235, 0.964706, 0.694118, 1)
 metadata/_custom_type_script = "uid://pi0ekedlrp0k"
 
-; The exact south pole is the active caldera. The landmark stays hidden from the
-; HUD like every non-colony site, but the coordinate plate can name the biome.
-[node name="Goblinworld" type="Node3D" parent="Planet" unique_id=1704339831]
-script = ExtResource("10_landmark")
-direction = Vector3(0, -1, 0)
-clearance = 28.0
-title = "South Pole Caldera"
-tint = Color(1, 0.286275, 0.062745, 1)
-metadata/_custom_type_script = "uid://pi0ekedlrp0k"
+; The exact south pole is both the active caldera and Volcanoronomous's ritual
+; site. The landmark is visible planet-wide; the boss remains submerged until a
+; grounded player completes the moving rim trial.
+[node name="VolcanoronomousCaldera" type="Node3D" parent="Planet" unique_id=1704339831]
+script = ExtResource("54_volcano_boss_site")
+
+[node name="Volcanoronomous" parent="Planet/VolcanoronomousCaldera" instance=ExtResource("55_volcano_boss")]
 
 ; Coast, on the hemisphere the one directional light never reaches. The planet
 ; does not turn, so that is a permanent night side and not a time of day.

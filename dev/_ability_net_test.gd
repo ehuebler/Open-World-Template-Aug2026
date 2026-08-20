@@ -26,10 +26,13 @@ const RPC_FRAMES := 240
 ## the numbers beyond their being distinctive enough to recognise on the far end.
 const SCAR_RADIUS := 5.0
 const SCAR_DEPTH := 2.25
+const SAVED_GOLD := 37.0
 
 ## Plants the host decides are gone. Any three numbers: a break key is opaque to
 ## everything between the field that made it and the field that receives it.
 static var BREAK_KEYS := PackedInt32Array([17, 41, 99])
+static var BIOMASS_KEY := PackedInt32Array([503])
+const BIOMASS_REWARD := 12.0
 
 var _failures := 0
 var _port := 0
@@ -71,6 +74,7 @@ class TestCover extends Node3D:
 	var absorbed: Array[DamageHit] = []
 	var broken := PackedInt32Array()
 	var _fresh := PackedInt32Array()
+	var _biomass_claims: Dictionary = {}
 
 	func _ready() -> void:
 		process_mode = Node.PROCESS_MODE_ALWAYS
@@ -99,6 +103,17 @@ class TestCover extends Node3D:
 		for key in keys:
 			if broken.find(key) < 0:
 				broken.append(key)
+
+	func claim_impact_biomass(key: PackedInt32Array,
+			visual_height: float, at: Vector3) -> float:
+		if key.size() != 1 or not is_finite(visual_height) \
+				or not at.is_finite():
+			return 0.0
+		var token := key[0]
+		if _biomass_claims.has(token):
+			return 0.0
+		_biomass_claims[token] = true
+		return roundf(visual_height * 4.0)
 
 	## Whether a volume with these numbers was offered here.
 	func saw(hit: DamageHit) -> bool:
@@ -148,6 +163,11 @@ func _ready() -> void:
 	_saved_host = NetworkManager.is_host
 	for item_id: String in ItemDB.ITEMS:
 		ItemIcons._cache[item_id] = ImageTexture.new()
+	SettingsManager.set_setting(
+		&"appearance", &"gold", SAVED_GOLD, false)
+	SettingsManager.set_setting(
+		&"appearance", &"owned_hats", ["c3_crown", "sword"], false)
+	SettingsManager.save_settings()
 	NetworkManager.players.clear()
 	NetworkManager.state = NetworkManager.SessionState.IN_GAME
 	NetworkManager.is_single_player = false
@@ -161,10 +181,17 @@ func _ready() -> void:
 		_expect(false, "the client has a player of its own")
 		await _finish()
 		return
+	var progression_mirrored := await _wait_until(
+		_owner_progression_mirrored, RPC_FRAMES)
+	_expect(progression_mirrored,
+		"saved progression survives join and reaches the authoritative host mirror")
+	await _check_hat_ledger_authority()
+	await _check_one_time_ability_authority()
 
 	await _check_request_rejections()
 	await _check_scars()
 	await _check_damage_volume()
+	await _check_biomass_authority()
 	await _check_combat_authority()
 	await _check_boss_replication()
 	await _check_new_ability_networking()
@@ -172,6 +199,113 @@ func _ready() -> void:
 	await _check_break_confirmation()
 	await _check_late_join()
 	await _finish()
+
+
+func _check_hat_ledger_authority() -> void:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	if not _expect(server_player != null
+			and server_player.owns_hat("c3_crown")
+			and not server_player.owns_hat("sword"),
+			"initial client bootstrap mirrors only sanitized persisted shop hat ids"):
+		return
+	var forged_id := "c3_wizard_hat"
+	_owner_player._applying_loadout = true
+	for container: ItemContainer in [
+		_owner_player.equipment, _owner_player.backpack]:
+		var existing := container.find(forged_id)
+		if existing >= 0:
+			container.set_item(existing, "")
+	_owner_player.backpack.set_item(0, forged_id)
+	_owner_player._applying_loadout = false
+	_owner_player.sync_loadout_to_server()
+	await _network_frames(8)
+	_expect(not server_player.owns_physical_item(forged_id)
+		and not server_player.owns_hat(forged_id),
+		"the host strips an unowned shop hat from later loadout snapshots")
+	_owner_player._applying_loadout = true
+	_owner_player.backpack.set_item(0, "")
+	_owner_player._applying_loadout = false
+
+
+func _check_one_time_ability_authority() -> void:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	if not _expect(server_player != null,
+			"the host has a player copy for one-time inventory authority"):
+		return
+	var saved_launchers := server_player.one_time_ability_records(
+		"settlement_launcher")
+	var saved_abilities := server_player.abilities.items()
+	server_player.one_time_abilities.erase("settlement_launcher")
+	server_player.publish_authoritative_progression()
+	await _wait_until(
+		func() -> bool:
+			return not _owner_player.owns_one_time_ability(
+				"settlement_launcher"),
+		RPC_FRAMES)
+	var granted := server_player.authoritative_grant_one_time_ability(
+		"settlement_launcher", {
+			"parent_site": "landing",
+			"title": "First Settlement of Colony Ship",
+		}) and server_player.authoritative_grant_one_time_ability(
+			"settlement_launcher", {
+				"parent_site": "ridge",
+				"title": "First Settlement of Ridge City",
+			})
+	var grant_replicated := await _wait_until(
+		func() -> bool:
+			return _owner_player.one_time_ability_count(
+				"settlement_launcher") == 2,
+		RPC_FRAMES)
+	_expect(granted and grant_replicated
+		and _owner_player.abilities.find("settlement_launcher") < 0,
+		"repeated host grants replicate as stacked inventory without auto-equipping")
+	var direct_refused := not server_player.equip_ability(
+		"settlement_launcher", 1)
+	var building_equipped := server_player.equip_ability("building", 1)
+	server_player.publish_authoritative_progression()
+	var equip_replicated := await _wait_until(
+		func() -> bool:
+			return _owner_player.abilities.get_item(1) == "building",
+		RPC_FRAMES)
+	_expect(direct_refused and building_equipped and equip_replicated,
+		"launch records refuse direct assignment while Building replicates normally")
+	var consumed_first := server_player.authoritative_consume_one_time_ability(
+		"settlement_launcher", "parent_site", "ridge")
+	var first_consume_replicated := await _wait_until(
+		func() -> bool:
+			return (_owner_player.one_time_ability_count(
+					"settlement_launcher") == 1
+				and _owner_player.abilities.get_item(1)
+					== "building"
+				and String(_owner_player.one_time_ability_record(
+					"settlement_launcher").get("parent_site", ""))
+					== "landing"),
+		RPC_FRAMES)
+	_expect(consumed_first and first_consume_replicated,
+		"host consumption can remove the selected parent and preserves Building")
+	var consumed_last := server_player.authoritative_consume_one_time_ability(
+		"settlement_launcher", "parent_site", "landing")
+	var last_consume_replicated := await _wait_until(
+		func() -> bool:
+			return (not _owner_player.owns_one_time_ability(
+				"settlement_launcher")
+				and _owner_player.abilities.get_item(1) == "building"),
+		RPC_FRAMES)
+	_expect(consumed_last and last_consume_replicated,
+		"last host consumption removes inventory but leaves Building equipped")
+	server_player.one_time_abilities.erase("settlement_launcher")
+	if not saved_launchers.is_empty():
+		server_player.one_time_abilities["settlement_launcher"] = \
+			saved_launchers.duplicate(true)
+	server_player.apply_abilities(saved_abilities)
+	server_player.publish_authoritative_progression()
+	await _wait_until(
+		func() -> bool:
+			return _owner_player.one_time_ability_count(
+				"settlement_launcher") == saved_launchers.size(),
+		RPC_FRAMES)
 
 
 ## Requests that fail host validation get an explicit answer instead of making
@@ -183,6 +317,7 @@ func _check_request_rejections() -> void:
 			"the host has a player copy for ability request validation"):
 		return
 
+	_authorize_ability("starfire")
 	server_player._dead = true
 	var projectile_request := _owner_player.fire_ability_projectile(
 		"starfire", _owner_player.combat_position(), Vector3.FORWARD, 0)
@@ -218,6 +353,7 @@ func _check_request_rejections() -> void:
 		if is_instance_valid(projectile):
 			projectile.queue_free()
 
+	_authorize_ability("grapple")
 	_owner_player._ability_grapple_id = "grapple"
 	_owner_player._ability_grapple_pending_left = (
 		OnlinePlayer.GRAPPLE_REQUEST_TIMEOUT)
@@ -260,6 +396,7 @@ func _check_scars() -> void:
 ## The damage itself replicates as the volume rather than as its consequences,
 ## so what has to survive the trip is every number that decides who is inside it.
 func _check_damage_volume() -> void:
+	_authorize_ability("laser_eyes")
 	var hit := DamageHit.beam(
 		Vector3(4.0, 1.5, 0.0), Vector3(9.0, 1.5, 2.0), 0.35, 18.0)
 	hit.ability_id = "laser_eyes"
@@ -270,6 +407,33 @@ func _check_damage_volume() -> void:
 	_expect(arrived, "a client's damage volume reaches the host unchanged")
 	_expect(_cover(_owner_world).saw(_expected_hit),
 		"and the client applied the same volume to its own flora")
+
+
+## Player movement is owner-simulated, but the reward and carried balance are
+## host-owned. A repeated deterministic plant key must pay once on both copies.
+func _check_biomass_authority() -> void:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	if not _expect(server_player != null,
+			"the host has a player copy for flora reward validation"):
+		return
+	_owner_world.request_flora_biomass(
+		_owner_id, _cover(_owner_world), BIOMASS_KEY, 3.0,
+		_owner_player.global_position)
+	_expect(is_zero_approx(_owner_player.biomass()),
+		"a client does not credit its own flora claim")
+	var shared := await _wait_until(
+		_owner_biomass_matches.bind(BIOMASS_REWARD), RPC_FRAMES)
+	_expect(shared and is_equal_approx(
+		server_player.biomass(), BIOMASS_REWARD),
+		"the host validates biomass and replicates the carried balance")
+	_owner_world.request_flora_biomass(
+		_owner_id, _cover(_owner_world), BIOMASS_KEY, 3.0,
+		_owner_player.global_position)
+	await _network_frames(6)
+	_expect(is_equal_approx(server_player.biomass(), BIOMASS_REWARD)
+		and is_equal_approx(_owner_player.biomass(), BIOMASS_REWARD),
+		"a repeated flora break key cannot pay twice")
 
 
 func _check_combat_authority() -> void:
@@ -457,8 +621,47 @@ func _check_new_ability_networking() -> void:
 			"the host mirrors the caster for new ability validation"):
 		return
 
+	# Hero Punch is host-approved before the owner's body performs its metre
+	# lunge. Its host copy derives one authoritative damage tunnel, while every
+	# peer receives the alternating animation and compressed-air shell.
+	_server_boss.global_position = Vector3(100.0, 0.0, 0.0)
+	_owner_boss.global_position = Vector3(100.0, 0.0, 0.0)
+	_authorize_ability("hero_punch")
+	var punch_cover_before := _cover(_owner_world).absorbed.size()
+	var punch_definition := ItemDB.ability_definition("hero_punch")
+	var punch_from := _owner_player.hand_point(false)
+	var punch_request := _owner_player.request_hero_punch(
+		"hero_punch", punch_from, _owner_player.aim_direction(punch_from), 0)
+	var punch_approved := await _wait_until(
+		func() -> bool:
+			return _owner_player.hero_punch_request_state(punch_request) \
+				== OnlinePlayer.ProjectileRequestState.ACCEPTED,
+		RPC_FRAMES)
+	var punch_shared := await _wait_until(
+		func() -> bool:
+			return _owner_player._last_hero_punch_sequence > 0 \
+				and server_player._last_hero_punch_sequence > 0 \
+				and _cover(_owner_world).absorbed.size() \
+					> punch_cover_before,
+		RPC_FRAMES)
+	var punch_hit := _cover(_owner_world).absorbed.back() as DamageHit \
+		if punch_shared else null
+	var owner_wind := _owner_player.hero_punch_shock()
+	var server_wind := server_player.hero_punch_shock()
+	_expect(punch_approved and punch_shared and punch_hit != null
+		and punch_hit.ability_id == "hero_punch"
+		and is_equal_approx(punch_hit.amount,
+			float(punch_definition.stats.get("damage", 0.0)))
+		and is_equal_approx(owner_wind.minimum_reach,
+			float(punch_definition.stats.get("wind_length", 0.0)))
+		and is_equal_approx(server_wind.minimum_reach,
+			float(punch_definition.stats.get("wind_length", 0.0)))
+		and is_zero_approx(server_player._hero_punch_move_left),
+		"Hero Punch shares one host-derived hit and fist wind while only its owner lunges")
+
 	# The owner predicts only the flight visual. Contact authority belongs to the
 	# server copy, including when the owner is the client.
+	_authorize_ability("nuke")
 	var nuke_request := _owner_player.fire_ability_projectile(
 		"nuke", _owner_player.hand_point(false), Vector3.FORWARD, 0)
 	var nuke_approved := await _wait_until(
@@ -544,6 +747,7 @@ func _check_new_ability_networking() -> void:
 	# A quick committed Grapple click can be released before this round trip
 	# completes. The Ability keeps it pending; this real request proves the host
 	# then accepts the matching close boss on both copies.
+	_authorize_ability("grapple")
 	var owner_grapple_at := _owner_player.camera.global_position \
 		+ _owner_player.look_direction() * 2.2 \
 		- _owner_boss.global_basis.y * 1.58
@@ -576,6 +780,7 @@ func _check_new_ability_networking() -> void:
 
 	# Aim both peer copies at the matching boss and let the real request path
 	# create one host-simulated and one presentation-only tether.
+	_authorize_ability("lasso")
 	var owner_boss_at := _owner_player.camera.global_position \
 		+ _owner_player.look_direction() * 8.0 \
 		- _owner_boss.global_basis.y * 1.58
@@ -643,6 +848,7 @@ func _check_new_ability_networking() -> void:
 
 	var eyes := _owner_player.eye_points()
 	var from: Vector3 = (eyes[0] + eyes[1]) * 0.5
+	_authorize_ability("nausicaa")
 	var missed_request := _owner_player.fire_ability_delayed_blast(
 		"nausicaa", from, _owner_player.aim_direction(from))
 	var terrain_miss_rejected := await _wait_until(
@@ -728,6 +934,7 @@ func _check_new_ability_networking() -> void:
 	for muted: OnlinePlayer in muted_players:
 		muted.collision_layer = int(muted_players[muted])
 
+	_authorize_ability("wall")
 	var wall_request := _owner_player.place_ability_wall("wall")
 	var wall_approved := await _wait_until(
 		func() -> bool:
@@ -802,6 +1009,11 @@ func _check_late_join() -> void:
 		and is_equal_approx(_late_boss.health(), _server_boss.health())
 		and _late_boss.engaged() == _server_boss.engaged(),
 		"and receives Bigfoot's health and engagement snapshot")
+	var late_owner := _late_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	_expect(late_owner != null
+		and is_equal_approx(late_owner.biomass(), BIOMASS_REWARD),
+		"and receives the authoritative carried biomass snapshot")
 	_expect(await _wait_until(
 		func() -> bool:
 			return _late_world.active_ability_wall_count() == 1,
@@ -962,6 +1174,20 @@ func _owner_combat_state_matches(expected_health: float) -> bool:
 		and _owner_player.has_status(CombatStatuses.FLIGHTLESS)
 
 
+func _owner_biomass_matches(expected: float) -> bool:
+	return _owner_player != null \
+		and is_equal_approx(_owner_player.biomass(), expected)
+
+
+func _owner_progression_mirrored() -> bool:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer if _server_world != null else null
+	return _owner_player != null and server_player != null \
+		and server_player.authoritative_progression_ready() \
+		and is_equal_approx(_owner_player.gold(), SAVED_GOLD) \
+		and is_equal_approx(server_player.gold(), SAVED_GOLD)
+
+
 func _server_dust_count_is(expected: int) -> bool:
 	var server_player := _server_world._spawned_players.get(
 		_owner_id) as OnlinePlayer
@@ -983,8 +1209,12 @@ func _client_told_of_breaks() -> bool:
 
 
 func _late_joiner_caught_up() -> bool:
+	var late_owner := _late_world._spawned_players.get(
+		_owner_id) as OnlinePlayer if _late_world != null else null
 	return _scars(_late_world).count() == 2 \
 		and _cover(_late_world).broken_keys().size() == BREAK_KEYS.size() \
+		and late_owner != null \
+		and is_equal_approx(late_owner.biomass(), BIOMASS_REWARD) \
 		and _late_boss != null \
 		and is_equal_approx(_late_boss.health(), _server_boss.health()) \
 		and _late_boss.engaged() == _server_boss.engaged()
@@ -999,6 +1229,19 @@ func _owner_boss_synced() -> bool:
 func _host_boss_health_matches() -> bool:
 	return _server_boss != null \
 		and is_equal_approx(_server_boss.health(), _expected_boss_health)
+
+
+## Mirrors the prerequisite a real loadout snapshot establishes before a cast.
+## Swapping one test ability at a time also proves the host gate reads the
+## currently equipped slot rather than accepting any unlocked catalogue entry.
+func _authorize_ability(id: String) -> void:
+	var server_player := _server_world._spawned_players.get(
+		_owner_id) as OnlinePlayer
+	for player: OnlinePlayer in [_owner_player, server_player]:
+		if player == null:
+			continue
+		player.ability_progress[id] = maxi(player.ability_level(id), 1)
+		player.abilities.set_item(0, id)
 
 
 func _scar(direction: Vector3) -> TerrainScars.Scar:

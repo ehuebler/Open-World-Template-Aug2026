@@ -2577,7 +2577,7 @@ func _waypoint_toggle_checks() -> void:
 		"Ring Site I",
 		"Ring Site II",
 		"Ring Site III",
-		"South Pole Caldera",
+		"Volcanoronomous",
 	])
 	expected.sort()
 
@@ -3025,8 +3025,9 @@ func _flora_impact_checks() -> void:
 	var response := field.resolve_flora_impact(
 		collider, threshold + 12.0, collider.global_position)
 	if not bool(response.get("broken", false)) \
-			or float(response.get("bounce_up", 0.0)) <= 0.0:
-		push_error("player_test: mushroom did not break and return a launch")
+			or float(response.get("bounce_up", 0.0)) <= 0.0 \
+			or float(response.get("biomass", 0.0)) <= 0.0:
+		push_error("player_test: biome mushroom did not break with launch and biomass")
 
 	var source_forward := -_player.global_basis.z * 23.0
 	_player.set_physics_process(false)
@@ -3104,14 +3105,31 @@ func _flower_tree_impact_check(world: Node) -> void:
 	var height := float(collider.get_meta(
 		&"impact_break_height", trees.maximum_height))
 	var threshold: float = trees.impact_threshold(height)
+	var root := trees.to_global(roots[0].origin)
+	_player.global_position = root
 	if not trees.resolve_flora_impact(
-			collider, threshold - 0.1, trees.to_global(roots[0].origin)).is_empty():
+			collider, threshold - 0.1, root).is_empty():
 		push_error("player_test: sub-threshold flower tree broke")
 	var response := trees.resolve_flora_impact(
-		collider, threshold + 5.0, trees.to_global(roots[0].origin))
+		collider, threshold + 5.0, root)
 	if not bool(response.get("broken", false)) \
-			or float(response.get("bounce_up", -1.0)) != 0.0:
-		push_error("player_test: flower tree did not break as a non-bounce tree")
+			or float(response.get("bounce_up", -1.0)) != 0.0 \
+			or float(response.get("biomass", 0.0)) <= 0.0:
+		push_error("player_test: flower tree did not break with an impact reward")
+	var reward_numbers: Array[DamageNumberEvent] = []
+	if _player.combat_feedback() != null:
+		_player.combat_feedback().damage_number.connect(
+			func(event: DamageNumberEvent) -> void:
+				if event.reward:
+					reward_numbers.push_back(event))
+	var carried_before := _player.biomass()
+	_player._request_flora_biomass(trees, response, root)
+	var expected_reward := float(response.get("biomass", 0.0))
+	if not is_equal_approx(_player.biomass() - carried_before, expected_reward):
+		push_error("player_test: impact biomass did not enter PlayerStats")
+	if reward_numbers.size() != 1 \
+			or not is_equal_approx(reward_numbers[0].amount, expected_reward):
+		push_error("player_test: impact biomass did not raise one green reward number")
 	await get_tree().physics_frame
 	for shape: CollisionShape3D in pairs[0]:
 		if not shape.disabled:
@@ -3120,7 +3138,8 @@ func _flower_tree_impact_check(world: Node) -> void:
 		push_error("player_test: destroyed flower tree still owned a night light")
 	print("player_test: impact flower tree  %.1f m tree broke at %.1f m/s "
 		% [height, threshold]
-		+ "with trunk, crown, collision, and light removed")
+		+ "with +%d biomass, feedback, collision, and light removed"
+		% roundi(expected_reward))
 
 
 ## One real move_and_slide against a tagged synthetic shape protects the

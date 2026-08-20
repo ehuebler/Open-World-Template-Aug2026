@@ -8,6 +8,8 @@ extends Node
 ## every failed expectation, and restores the settings file byte-for-byte.
 
 const WORLD: PackedScene = preload("res://game/world.tscn")
+const BIOMASS_HARVESTER_MENU_SCRIPT := preload(
+	"res://ui/city/biomass_harvester_menu.gd")
 const SHOT_DIR := "res://dev/captures"
 const SETTINGS_PATH := "user://settings.cfg"
 
@@ -55,8 +57,9 @@ func _ready() -> void:
 		await _finish()
 		return
 	_expect(_world.celestial_cycle != null
-		and _world.celestial_cycle.phase() < 0.01,
-		"gameplay resets the home-screen sunset to full daylight")
+		and absf(_world.celestial_cycle.phase()
+			- GameWorld.GAMEPLAY_SUNRISE_PHASE) < 0.01,
+		"gameplay resets the home-screen sunset to colony sunrise")
 	_player.display_name = "Menu Harness"
 	await _check_ability_test_site()
 	await _check_grapple_at_test_site()
@@ -143,6 +146,7 @@ func _check_grapple_at_test_site() -> void:
 	_player.head.rotation.x = _player._pitch
 	_player.reset_network_state(_player.global_transform)
 	_player.reset_physics_interpolation()
+	_player.ability_progress["grapple"] = 1
 	_player.abilities.set_item(0, "grapple")
 	await _wait_frames(12)
 
@@ -177,6 +181,8 @@ func _check_grapple_at_test_site() -> void:
 
 func _run() -> void:
 	await _check_open_and_close_policy()
+	await _check_building_wheel()
+	await _check_city_meep_roster()
 
 	await _tap_action(&"inventory")
 	await _wait_frames(4)
@@ -187,10 +193,280 @@ func _run() -> void:
 	await _check_hero(menu)
 	await _check_apparel(menu)
 	await _check_items_and_abilities(menu)
+	await _check_specialty_shop(menu)
 	await _check_data_settings_and_admin(menu)
 	await _check_graphics_toggle_rows(menu)
 	await _check_isolated_leave_hold()
 	await _check_drop_round_trip(menu)
+
+
+func _check_building_wheel() -> void:
+	var prior_abilities := _player.abilities.items()
+	var prior_one_time := _player.one_time_abilities.duplicate(true)
+	var empty_wheel := BuildingWheel.new()
+	empty_wheel.configure(true, [])
+	_player.hud.add_child(empty_wheel)
+	await _wait_frames(2)
+	_expect(empty_wheel.option_enabled(BuildingWheel.Option.CITY)
+		and not empty_wheel.option_enabled(BuildingWheel.Option.SETTLEMENT)
+		and empty_wheel.option_enabled(BuildingWheel.Option.BLUEPRINT),
+		"city and blueprints stay available while an empty settlement segment is gray")
+	empty_wheel.queue_free()
+	await _wait_frames(1)
+	_player.one_time_abilities["settlement_launcher"] = [
+		{
+			"parent_site": "landing",
+			"title": "First Settlement of Colony Ship",
+		},
+		{
+			"parent_site": "ridge",
+			"title": "First Settlement of Ridge City",
+		},
+	]
+	_player.apply_abilities(PackedStringArray(["building", ""]))
+	await _wait_frames(2)
+	_expect(_player.activate_ability(0),
+		"equipped Building routes its held mouse input to the utility wheel")
+	await _wait_frames(2)
+	var wheel := _player.building_wheel()
+	_expect(wheel != null and wheel.launcher_count() == 2
+		and wheel.option_enabled(BuildingWheel.Option.SETTLEMENT)
+		and wheel.option_enabled(BuildingWheel.Option.BLUEPRINT)
+		and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE,
+		"Building opens a mouse-directed wheel with launchers and blueprint placement")
+	if wheel != null:
+		wheel.update_selection_from_point(
+			wheel.point_for_option(BuildingWheel.Option.SETTLEMENT))
+		_expect(wheel.selected_option() == BuildingWheel.Option.SETTLEMENT,
+			"moving around the circle selects the corresponding segment")
+		_player.release_ability(0)
+	await _wait_frames(2)
+	wheel = _player.building_wheel()
+	var picker_labels := "\n".join(wheel.picker_labels()) \
+		if wheel != null else ""
+	_expect(wheel != null and wheel.picker_open()
+		and wheel.picker_count() == 2
+		and picker_labels.contains("Colony Ship")
+		and picker_labels.contains("Ridge"),
+		"multiple launchers open a scrollable parent-city picker")
+	var list := wheel.find_child(
+		"SettlementLauncherList", true, false) as VBoxContainer \
+		if wheel != null else null
+	var second := list.get_child(1) as Button \
+		if list != null and list.get_child_count() > 1 else null
+	if second != null:
+		second.pressed.emit()
+	await _wait_frames(2)
+	_expect(not _player.building_wheel_open()
+		and _player.settlement_targeting()
+		and _player._settlement_parent == &"ridge",
+		"choosing a parent-city launcher targets that exact record")
+	_player.cancel_settlement_targeting()
+	_player.one_time_abilities["settlement_launcher"] = [
+		{
+			"parent_site": "landing",
+			"title": "Only Settlement of Colony Ship",
+		},
+	]
+	_expect(_player.activate_ability(0),
+		"Building reopens with one stored launcher")
+	await _wait_frames(2)
+	wheel = _player.building_wheel()
+	if wheel != null:
+		wheel.update_selection_from_point(
+			wheel.point_for_option(BuildingWheel.Option.SETTLEMENT))
+	_player.release_ability(0)
+	await _wait_frames(2)
+	_expect(_player.settlement_targeting()
+		and not _player.building_wheel_open()
+		and _player._settlement_parent == &"landing",
+		"a single launcher skips the picker and enters placement directly")
+	_player.cancel_settlement_targeting()
+
+	_expect(_player.activate_ability(0),
+		"Building reopens for local blueprint placement")
+	await _wait_frames(2)
+	wheel = _player.building_wheel()
+	if wheel != null:
+		wheel.update_selection_from_point(
+			wheel.point_for_option(BuildingWheel.Option.BLUEPRINT))
+	_player.release_ability(0)
+	await _wait_frames(2)
+	var previews := _player.blueprint_registry()
+	var planet := _world.get_node_or_null("Planet") as Planet
+	var real_colonies := _world.meep_colonies()
+	var real_before := real_colonies.snapshot() \
+		if real_colonies != null else []
+	var first_target := _find_blueprint_target(previews, planet)
+	_player._blueprint_preview_direction = first_target
+	_player._blueprint_preview_facing = 12.0
+	var first_id := _player.submit_blueprint_target()
+	_expect(_player.blueprint_targeting() == false
+		and first_id != &"" and previews != null
+		and previews.blueprint_count() == 1
+		and (real_colonies == null
+			or real_colonies.valid_blueprint_landing(first_target)),
+		"Blueprint wheel placement creates one local settlement marker")
+	var first_ready := await _wait_for_blueprints(previews)
+	var singleton := previews.projection(first_id) \
+		if previews != null else {}
+
+	_expect(_player.begin_blueprint_targeting(),
+		"Blueprint placement can be reopened for another hypothetical city")
+	var second_target := _find_blueprint_target(previews, planet)
+	_player._blueprint_preview_direction = second_target
+	_player._blueprint_preview_facing = -21.0
+	var second_id := _player.submit_blueprint_target()
+	var pair_ready := await _wait_for_blueprints(previews)
+	var first_pair := previews.projection(first_id) \
+		if previews != null else {}
+	var second_pair := previews.projection(second_id) \
+		if previews != null else {}
+	var first_owner: PackedByteArray = first_pair.get(
+		"owner_mask", PackedByteArray())
+	var second_owner: PackedByteArray = second_pair.get(
+		"owner_mask", PackedByteArray())
+	_expect(first_ready and pair_ready
+		and second_id != &"" and previews.blueprint_count() == 2
+		and (singleton.get("owner_mask", PackedByteArray())
+			as PackedByteArray).is_empty()
+		and _packed_has_nonzero(first_owner)
+		and _packed_has_nonzero(second_owner),
+		"a nearby second blueprint privately repartitions both cities into one regional grid")
+
+	var marker := previews.get_node_or_null(
+		"BlueprintSettlement_%s" % first_id) as MeepBlueprintSettlement
+	var visual := previews.get_node_or_null(
+		"BlueprintCityVisual_%s" % first_id) as MeepBlueprintCityVisual
+	var second_revision := int(
+		previews.report(second_id).get("revision", 0))
+	if marker != null:
+		marker.interact(_player)
+	await _wait_frames(2)
+	var blueprint_menu := _player.blueprint_city_menu()
+	var expected_growth := real_colonies.regional_population_growth(
+		first_id, MeepBlueprintPreviewRegistry.DEFAULT_POPULATION) * 60.0 \
+		if real_colonies != null else 3.0
+	_expect(marker != null and marker.collision_enabled()
+		and visual != null and not visual.has_gameplay_collision()
+		and blueprint_menu != null
+		and blueprint_menu.population_control() != null
+		and blueprint_menu.population_control().max_value >= 10000.0
+		and blueprint_menu.find_child(
+			"PopulationPreset12000", true, false) is Button
+		and blueprint_menu.growth_text().contains(
+			"%.2f" % expected_growth),
+		"E opens a 10k+ population-and-growth menu while only the marker has collision")
+	if blueprint_menu != null:
+		blueprint_menu.population_control().value = 160.0
+	var population_ready := await _wait_for_blueprints(previews)
+	var population_projection := previews.projection(first_id)
+	_expect(population_ready and previews.population(first_id) == 160
+		and int(population_projection.get("population", 0)) == 160
+		and (int(population_projection.get(
+			"projected_population", 0)) == 160
+			or bool(population_projection.get("stalled", false)))
+		and int(previews.report(second_id).get(
+			"revision", 0)) > second_revision,
+		"population edits rebuild the selected city and every nearby blueprint border")
+	var context_before := real_colonies.regional_context_revision() \
+		if real_colonies != null else -1
+	var first_context_revision := int(
+		previews.report(first_id).get("revision", 0))
+	var second_context_revision := int(
+		previews.report(second_id).get("revision", 0))
+	if real_colonies != null:
+		real_colonies.city_growth_contract_changed(&"landing")
+	var context_ready := await _wait_for_blueprint_revision(
+		previews, first_id, first_context_revision)
+	_expect(context_ready and (real_colonies == null
+		or real_colonies.regional_context_revision() > context_before)
+		and int(previews.report(second_id).get(
+			"revision", 0)) > second_context_revision,
+		"a production forecast-context change rebuilds every nearby local blueprint")
+	if blueprint_menu != null:
+		blueprint_menu.close()
+	await _wait_frames(2)
+	_expect(real_colonies == null
+		or real_colonies.snapshot() == real_before,
+		"local blueprint placement and recalculation never alter real colony snapshots")
+	if previews != null:
+		previews.clear()
+	await _wait_frames(2)
+	_player.one_time_abilities = prior_one_time
+	_player.apply_abilities(prior_abilities)
+	await _wait_frames(2)
+	_expect_captured_mouse(
+		"closing Building restores captured gameplay input")
+
+
+func _check_city_meep_roster() -> void:
+	var meeps: Array = []
+	for index in 6:
+		meeps.append({
+			"index": index,
+			"name": "Roster Meep %d" % index,
+			"age_seconds": 120.0 + float(index),
+			"status": "dead" if index >= 4 else "alive",
+			"health": 24.0 - float(index),
+			"maximum_health": 30.0,
+			"activity": "Testing",
+			"home": "Test House",
+			"sibling": "None",
+			"death_seconds_ago": 8.0,
+			"death_cause": "Nuke",
+		})
+	var roster_report := {
+		"founded": true,
+		"settlers": 4,
+		"meeps": meeps,
+	}
+	var city := CityMenu.new()
+	city.configure(func() -> Dictionary: return roster_report)
+	_player.hud.add_child(city)
+	await _wait_frames(2)
+	city.tab_container().current_tab = 1
+	await _wait_frames(2)
+
+	var grid := city.find_child(
+		"MeepRosterGrid", true, false) as MeepRosterGrid
+	var scroll := city.find_child(
+		"MeepRosterScroll", true, false) as ScrollContainer
+	var alive := city.find_child(
+		"AliveMeepsToggle", true, false) as Button
+	var dead := city.find_child(
+		"DeadMeepsToggle", true, false) as Button
+	_expect(grid != null and scroll != null
+		and MeepRosterGrid.COLUMNS == 3
+		and grid.row_count() == 4 and grid.visual_row_count() == 2
+		and grid.get_child_count() == 0,
+		"City roster draws three-column cards without one node per Meep")
+	_expect(alive != null and dead != null and alive.button_pressed
+		and alive.text == "ALIVE  4" and dead.text == "DEAD  2",
+		"City roster segments show authoritative alive and dead counts")
+	_expect(city.meep_row_text(0).contains("Roster Meep 0")
+		and city.meep_row_text(0).contains("TYPE: Meep")
+		and city.meep_row_text(0).contains("HP")
+		and city.meep_row_text(4).contains("DIED")
+		and city.meep_row_text(4).contains("Nuke"),
+		"City roster keeps indexed row text and defaults missing type to Meep")
+
+	if grid != null:
+		var revision := grid.render_revision()
+		city.call(&"_refresh")
+		_expect(grid.render_revision() == revision,
+			"unchanged City reports reuse cached roster row signatures")
+		(meeps[0] as Dictionary)["health"] = 12.0
+		city.call(&"_refresh")
+		_expect(grid.render_revision() > revision,
+			"a changed visible roster card requests a redraw")
+	if dead != null:
+		dead.pressed.emit()
+		_expect(dead.button_pressed and grid != null
+			and grid.row_count() == 2 and grid.visual_row_count() == 1,
+			"Dead switches the same scrollable roster to memorial cards")
+	city.queue_free()
+	await _wait_frames(2)
 
 
 func _check_open_and_close_policy() -> void:
@@ -229,6 +505,8 @@ func _check_open_and_close_policy() -> void:
 		var data_tab := menu.find_child("TabData", true, false) as Control
 		var actions := menu.find_child("SessionActions", true, false) as Control
 		var close_button := menu.find_child("CloseAction", true, false) as Button
+		var save_button := menu.find_child("SaveAction", true, false) as Button
+		var load_button := menu.find_child("LoadAction", true, false) as Button
 		var settings_button := menu.find_child(
 			"SettingsAction", true, false) as Button
 		var leave_button := menu.find_child(
@@ -288,19 +566,45 @@ func _check_open_and_close_policy() -> void:
 			settings_button.get_theme_stylebox(&"normal") as StyleBoxFlat
 			if settings_button != null else null
 		)
+		var save_style := (
+			save_button.get_theme_stylebox(&"normal") as StyleBoxFlat
+			if save_button != null else null
+		)
+		var load_style := (
+			load_button.get_theme_stylebox(&"normal") as StyleBoxFlat
+			if load_button != null else null
+		)
 		_expect(close_style != null and settings_style != null
+			and save_style != null and load_style != null
 			and close_style.corner_radius_top_left >= 24
+			and save_style.corner_radius_top_left >= 24
+			and load_style.corner_radius_top_left >= 24
 			and settings_style.corner_radius_top_left >= 24
 			and leave_button != null and leave_button.circular,
-			"Close, Settings, and Hold Leave use circular icon keys")
+			"Close, Save, Load, Settings, and Hold Leave use circular icon keys")
+		var sandbox_actions := NetworkManager.is_single_player \
+			and String(NetworkManager.session_options.get("mode", "")) \
+				== "sandbox"
+		_expect(save_button != null and load_button != null
+			and save_button.disabled != sandbox_actions
+			and load_button.disabled != sandbox_actions,
+			"Save and Load availability follows the active game mode")
 		var close_glyph := close_button.find_child(
 			"Glyph", true, false) as Control if close_button != null else null
+		var save_glyph := save_button.find_child(
+			"Glyph", true, false) as Control if save_button != null else null
+		var load_glyph := load_button.find_child(
+			"Glyph", true, false) as Control if load_button != null else null
 		var settings_glyph := settings_button.find_child(
 			"Glyph", true, false) as Control if settings_button != null else null
 		var leave_glyph := leave_button.find_child(
 			"Glyph", true, false) as Control if leave_button != null else null
 		_expect(_centres_match(close_button, close_glyph),
 			"Close glyph is centered inside its circular key")
+		_expect(_centres_match(save_button, save_glyph),
+			"Save glyph is centered inside its circular key")
+		_expect(_centres_match(load_button, load_glyph),
+			"Load glyph is centered inside its circular key")
 		_expect(_centres_match(settings_button, settings_glyph),
 			"Settings glyph is centered inside its circular key")
 		_expect(_centres_match(leave_button, leave_glyph),
@@ -436,7 +740,6 @@ func _check_hero(menu: GameMenu) -> void:
 	for tab_name: String in [
 		"TabHero",
 		"TabApparel",
-		"TabItems",
 		"TabAbilities",
 		"TabData",
 	]:
@@ -565,78 +868,27 @@ func _check_items_and_abilities(menu: GameMenu) -> void:
 	_player.backpack.clear()
 	_player.backpack.set_item(0, "sword")
 	_player.hotbar.set_item(2, "laser_rifle")
+	_expect(menu.find_child("TabItems", true, false) == null,
+		"Items selector is hidden while the combat hotbar remains active")
 	menu.show_tab(GameMenu.Tab.ITEMS)
 	await _wait_frames(4)
-	var page := _active_page(menu) as RedCataloguePage
-	if not _expect(page != null, "Items routes to RedCataloguePage"):
-		return
-	await _capture("menu_items")
+	_expect(menu.current_tab() == GameMenu.Tab.HERO
+		and _active_page(menu) is RedHeroPage,
+		"legacy Items routing lands on Hero instead of exposing an Items page")
 
-	_expect(_owned_slots(page).size() == 2,
-		"Items lists only owned hotbar and backpack entries")
-	var weapons_filter := page.find_child("Filter_weapon", true, false) as Button
-	var items_filter := page.find_child("Filter_item", true, false) as Button
-	_expect(weapons_filter != null and items_filter != null,
-		"Items exposes Weapons and Items filters")
-	if weapons_filter != null:
-		weapons_filter.pressed.emit()
-		await _wait_frames(2)
-		_expect(page.selected_filter() == ItemDB.KIND_WEAPON
-			and _owned_slots(page).size() == 2,
-			"Weapons filter keeps owned weapons")
-	items_filter = page.find_child("Filter_item", true, false) as Button
-	if items_filter != null:
-		items_filter.pressed.emit()
-		await _wait_frames(2)
-		_expect(page.selected_filter() == ItemDB.KIND_ITEM
-			and _owned_slots(page).is_empty(),
-			"Items filter excludes weapons when no ordinary item is owned")
-		items_filter = page.find_child("Filter_item", true, false) as Button
-		if items_filter != null:
-			items_filter.pressed.emit()
-			await _wait_frames(2)
-	_expect(page.selected_filter().is_empty() and _owned_slots(page).size() == 2,
-		"pressing the active filter restores All")
-
-	var sword_slot := _red_slot(page, _player.backpack, 0)
-	_expect(sword_slot != null, "backpack sword is selectable")
-	if sword_slot != null:
-		sword_slot.picked.emit(sword_slot)
-	await _wait_frames(2)
-	for index in 3:
-		var target := page.find_child(
-			"TargetSlot%d" % (index + 1), true, false) as Button
-		_expect(target != null, "Items exposes target %d" % (index + 1))
-		if target != null:
-			target.pressed.emit()
-			_expect(page.target_slot() == index,
-				"target %d selects numbered slot %d" % [index + 1, index + 1])
-			await _wait_frames(1)
-
-	# Slot three already contains a rifle. The transfer must swap, never delete.
-	var sword_count := _count_physical("sword")
-	var rifle_count := _count_physical("laser_rifle")
-	var equip := page.find_child("EquipAction", true, false) as HoldActionButton
-	_expect(equip != null and equip.hold_duration > 0.0
-		and not equip.completed.get_connections().is_empty(),
-		"hold-to-equip action is wired to the catalogue")
-	if equip != null:
-		equip.completed.emit()
-	await _wait_frames(3)
-	_expect(_player.hotbar.get_item(2) == "sword"
-		and _player.backpack.get_item(0) == "laser_rifle",
-		"equipping into an occupied target swaps losslessly")
-	_expect(_count_physical("sword") == sword_count
-		and _count_physical("laser_rifle") == rifle_count,
-		"numbered-slot transfer preserves both items")
-
+	_player.ability_progress = {
+		"laser_eyes": 1,
+		"meteor_punch": 1,
+	}
+	_player.one_time_abilities.clear()
+	_player.progression_changed.emit()
 	_player.abilities.clear()
 	menu.show_tab(GameMenu.Tab.ABILITIES)
 	await _wait_frames(4)
-	page = _active_page(menu) as RedCataloguePage
+	await _capture("menu_abilities")
+	var page := _active_page(menu) as RedCataloguePage
 	if not _expect(page != null, "Abilities routes without crashing"):
 		return
-	await _capture("menu_abilities")
 	var targets := page.find_child("TargetButtons", true, false)
 	var target_labels := PackedStringArray()
 	if targets != null:
@@ -644,30 +896,229 @@ func _check_items_and_abilities(menu: GameMenu) -> void:
 			if child is Button:
 				target_labels.append((child as Button).text)
 	_expect(target_labels == PackedStringArray(["LMB", "RMB"]),
-		"Abilities keeps LMB and RMB targets with empty assignments")
-	if ItemDB.ability_ids().is_empty():
-		var empty_title := page.find_child("EmptyStateTitle", true, false) as Label
-		var empty_body := page.find_child("EmptyStateBody", true, false) as Label
-		_expect(empty_title != null and empty_title.visible
-			and empty_title.text.contains("STANDBY")
-			and empty_body != null and empty_body.text.contains("LMB")
-			and empty_body.text.contains("RMB"),
-			"Abilities presents the polished empty-library state")
-	else:
-		var expected := PackedStringArray([
-			"laser_eyes", "meteor_punch", "starfire", "grapple",
-			"nuke", "lasso", "wall", "nausicaa",
-		])
-		var all_icons := true
-		for id: String in expected:
-			all_icons = all_icons and ItemDB.ability_icon(id) != null
-		_expect(ItemDB.ability_ids() == expected
-			and _owned_slots(page).size() == expected.size()
-			and all_icons,
-			"Abilities presents all eight generated definitions with menu icons")
-		_expect("\n".join(ItemDB.stat_lines("wall")).contains(
-			"Wall Width\t8 m"),
-			"new authored stats use their catalogue labels and units")
+		"Abilities keeps its LMB and RMB assignment targets")
+	var expected := ItemDB.reusable_ability_ids()
+	var listed := PackedStringArray()
+	var all_known := true
+	for slot: RedItemSlot in _owned_slots(page):
+		listed.append(slot.item_id())
+		all_known = all_known and _player.ability_unlocked(slot.item_id()) \
+			and slot.badge == "KNOWN"
+	_expect(listed == expected,
+		"regular Abilities lists the complete reusable power catalogue")
+	_expect(all_known,
+		"every reusable catalogued ability is currently unlocked")
+	var reusable_filter := page.find_child(
+		"Filter_reusable", true, false) as Button
+	var one_time_filter := page.find_child(
+		"Filter_one_time", true, false) as Button
+	_expect(reusable_filter != null and one_time_filter != null,
+		"Abilities can filter reusable powers from unique one-time inventory")
+	if one_time_filter != null:
+		one_time_filter.pressed.emit()
+		await _wait_frames(2)
+	_expect(_owned_slots(page).is_empty(),
+		"the one-time filter does not manufacture an unpurchased launcher")
+	_expect(_player.authoritative_grant_one_time_ability(
+		"settlement_launcher", {
+			"parent_site": "landing",
+			"title": "First Settlement of Colony Ship",
+		}) and _player.authoritative_grant_one_time_ability(
+			"settlement_launcher", {
+				"parent_site": "landing",
+				"title": "Second Settlement of Colony Ship",
+			}) and _player.abilities.find("settlement_launcher") < 0,
+		"repeat unique purchases stack without auto-equipping either hand")
+	await _wait_frames(2)
+	var one_time_slots := _owned_slots(page)
+	var unique_slot: RedItemSlot = one_time_slots[0] \
+		if not one_time_slots.is_empty() else null
+	var selected_title := page.find_child(
+		"SelectedItemTitle", true, false) as Label
+	_expect(one_time_slots.size() == 1 and unique_slot != null
+		and unique_slot.item_id() == "settlement_launcher",
+		"the purchased launcher appears once in one-time inventory")
+	_expect(unique_slot != null and unique_slot.badge == "2 USES",
+		"the one-time inventory shows all queued launcher uses")
+	_expect(selected_title != null
+		and selected_title.text == "FIRST SETTLEMENT OF COLONY SHIP",
+		"the one-time inventory shows the launcher's unique source name")
+	var equip_action := page.find_child(
+		"EquipAction", true, false) as HoldActionButton
+	_expect(equip_action != null and equip_action.disabled
+		and equip_action.label_text == "AVAILABLE IN BUILDING",
+		"Settlement Launcher is inventory for Building rather than a mouse slot")
+	if unique_slot != null:
+		unique_slot.quick_move_requested.emit(unique_slot)
+		await _wait_frames(2)
+	var feedback := page.find_child(
+		"ActionFeedback", true, false) as Label
+	_expect(_player.abilities.find("settlement_launcher") < 0
+		and feedback != null
+		and feedback.text == "STORED IN BUILDING WHEEL",
+		"direct assignment is refused and points the player to Building")
+
+
+func _check_specialty_shop(menu: GameMenu) -> void:
+	var ability_shop := SpecialtyShop.new()
+	ability_shop.configure(_player, SpecialtyShop.Mode.ABILITIES)
+	menu.add_child(ability_shop)
+	await _wait_frames(2)
+	_expect(ability_shop.tab_container() != null
+		and ability_shop.tab_container().is_tab_hidden(1),
+		"the base Abilities House keeps stat training locked")
+	var all_actions_present := true
+	for id: String in ItemDB.reusable_ability_ids():
+		var action := OnlinePlayer.AbilityProgressAction.UPGRADE \
+			if _player.ability_unlocked(id) \
+			else OnlinePlayer.AbilityProgressAction.UNLOCK
+		all_actions_present = all_actions_present \
+			and ability_shop.ability_button(id, action) != null
+	_expect(all_actions_present,
+		"Abilities House lists reusable powers but does not sell one-time records")
+	_expect(ability_shop.ability_button(
+		"settlement_launcher",
+		OnlinePlayer.AbilityProgressAction.UNLOCK) == null,
+		"Settlement Launcher remains exclusive to its colony purchase")
+	var before_gold := _player.gold()
+	_expect(_player.authoritative_ability_action(
+		"starfire", OnlinePlayer.AbilityProgressAction.UNLOCK)
+		and _player.authoritative_ability_action(
+			"starfire", OnlinePlayer.AbilityProgressAction.UNLOCK)
+		and _player.ability_level("starfire") == 1
+		and is_equal_approx(_player.gold(), before_gold),
+		"free authoritative unlock is idempotent")
+	for _upgrade in 5:
+		_player.authoritative_ability_action(
+			"starfire", OnlinePlayer.AbilityProgressAction.UPGRADE)
+	_expect(_player.ability_level("starfire") == ItemDB.MAX_ABILITY_LEVEL
+		and _player.authoritative_ability_action(
+			"starfire", OnlinePlayer.AbilityProgressAction.EQUIP_SECONDARY)
+		and _player.abilities.get_item(1) == "starfire",
+		"Abilities House upgrades cap at five and equips authoritatively")
+	ability_shop.queue_free()
+	await _wait_frames(1)
+
+	_player.ability_stat_progress.erase("starfire")
+	var tower_shop := SpecialtyShop.new()
+	tower_shop.configure(_player, SpecialtyShop.Mode.ABILITIES, true)
+	menu.add_child(tower_shop)
+	await _wait_frames(2)
+	var stat_requested := ["", ""]
+	tower_shop.ability_stat_upgrade_requested.connect(func(
+			ability_id: String, stat_id: String) -> void:
+		stat_requested[0] = ability_id
+		stat_requested[1] = stat_id)
+	var speed_training := tower_shop.ability_stat_button("starfire", "speed")
+	_expect(tower_shop.tab_container() != null
+		and not tower_shop.tab_container().is_tab_hidden(1)
+		and speed_training != null,
+		"the tower unlocks a STATS tab for unlocked abilities")
+	if speed_training != null:
+		speed_training.pressed.emit()
+	_expect(stat_requested == ["starfire", "speed"],
+		"stat training sends the exact ability and stat track")
+	_expect(_player.authoritative_ability_stat_upgrade("starfire", "speed")
+		and _player.ability_stat_level("starfire", "speed") == 1,
+		"the free stat purchase is host-authoritative and permanent")
+	tower_shop.queue_free()
+	await _wait_frames(1)
+
+	var hat_shop := SpecialtyShop.new()
+	hat_shop.configure(_player, SpecialtyShop.Mode.HATS)
+	menu.add_child(hat_shop)
+	await _wait_frames(2)
+	var all_hats_present := true
+	for id: String in ItemDB.hat_shop_ids():
+		all_hats_present = all_hats_present \
+			and hat_shop.hat_button(id) != null
+	_expect(ItemDB.hat_shop_ids().size() >= 4 and all_hats_present,
+		"Hat House lists multiple broad placeholder hats")
+	var first_hat := ItemDB.hat_shop_ids()[0]
+	_player._owned_hats.erase(first_hat)
+	var forged_backpack := _player.backpack.items()
+	forged_backpack[0] = first_hat
+	var forged := _player._sanitize_loadout_snapshot({
+		"equipment": _player.equipment.items(),
+		"hotbar": _player.hotbar.items(),
+		"abilities": _player.abilities.items(),
+		"backpack": forged_backpack,
+	})
+	var granted_slot := _player.authoritative_grant_backpack(first_hat)
+	_expect(forged["backpack"][0].is_empty()
+		and _player.authoritative_record_hat_purchase(first_hat)
+		and granted_slot >= 0 and _player.authoritative_toggle_hat(first_hat)
+		and _player.equipment.get_item(0) == first_hat
+		and _player.authoritative_toggle_hat(first_hat)
+		and _player.backpack.find(first_hat) >= 0,
+		"host ledger rejects forged hats and validates Hat House equip/stow")
+	hat_shop.queue_free()
+	await _wait_frames(1)
+
+	var residents := ResidentListOverlay.new()
+	residents.configure(func() -> Dictionary:
+		return {
+			"title": "Skyscraper",
+			"floors": 14,
+			"capacity": 48,
+			"residents": ["Ada", "Bryn", "Cy"],
+			"former_owners": ["Dara"],
+		})
+	menu.add_child(residents)
+	await _wait_frames(2)
+	_expect(residents.PLATE_SIZE.x <= 480.0
+		and (residents.get("_residents") as Label).text.contains("Ada")
+		and (residents.get("_former") as Label).text.contains("Dara"),
+		"dense residences use a compact roster overlay with departed owner history")
+	residents.queue_free()
+	await _wait_frames(1)
+
+	var harvester_report := {
+		"resources": 725.0,
+		"harvester_rate": 1.0,
+		"harvester_lifetime": 42.5,
+		"harvester_rate_level": 0,
+		"harvester_upgrade": {
+			"purchase_id": MeepColony.CityPurchase.HARVEST_RATE_1,
+			"cost": 500.0,
+			"status": "available",
+			"enabled": true,
+			"shortfall": 0.0,
+		},
+	}
+	var harvester: Control = BIOMASS_HARVESTER_MENU_SCRIPT.new()
+	harvester.call(&"configure",
+		func() -> Dictionary: return harvester_report)
+	menu.add_child(harvester)
+	await _wait_frames(2)
+	var requested := [-1]
+	harvester.connect(&"upgrade_requested",
+		func(purchase_id: int) -> void: requested[0] = purchase_id)
+	var upgrade := harvester.call(&"upgrade_button") as Button
+	_expect(str(harvester.call(&"row_text", "bank")) == "725 BIOMASS"
+		and str(harvester.call(&"row_text", "rate")) == "1.0 BIOMASS / SEC"
+		and str(harvester.call(&"row_text", "lifetime")) == "42.5 BIOMASS"
+		and upgrade != null and not upgrade.disabled,
+		"Biomass Harvester overlay shows bank, rate, lifetime, level, and next upgrade")
+	upgrade.pressed.emit()
+	_expect(int(requested[0]) == MeepColony.CityPurchase.HARVEST_RATE_1,
+		"the harvester overlay sends the exact append-only upgrade ID")
+	harvester_report["harvester_rate"] = 3.5
+	harvester_report["harvester_rate_level"] = 5
+	harvester_report["harvester_upgrade"] = {
+		"purchase_id": MeepColony.CityPurchase.HARVEST_RATE_5,
+		"cost": 8000.0,
+		"status": "maxed",
+		"enabled": false,
+		"shortfall": 0.0,
+	}
+	harvester.call("_refresh")
+	_expect(str(harvester.call(&"row_text", "level")) == "5 / 5"
+		and str(harvester.call(&"row_text", "next")) == "MAXIMUM"
+		and upgrade.disabled,
+		"the harvester overlay reports and disables its permanent maximum")
+	harvester.queue_free()
+	await _wait_frames(1)
 
 
 func _check_data_settings_and_admin(menu: GameMenu) -> void:
@@ -717,11 +1168,14 @@ func _check_data_settings_and_admin(menu: GameMenu) -> void:
 	await _capture("menu_settings_red")
 
 	menu.show_tab(GameMenu.Tab.ADMIN)
-	await _wait_frames(2)
-	var blank := _active_page(menu)
-	_expect(blank != null and blank.name == "AdminBlank"
-		and blank.get_child_count() == 0 and blank.get_script() == null,
-		"AdminBlank is a truly blank Control")
+	await _wait_frames(4)
+	var admin := _active_page(menu) as AdminPage
+	_expect(admin != null
+		and admin.graph() != null
+		and admin.export_button() != null
+		and admin.graph().samples().size() > 0,
+		"Admin shows the rolling FPS graph and performance export controls")
+	await _capture("menu_admin_performance")
 
 
 ## The two atmosphere toggles on the shared Display page.
@@ -801,6 +1255,28 @@ func _check_graphics_toggle_rows(menu: GameMenu) -> void:
 	var rebuilt := _display_toggle(panel, "God rays") if panel != null else null
 	_expect(rebuilt != null and rebuilt.button_pressed and rebuilt.text == "ON",
 		"the rebuilt God rays row shows the restored default")
+
+	if panel == null:
+		return
+	panel.show_section(2)
+	await _wait_frames(3)
+	var rim_wheel := panel.find_child(
+		"RimLightColourWheel", true, false) as ColourWheel
+	_expect(rim_wheel != null
+		and rim_wheel._swatch().position.y > rim_wheel._bar().end.y,
+		"Gameplay offers the Hero color circle, light bar, and example bar")
+	if rim_wheel == null:
+		return
+	var chosen := Color(0.72, 0.18, 0.94, 1.0)
+	rim_wheel.previewed.emit(chosen)
+	rim_wheel.picked.emit(chosen)
+	await _wait_frames(2)
+	var stored: Variant = SettingsManager.get_setting(
+		&"gameplay", &"rim_light_color", Color.BLACK)
+	_expect(stored is Color and (stored as Color).is_equal_approx(chosen),
+		"the rim circle previews live and saves its color on release")
+	SettingsManager.set_setting(&"gameplay", &"rim_light_color",
+		GameSettingsManager.DEFAULT_RIM_LIGHT_COLOR)
 
 
 ## The toggle button belonging to the Display row labelled [param label_text].
@@ -882,27 +1358,14 @@ func _check_drop_round_trip(menu: GameMenu) -> void:
 	_player.hotbar.clear()
 	_player.backpack.clear()
 	_player.backpack.set_item(0, "sword")
-	menu.show_tab(GameMenu.Tab.ITEMS)
-	await _wait_frames(3)
-	var page := _active_page(menu) as RedCataloguePage
-	if not _expect(page != null, "Drop check opens the Items catalogue"):
-		return
-	var source := _red_slot(page, _player.backpack, 0)
-	if source != null:
-		source.picked.emit(source)
-	await _wait_frames(1)
 	var before := _count_physical("sword")
-	var drop := page.find_child("DropAction", true, false) as Button
-	_expect(drop != null and not drop.disabled,
-		"selected physical item enables Drop")
-	if drop != null:
-		drop.pressed.emit()
+	_world.request_drop(_player.peer_id, "backpack", 0, "sword")
 	await _wait_frames(2)
 	var snapshots := _world.pickup_snapshots()
 	_expect(_count_physical("sword") == before - 1
 		and _player.backpack.get_item(0).is_empty()
 		and snapshots.size() == 1,
-		"Drop removes exactly one source item through GameWorld")
+		"world drop removes exactly one source item without an Items page")
 	if snapshots.is_empty():
 		return
 	var pickup_id := int((snapshots[0] as Dictionary).get("pickup_id", 0))
@@ -928,13 +1391,31 @@ func _check_drop_round_trip(menu: GameMenu) -> void:
 	_player.set_physics_process(false)
 	var up := dropped.global_basis.y.normalized()
 	var side := dropped.global_basis.x.normalized()
-	var back := dropped.global_basis.z.normalized()
 	_player.global_position = dropped.global_position + side
 	var target := dropped.global_position + up * 0.40
-	_player.camera.global_position = target + back * 1.45 + up * 0.08
-	_player.camera.look_at(target, up)
-	await get_tree().physics_frame
-	_expect(_player._interact_target() == dropped,
+	# A CharacterBody transform and the camera ray are handed to separate physics
+	# spaces. Settle the body first, then aim the camera: aiming before these frames
+	# lets the disabled player's head/camera interpolation restore its previous basis
+	# after `look_at`, leaving a vertical ray that cannot reach the pickup.
+	for _frame in 3:
+		await get_tree().physics_frame
+	# Look radially down at it. A tangent view can legitimately meet a nearby
+	# structure before the item depending on where the previous menu check left
+	# the player; from above, the pickup is always before the planet collider.
+	_player.camera.global_position = target + up * 1.45
+	_player.camera.look_at(target, side)
+	var interact_target := _player._interact_target()
+	if interact_target != dropped:
+		var ray_from := _player.camera.global_position
+		var ray_to := ray_from - _player.camera.global_basis.z * (
+			OnlinePlayer.REACH + _player.camera_arm.spring_length)
+		var query := PhysicsRayQueryParameters3D.create(ray_from, ray_to)
+		query.exclude = [_player.get_rid()]
+		var hit := _player.get_world_3d().direct_space_state.intersect_ray(query)
+		print("menu_test: pickup ray missed target=%s collider=%s from=%s to=%s item=%s"
+			% [interact_target, hit.get("collider"), ray_from, ray_to,
+				dropped.global_position])
+	_expect(interact_target == dropped,
 		"player interaction ray resolves the dropped pickup")
 
 	var interact := InputEventKey.new()
@@ -1046,6 +1527,66 @@ func _tap_action(action: StringName) -> void:
 func _wait_frames(frames: int) -> void:
 	for _frame in frames:
 		await get_tree().process_frame
+
+
+func _find_blueprint_target(
+		previews: MeepBlueprintPreviewRegistry,
+		planet: Planet) -> Vector3:
+	if previews == null or planet == null or planet.shape == null:
+		return Vector3.ZERO
+	var ship := planet.get_node_or_null("ColonyShip") as ColonyShip
+	var origin := ship.direction if ship != null else Vector3.UP
+	var site := MeepSite.new(
+		origin, planet.shape.radius, 0.0,
+		MeepColony.MAX_CLAIM_RADIUS)
+	for radius: float in [220.0, 280.0, 340.0, 400.0]:
+		for sample in 32:
+			var angle := TAU * float(sample) / 32.0
+			var direction := site.direction_at(
+				Vector2(cos(angle), sin(angle)) * radius)
+			if previews.valid_placement(direction):
+				return direction
+	return Vector3.ZERO
+
+
+func _wait_for_blueprints(
+		previews: MeepBlueprintPreviewRegistry) -> bool:
+	if previews == null:
+		return false
+	var deadline := Time.get_ticks_msec() + 45000
+	while Time.get_ticks_msec() < deadline:
+		var ready := previews.blueprint_count() > 0 \
+			and not previews.rebuilding()
+		for id: StringName in previews.blueprint_ids():
+			ready = ready and not previews.projection(id).is_empty()
+		if ready:
+			return true
+		await get_tree().create_timer(
+			0.01, true, false, true).timeout
+	return false
+
+
+func _wait_for_blueprint_revision(
+		previews: MeepBlueprintPreviewRegistry,
+		id: StringName, previous: int) -> bool:
+	if previews == null:
+		return false
+	var deadline := Time.get_ticks_msec() + 45000
+	while Time.get_ticks_msec() < deadline:
+		if not previews.rebuilding() \
+				and int(previews.report(id).get(
+					"revision", 0)) > previous:
+			return true
+		await get_tree().create_timer(
+			0.01, true, false, true).timeout
+	return false
+
+
+func _packed_has_nonzero(values: PackedByteArray) -> bool:
+	for value in values:
+		if value != 0:
+			return true
+	return false
 
 
 func _capture(capture_name: String) -> void:

@@ -72,7 +72,8 @@ func _ready() -> void:
 		call_deferred("_start_from_command_line")
 
 
-func start_single_player(game_mode := "story", duels_mode := "") -> void:
+func start_single_player(game_mode := "story", duels_mode := "",
+		save_id := "") -> void:
 	_reset_session(false)
 	is_single_player = true
 	is_host = true
@@ -86,6 +87,8 @@ func start_single_player(game_mode := "story", duels_mode := "") -> void:
 		"duels_mode": (
 			sanitize_duels_mode(duels_mode) if selected_mode == "duels" else ""),
 	}
+	if selected_mode == "sandbox" and not String(save_id).is_empty():
+		session_options["save_id"] = String(save_id)
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	players[1] = _sanitize_player_metadata(_local_look_metadata(1))
 	_set_status(SessionState.STARTING, "Starting single-player game...")
@@ -229,6 +232,27 @@ func leave_game() -> void:
 	_reset_session(true, true)
 	_set_status(SessionState.IDLE, "Disconnected")
 	session_ended.emit()
+
+
+func reload_single_player_from_save(save_id: String) -> Error:
+	if state != SessionState.IN_GAME or not is_single_player or not is_host \
+			or String(session_options.get("mode", "")) != "sandbox":
+		return ERR_UNAUTHORIZED
+	if not SaveManager.save_exists(save_id, "sandbox"):
+		return ERR_FILE_NOT_FOUND
+	session_options["save_id"] = save_id
+	var loaded := SaveManager.load_save(save_id, "sandbox")
+	if bool(loaded.get("ok", false)):
+		session_options["save_name"] = String(loaded.get("name", ""))
+	_set_status(SessionState.STARTING, "Loading sandbox save...")
+	var error := get_tree().change_scene_to_file(WORLD_SCENE)
+	if error != OK:
+		_set_status(SessionState.IN_GAME, "In game")
+		return error
+	# The replacement GameWorld sees IN_GAME in _ready and opens the selected
+	# snapshot itself. No second session_started signal is needed.
+	_set_status(SessionState.IN_GAME, "In game")
+	return OK
 
 
 func _start_from_command_line() -> void:

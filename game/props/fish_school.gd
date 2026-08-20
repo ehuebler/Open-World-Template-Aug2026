@@ -247,6 +247,16 @@ func _build() -> void:
 
 
 func _process(delta: float) -> void:
+	if not RuntimeTelemetry.deep_enabled():
+		_advance(delta)
+		return
+	var began := Time.get_ticks_usec()
+	_advance(delta)
+	RuntimeTelemetry.record_process_step(
+		&"aerial", &"school_process", Time.get_ticks_usec() - began)
+
+
+func _advance(delta: float) -> void:
 	_clock += delta
 	var eye := _planet.viewer_position()
 	_keep_sited(eye)

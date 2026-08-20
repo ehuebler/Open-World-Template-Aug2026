@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "id": "sandworm",
+  "class_name": "SandwormBoss",
+  "display_name": "Sandworm",
+  "description": "A host-authoritative desert ambusher that travels below the collision surface, erupts beside a target, and sweeps through a long airborne bite.",
+  "asset": {
+    "source": "res://assets/source/meshmaker/sandworm.blend",
+    "runtime_glb": "res://assets/runtime/characters/sandworm.glb",
+    "builder": "res://assets/source/blender/build_sandworm.py"
+  },
+  "controller": {
+    "mode": "custom",
+    "scene": "res://game/enemies/sandworm/sandworm.tscn",
+    "script": "res://game/enemies/sandworm/sandworm.gd"
+  },
+  "health": 8500.0,
+  "arena": {
+    "radius": 1600.0,
+    "detection_radius": 1550.0,
+    "reset_delay": 5.0,
+    "distance_mode": "surface_arc"
+  },
+  "combat": {
+    "radius": 58.0,
+    "center_height": 42.0
+  },
+  "collision": {
+    "shape": "sphere",
+    "radius": 50.0,
+    "offset": [
+      0.0,
+      42.0,
+      0.0
+    ]
+  },
+  "animations": {
+    "rest": "Idle",
+    "burrow": "Burrow",
+    "emerge": "Emerge",
+    "leap": "Leap",
+    "bite": "Bite",
+    "dive": "Dive",
+    "hit_react": "HitReact",
+    "defeat": "Defeat"
+  },
+  "moves": [
+    {
+      "id": "bite",
+      "behavior": "custom:sandworm_bite",
+      "animations": {
+        "emerge": "Emerge",
+        "travel": "Leap",
+        "strike": "Bite",
+        "recover": "Dive"
+      }
+    }
+  ],
+  "pretriggers": [
+    "desert_flyby"
+  ],
+  "location": {
+    "mode": "planet_surface",
+    "direction": [
+      0.939715624,
+      -0.159266293,
+      0.302603334
+    ],
+    "facing": 0.0,
+    "clearance": 0.0
+  },
+  "waypoint": {
+    "enabled": true,
+    "title": "Sandworm",
+    "tint": "#ff6b28",
+    "show_beyond": 0.0,
+    "aimed_beyond": 0.0,
+    "hide_beyond": 0.0
+  },
+  "material": "res://game/enemies/sandworm/sandworm_surface.tres",
+  "tags": [
+    "boss",
+    "desert",
+    "burrowing"
+  ],
+  "extensions": {
+    "site_node_name": "SandwormTerritory",
+    "boss_node_name": "Sandworm",
+    "site_script": "res://game/enemies/sandworm/sandworm_site.gd"
+  }
+}

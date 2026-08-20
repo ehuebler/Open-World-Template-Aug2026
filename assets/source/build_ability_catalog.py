@@ -30,6 +30,10 @@ DEFINITION_DIR = ROOT / "game/abilities/definitions"
 CATALOG = ROOT / "game/abilities/ability_catalog.gd"
 
 ENUMS = {
+    "use_type": {
+        "REUSABLE": 0,
+        "ONE_TIME": 1,
+    },
     "activation_type": {
         "INSTANT": 0,
         "SUSTAINED": 1,
@@ -42,6 +46,7 @@ ENUMS = {
         "ENERGY_DISK": 3,
         "ENERGY_ORB": 4,
         "TETHER": 5,
+        "POKE_BALL": 6,
     },
     "impact_type": {
         "NONE": 0,
@@ -102,7 +107,7 @@ def load_manifest() -> list[dict[str, Any]]:
             if not entry.get(key):
                 raise ValueError(f"{ability_id}: missing {key}")
         for key, values in ENUMS.items():
-            value = entry.get(key, "NONE")
+            value = entry.get(key, "REUSABLE" if key == "use_type" else "NONE")
             if value not in values:
                 raise ValueError(f"{ability_id}: invalid {key} {value!r}")
         stats = entry.get("stats")
@@ -170,6 +175,8 @@ def definition_text(entry: dict[str, Any]) -> str:
             "implementation = ExtResource(\"2_implementation\")",
             "icon = ExtResource(\"3_icon\")",
             f"tint = {color_value(entry['tint'])}",
+            f"use_type = {ENUMS['use_type'][entry.get('use_type', 'REUSABLE')]}",
+            f"direct_equip = {godot_value(bool(entry.get('direct_equip', True)))}",
             f"activation_type = {ENUMS['activation_type'][entry['activation_type']]}",
             f"projectile_type = {ENUMS['projectile_type'][entry['projectile_type']]}",
             f"impact_type = {ENUMS['impact_type'][entry['impact_type']]}",
@@ -179,6 +186,7 @@ def definition_text(entry: dict[str, Any]) -> str:
             f"affects_players = {godot_value(bool(entry.get('affects_players', False)))}",
             f"self_launch = {godot_value(bool(entry.get('self_launch', False)))}",
             f"blast_occlusion = {godot_value(bool(entry.get('blast_occlusion', False)))}",
+            f"overrides_weapon_input = {godot_value(bool(entry.get('overrides_weapon_input', False)))}",
             f"animation = &{json.dumps(animations.get('primary', ''))}",
             f"alternate_animation = &{json.dumps(animations.get('alternate', ''))}",
             f"hover_animation = &{json.dumps(animations.get('hover', ''))}",

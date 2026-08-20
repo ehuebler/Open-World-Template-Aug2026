@@ -16,8 +16,7 @@ func _press() -> bool:
 		return false
 	_started = false
 	_hold_pose_started = false
-	_cast_left = maxf(float(
-		definition.stats.get("animation_duration", 0.3)), 0.0)
+	_cast_left = maxf(float(stats.get("animation_duration", 0.3)), 0.0)
 	return player.begin_ability_lasso(ability_id, stats)
 
 

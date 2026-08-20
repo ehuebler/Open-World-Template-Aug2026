@@ -15,6 +15,13 @@ enum ActivationType {
 	COMMITTED,
 }
 
+## Reusable powers stay in the catalogue forever. One-time abilities are unique
+## owned records: they appear only after a grant and vanish after a successful use.
+enum UseType {
+	REUSABLE,
+	ONE_TIME,
+}
+
 enum ProjectileType {
 	NONE,
 	BEAM,
@@ -22,6 +29,7 @@ enum ProjectileType {
 	ENERGY_DISK,
 	ENERGY_ORB,
 	TETHER,
+	POKE_BALL,
 }
 
 enum ImpactType {
@@ -59,6 +67,10 @@ enum ReactionType {
 @export var icon: Texture2D
 @export var tint := Color(0.6, 0.6, 0.6)
 
+@export var use_type := UseType.REUSABLE
+## Some owned records are launched from another ability's utility menu rather
+## than occupying one of the player's two direct mouse-button slots.
+@export var direct_equip := true
 @export var activation_type := ActivationType.INSTANT
 @export var projectile_type := ProjectileType.NONE
 @export var impact_type := ImpactType.NONE
@@ -70,6 +82,9 @@ enum ReactionType {
 @export var affects_players := false
 @export var self_launch := false
 @export var blast_occlusion := false
+## Non-combat abilities such as Building may claim their assigned
+## mouse button even while a numbered-slot weapon is drawn.
+@export var overrides_weapon_input := false
 
 ## Primary, alternating-hand, low-speed hover variants, held variants, and
 ## landing clips respectively. Empty names intentionally mean ordinary
@@ -95,6 +110,7 @@ func valid() -> bool:
 
 func profile_line() -> String:
 	var parts := PackedStringArray()
+	parts.append(_enum_label(UseType, use_type))
 	parts.append(_enum_label(ActivationType, activation_type))
 	if projectile_type != ProjectileType.NONE:
 		parts.append(_enum_label(ProjectileType, projectile_type))

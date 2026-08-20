@@ -2,11 +2,11 @@ class_name PlayerDesignerPanel
 extends Control
 
 ## Home-screen character designer in the same red/green/black language as the
-## in-game Hero and Apparel pages.
+## in-game Hero and Hats pages.
 ##
 ## The live character standing beside this panel is the preview. This control
 ## therefore contains only appearance controls: equipped apparel, texture and
-## tint on Hero Design, then an apparel-only hold catalogue on Apparel.
+## tint on Hero Design, then a hat-only hold catalogue on Hats.
 
 signal name_entered(value: String)
 signal skin_picked(skin_id: String)
@@ -20,7 +20,7 @@ enum Tab {
 
 const BACKGROUND := preload("res://assets/runtime/ui/menu_background.png")
 const TINT_BODY := "body"
-const TAB_LABELS: Array[String] = ["Hero Design", "Apparel"]
+const TAB_LABELS: Array[String] = ["Hero Design", "Hats"]
 
 const RED := Color("ef151f")
 const RED_BRIGHT := Color("ff3445")
@@ -35,19 +35,10 @@ const TILE_EDGE := 88.0
 const TILE_GAP := 9.0
 
 const APPAREL_FILTERS: Array[Dictionary] = [
-	{"id": "", "label": "All", "glyph": RedMenuGlyph.Glyph.APPAREL_ALL},
-	{"id": "hat", "label": "Head", "glyph": RedMenuGlyph.Glyph.HAT},
-	{"id": "goggles", "label": "Eyes", "glyph": RedMenuGlyph.Glyph.GOGGLES},
-	{"id": "long_sleeve", "label": "Body", "glyph": RedMenuGlyph.Glyph.BODY_TUNIC},
-	{"id": "pants", "label": "Legs", "glyph": RedMenuGlyph.Glyph.PANTS},
-	{"id": "shoes", "label": "Feet", "glyph": RedMenuGlyph.Glyph.BOOTS},
+	{"id": "", "label": "Hats", "glyph": RedMenuGlyph.Glyph.HAT},
 ]
 const APPAREL_GLYPHS := [
 	RedMenuGlyph.Glyph.HAT,
-	RedMenuGlyph.Glyph.GOGGLES,
-	RedMenuGlyph.Glyph.BODY_TUNIC,
-	RedMenuGlyph.Glyph.PANTS,
-	RedMenuGlyph.Glyph.BOOTS,
 ]
 
 var _equipment: ItemContainer
@@ -235,7 +226,7 @@ func _build_hero_page() -> VBoxContainer:
 	var apparel_column := VBoxContainer.new()
 	apparel_column.name = "DesignerEquippedContent"
 	apparel_column.add_theme_constant_override(&"separation", 8)
-	apparel_column.add_child(_section_heading("EQUIPPED APPAREL  //  CLICK TO AIM TINT"))
+	apparel_column.add_child(_section_heading("EQUIPPED HAT  //  CLICK TO AIM TINT"))
 	apparel_column.add_child(_rule())
 	var apparel_centre := CenterContainer.new()
 	apparel_centre.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -353,7 +344,7 @@ func _build_apparel_page() -> VBoxContainer:
 
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override(&"separation", 12)
-	var title := _label("APPAREL", 23, RED_BRIGHT)
+	var title := _label("HATS", 23, RED_BRIGHT)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	_apparel_count = _label("00 OWNED", 11, RED_MUTED)
@@ -420,7 +411,7 @@ func _build_apparel_page() -> VBoxContainer:
 	_apparel_grid.resized.connect(_fit_apparel_columns)
 
 	_empty_apparel = _label(
-		"NO OWNED APPAREL MATCHES THIS FILTER.",
+		"NO OWNED HATS MATCH THIS FILTER.",
 		16,
 		RED_MUTED,
 		true

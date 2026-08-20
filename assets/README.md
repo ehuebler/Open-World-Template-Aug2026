@@ -58,6 +58,91 @@ $blender = "C:\Program Files\Blender Foundation\Blender 5.1\blender.exe"
 The catalogue builder can also run with a normal Python interpreter because it
 does not import `bpy`.
 
+## Reusable boss workflow
+
+Boss manifests are versioned source files under
+`assets/runtime/bosses/manifests/<id>.json`; start from the version-1
+`assets/runtime/bosses/manifests/boss_template.json`. A runtime manifest
+requires `version`, `id`, `class_name`, `display_name`, `description`, `asset`,
+`controller`, `health`, `arena`, `combat`, `collision`, `animations`, `moves`,
+`pretriggers`, `location`, and `waypoint`. `animations.rest` is mandatory.
+`material`, `tags`, and `extensions` are optional.
+
+From the repository root in PowerShell:
+
+```powershell
+$manifest = "assets/runtime/bosses/manifests/my_boss.json"
+Copy-Item assets/runtime/bosses/manifests/boss_template.json $manifest
+code $manifest
+
+# Generic bosses: create missing editable controller/scene scaffolds.
+python assets/source/create_boss.py $manifest --scaffold
+
+# Generate one boss, or regenerate the complete catalog.
+python assets/source/create_boss.py $manifest
+python assets/source/create_boss.py --all
+
+# Only for a selected .blend recipe; this explicitly invokes Blender.
+python assets/source/create_boss.py $manifest --build-asset
+
+# Validate manifests and generated-file drift without writing.
+python assets/source/create_boss.py --check
+```
+
+After copying, remove `"template": true` and replace every placeholder path and
+gameplay value before running the generator.
+
+For a direct model, set `asset.source` to the checked-in `.glb`;
+`asset.runtime_glb` defaults to that path and no builder is required. A `.blend`
+source must declare both `asset.builder` and `asset.runtime_glb`; the builder
+must preserve the source and write the declared runtime GLB. Asset builds never
+run without `--build-asset`.
+
+Generation writes `game/enemies/boss/definitions/<id>.tres`,
+`game/enemies/boss/generated/<id>_spec.gd`, and
+`game/enemies/boss_catalog.gd`. Never hand-edit those outputs; edit the manifest
+and regenerate. Generic controller and scene scaffolds are intentionally
+editable after their one-time creation. Custom controller scenes/scripts stay
+hand-authored; their script must extend `BossController` and call
+`super._ready()` before encounter-specific setup.
+
+Each move has a unique `id`, a `behavior`, animation-stage mappings to clips
+declared in `animations`, and optional JSON-safe `parameters`. Generic bosses
+use the built-in `idle`, `chase`, `fly`, `melee`, `area`, `charge`, and
+`projectile` behaviors. A custom controller may use `custom:<id>` metadata and
+own that behavior itself. To add a reusable framework move, extend `BossMove`,
+add it to `BossMoveRegistry`, and add the same behavior to
+`create_boss.py` validation; runtime `register_custom()` calls must happen
+before the controller initializes.
+
+Pretrigger IDs are declarative metadata. `arena_entry`, `desert_flyby`, and
+`caldera_run` are recognized; a custom controller may own a recognized
+metadata-only trigger. A reusable trigger implementation extends
+`BossPretrigger` and is registered with `BossPretriggerRegistry` before boss
+initialization.
+
+`planet_surface` locations require a unit `direction`, degree `facing`,
+non-negative `clearance`, and `surface_arc` arena distance. `world_space`
+locations require a GameWorld-relative `parent`, local `origin`, degree
+`orientation`, and `euclidean` arena distance; they use `BossWorldAnchor`, not
+`SurfaceAnchor`. In both modes, arena radius and detection/reset values come
+from the manifest.
+
+`BossDirector` first discovers authored bosses, then deterministically creates
+only missing catalog entries. `extensions.site_node_name` and
+`extensions.boss_node_name` give stable paths; `site_script` optionally supplies
+a planet-surface `Landmark`. Every peer uses the same catalog and authored world,
+so do not move placement into random runtime code.
+
+After `python assets/source/create_boss.py --check`, run all three boss
+regressions:
+
+```powershell
+godot --headless --path . dev/_bigfoot_boss_test.tscn
+godot --headless --path . dev/_sandworm_boss_test.tscn
+godot --headless --path . dev/_volcanoronomous_boss_test.tscn
+```
+
 ## Bigfoot boss character
 
 `source/meshmaker/bigfoot.blend` is read-only. `build_bigfoot.py` hashes it

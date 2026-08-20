@@ -1,0 +1,20 @@
+[gd_scene load_steps=3 format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_hat"]
+albedo_color = Color(0.34, 0.23, 0.62, 1)
+roughness = 0.74
+
+[sub_resource type="CylinderMesh" id="Mesh_hat"]
+material = SubResource("Material_hat")
+top_radius = 0.025
+bottom_radius = 0.29
+height = 0.54
+radial_segments = 18
+
+[node name="PlaceholderWizardHat" type="Node3D"]
+
+[node name="HatMesh" type="MeshInstance3D" parent="."]
+position = Vector3(0.04, 1.79, 0)
+rotation = Vector3(0, 0, -0.13)
+mesh = SubResource("Mesh_hat")
+metadata/wardrobe_preserve_transform = true

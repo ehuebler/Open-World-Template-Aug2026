@@ -76,7 +76,10 @@ extends SurfaceAnchor
 ## Zero means a species is not worth cutting, which is what grass will be when
 ## [GroundCover] grows the same field. Nothing about the tree changes when it is
 ## harvested rather than shot; this is only what the harvester is owed.
-@export var harvest_yield := 4.6
+## The landing claim only has nine reliably reachable trees. Fourteen per metre lets
+## that finite stand fund a full 32-Meep colony, its roads and eleven huts instead of
+## exhausting the entire economy part way through the housing it already requested.
+@export var harvest_yield := 14.0
 @export_range(0.0, 1.0) var break_momentum_keep := 0.58
 @export_enum("Organic", "Wood", "Crystal") var break_effect := 1
 @export var break_effect_color := Color(0.92, 0.16, 0.44, 1.0)
@@ -504,7 +507,36 @@ func resolve_flora_impact(collider: CollisionShape3D, impact_speed: float,
 		return answer
 	_fell(index, at, impact_speed, visual_height)
 	answer["broken"] = true
+	var reward := impact_biomass_value(visual_height)
+	if reward > 0.0:
+		answer["biomass"] = maxf(roundf(reward), 1.0)
+		answer["biomass_key"] = PackedInt32Array([index])
+		answer["biomass_height"] = visual_height
 	return answer
+
+
+## Host-side confirmation for a break first simulated by a remote player's body.
+## The stable tree index makes repeated slide contacts and repeated packets a
+## single claim. Height is derived from the authored tree rather than trusted.
+func claim_impact_biomass(key: PackedInt32Array, _claimed_height: float,
+		at: Vector3) -> float:
+	if key.size() != 1 or not at.is_finite():
+		return 0.0
+	var index := key[0]
+	if index < 0 or index >= _trees.size() or _broken_trees.has(index):
+		return 0.0
+	var root := global_transform * _trees[index].origin
+	var visual_height := _trees[index].basis.y.length() * _authored_height
+	# A trunk or crown contact can be anywhere up the plant, but not somewhere
+	# else in the field. This also rejects fabricated indices around a real hit.
+	if root.distance_to(at) > visual_height + 6.0:
+		return 0.0
+	var reward := impact_biomass_value(visual_height)
+	if reward <= 0.0:
+		return 0.0
+	_tree_damage.erase(index)
+	_fell(index, at, 0.0, visual_height)
+	return maxf(roundf(reward), 1.0)
 
 
 ## Hit points one generated tree carries.
@@ -688,6 +720,45 @@ func standing_near(centre: Vector3, radius: float) -> PackedVector4Array:
 ## the tree is the thing that knows it.
 func harvest_value(visual_height: float) -> float:
 	return maxf(harvest_yield, 0.0) * maxf(visual_height, 0.0)
+
+
+func impact_biomass_value(visual_height: float) -> float:
+	return harvest_value(visual_height)
+
+
+## Fells the exact standing tree rooted near [param root].
+##
+## Deliberate harvesting is different from an explosion: the worker has already spent
+## its chopping timer on one selected plant, so success must mean that plant disappeared,
+## not merely that some grass or a neighbouring flower absorbed the same area hit. The
+## break still goes through [_fell], so hiding both MultiMesh instances, disabling its
+## colliders, effects, reconciliation and late-join snapshots remain identical to an
+## ability-felled tree.
+func harvest_at(root: Vector3, radius: float, strength: float) -> bool:
+	if _trees.is_empty() or radius <= 0.0 or not root.is_finite():
+		return false
+	var to_world := global_transform
+	if (to_world * _bound_centre).distance_to(root) > radius + _bound_radius:
+		return false
+	var nearest := -1
+	var nearest_distance := radius * radius
+	for index in _trees.size():
+		if _broken_trees.has(index):
+			continue
+		var distance := (to_world * _trees[index].origin).distance_squared_to(root)
+		if distance <= nearest_distance:
+			nearest = index
+			nearest_distance = distance
+	if nearest < 0:
+		return false
+	var actual_root := to_world * _trees[nearest].origin
+	var visual_height := _trees[nearest].basis.y.length() * _authored_height
+	var centre := _host.global_position if _host != null else Vector3.ZERO
+	var up := (actual_root - centre).normalized()
+	_tree_damage.erase(nearest)
+	_fell(nearest, actual_root + up * (visual_height * 0.5),
+		maxf(strength, 0.0), visual_height)
+	return true
 
 
 ## The trees felled since this was last asked, forgetting them as it answers.

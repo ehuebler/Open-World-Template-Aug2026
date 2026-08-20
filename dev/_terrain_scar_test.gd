@@ -45,6 +45,7 @@ func _ready() -> void:
 	_check_wire()
 	_check_warped_rim()
 	_check_authored_ability_scars()
+	_check_threaded_publication()
 
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	NetworkManager.is_single_player = true
@@ -136,6 +137,68 @@ func _check_registry() -> void:
 	scars.clear()
 	_expect(scars.count() == 0 and is_zero_approx(scars.depth_at(here)),
 		"clearing forgets everything")
+
+
+## Ground-cover and terrain workers read this registry while ability impacts and
+## save restoration publish replacements on the main thread. Exercise that
+## handoff directly: every reader must retain a valid immutable generation even
+## while hundreds of newer generations replace it.
+func _check_threaded_publication() -> void:
+	var scars := TerrainScars.new()
+	scars.planet_radius = 8000.0
+	var centre := Vector3(0.31, 0.89, 0.33).normalized()
+	var east := centre.cross(Vector3.UP).normalized()
+	for seed_index in TerrainScars.LIMIT:
+		var seed_scar := TerrainScars.Scar.new()
+		seed_scar.direction = (centre + east
+			* (float(seed_index % 31) - 15.0) * 0.0000008).normalized()
+		seed_scar.radius = 18.0
+		seed_scar.depth = 1.0
+		seed_scar.char = 0.35
+		scars.add(seed_scar)
+	var readers: Array[Thread] = []
+	for worker in 4:
+		var thread := Thread.new()
+		var error := thread.start(
+			_threaded_scar_reads.bind(scars, centre, east, worker, 20000))
+		if error == OK:
+			readers.append(thread)
+		else:
+			_expect(false, "terrain scar reader thread %d starts" % worker)
+
+	for generation in 900:
+		var scar := TerrainScars.Scar.new()
+		scar.direction = (centre + east
+			* (float(generation % 31) - 15.0) * 0.0000008).normalized()
+		scar.radius = 18.0
+		scar.depth = 1.0 + float(generation % 5) * 0.1
+		scar.char = 0.35
+		scars.add(scar)
+		# Save loading replaces the full registry rather than appending. Doing
+		# that amid active reads is the highest-churn publication path.
+		if generation % 113 == 112:
+			scars.from_wire(scars.to_wire())
+
+	var completed := true
+	for thread in readers:
+		completed = int(thread.wait_to_finish()) == 20000 and completed
+	_expect(completed and scars.count() == TerrainScars.LIMIT,
+		"immutable scar generations survive concurrent terrain reads")
+
+
+func _threaded_scar_reads(scars: TerrainScars, centre: Vector3, east: Vector3,
+		worker: int, iterations: int) -> int:
+	var completed := 0
+	for index in iterations:
+		var offset := float((index * 17 + worker * 7) % 31 - 15) * 0.0000008
+		var at := (centre + east * offset).normalized()
+		var depth := scars.depth_at(at, 1.0)
+		if depth >= 0.0 and is_finite(depth):
+			completed += 1
+		if index % 32 == 0:
+			scars.tint(at, Color.WHITE)
+			scars.overlaps(at * scars.planet_radius, 20.0, 1.0)
+	return completed
 
 
 func _check_profiles() -> void:

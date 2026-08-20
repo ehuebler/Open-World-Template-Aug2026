@@ -84,10 +84,13 @@ func bind(camera: Camera3D) -> void:
 ## arrives at and the range it arrives by.
 func drawn(least := 0.5) -> PackedStringArray:
 	var titles := PackedStringArray()
-	for landmark: Landmark in _markers:
+	for landmark_variant: Variant in _markers:
+		var landmark := landmark_variant as Node3D
+		if landmark == null:
+			continue
 		var marker: Control = _markers[landmark]
 		if marker.visible and marker.modulate.a > least:
-			titles.append(landmark.title)
+			titles.append(LandmarkAccess.title(landmark))
 	return titles
 
 
@@ -95,18 +98,18 @@ func _process(_delta: float) -> void:
 	if not enabled:
 		# Markers already built are hidden rather than freed, so switching back on
 		# is the same one line and does not have to rebuild anything.
-		for landmark: Landmark in _markers:
-			(_markers[landmark] as Control).visible = false
+		for landmark_variant: Variant in _markers:
+			(_markers[landmark_variant] as Control).visible = false
 		return
 	if _camera == null or not _camera.is_inside_tree():
 		return
 	var eye := _camera.global_position
 	var half := size * 0.5
 	for node in get_tree().get_nodes_in_group(Landmark.GROUP):
-		var landmark := node as Landmark
+		var landmark := LandmarkAccess.as_location(node)
 		if landmark == null:
 			continue
-		if not landmark.waypoint:
+		if not LandmarkAccess.waypoint_enabled(landmark):
 			# Only hidden if it has ever been drawn, so a landmark that is
 			# silent from the start never has a marker built for it at all.
 			if _markers.has(landmark):
@@ -115,7 +118,7 @@ func _process(_delta: float) -> void:
 		_place(landmark, _marker_for(landmark), eye, half)
 
 
-func _place(landmark: Landmark, marker: Control, eye: Vector3,
+func _place(landmark: Node3D, marker: Control, eye: Vector3,
 		half: Vector2) -> void:
 	var at := landmark.global_position
 	var away := eye.distance_to(at)
@@ -184,14 +187,15 @@ func _to_edge(toward: Vector2, half: Vector2) -> Vector2:
 ## sized on purpose: everything about the marker is positioned relative to the
 ## one point that means anything, and a rect would only be something else to keep
 ## in step with it.
-func _marker_for(landmark: Landmark) -> Control:
+func _marker_for(landmark: Node3D) -> Control:
 	if _markers.has(landmark):
 		return _markers[landmark]
 
+	var location_tint := LandmarkAccess.tint(landmark)
 	var marker := Control.new()
 	marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	marker.set_meta(&"toward", Vector2.ZERO)
-	marker.set_meta(&"tint", landmark.tint)
+	marker.set_meta(&"tint", location_tint)
 	marker.draw.connect(_draw_marker.bind(marker))
 	add_child(marker)
 
@@ -200,9 +204,13 @@ func _marker_for(landmark: Landmark) -> Control:
 	column.add_theme_constant_override(&"separation", 2)
 	marker.add_child(column)
 
-	column.add_child(_line(landmark.title, TITLE_SIZE, TITLE_OUTLINE, landmark.tint))
+	column.add_child(_line(
+		LandmarkAccess.title(landmark),
+		TITLE_SIZE,
+		TITLE_OUTLINE,
+		location_tint))
 	var distance := _line("", DISTANCE_SIZE, DISTANCE_OUTLINE,
-		landmark.tint.lerp(PALETTE.text_muted, 0.55))
+		location_tint.lerp(PALETTE.text_muted, 0.55))
 	column.add_child(distance)
 
 	marker.set_meta(&"column", column)

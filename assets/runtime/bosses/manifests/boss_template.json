@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "template": true,
+  "id": "new_boss",
+  "class_name": "NewBoss",
+  "display_name": "New Boss",
+  "description": "Copy this template, remove the template flag, and replace every placeholder path and gameplay value.",
+  "asset": {
+    "source": "res://assets/runtime/characters/new_boss.glb"
+  },
+  "controller": {
+    "mode": "generic",
+    "scene": "res://game/enemies/new_boss/new_boss.tscn",
+    "script": "res://game/enemies/new_boss/new_boss.gd"
+  },
+  "health": 1000.0,
+  "arena": {
+    "radius": 100.0,
+    "detection_radius": 90.0,
+    "reset_delay": 5.0,
+    "distance_mode": "surface_arc"
+  },
+  "combat": {
+    "radius": 1.0,
+    "center_height": 1.0
+  },
+  "collision": {
+    "shape": "capsule",
+    "radius": 1.0,
+    "height": 2.0,
+    "offset": [
+      0.0,
+      1.0,
+      0.0
+    ]
+  },
+  "animations": {
+    "rest": "Idle",
+    "walk": "Walk",
+    "attack": "Attack",
+    "defeat": "Defeat"
+  },
+  "moves": [
+    {
+      "id": "chase",
+      "behavior": "chase",
+      "animations": {
+        "move": "Walk"
+      },
+      "parameters": {
+        "speed": 8.0,
+        "acceleration": 24.0,
+        "stop_distance": 3.25,
+        "duration": 0.8,
+        "priority": -10
+      }
+    },
+    {
+      "id": "melee",
+      "behavior": "melee",
+      "animations": {
+        "attack": "Attack"
+      },
+      "parameters": {
+        "damage": 20.0,
+        "range": 3.5,
+        "radius": 1.25,
+        "windup": 0.35,
+        "recovery": 0.45,
+        "cooldown": 1.4,
+        "reaction": "knockback",
+        "knockback": 8.0,
+        "parryable": true,
+        "priority": 30
+      }
+    },
+    {
+      "id": "ground_burst",
+      "behavior": "area",
+      "animations": {
+        "attack": "Attack"
+      },
+      "parameters": {
+        "damage": 14.0,
+        "radius": 5.0,
+        "max_range": 8.0,
+        "windup": 0.65,
+        "recovery": 0.55,
+        "cooldown": 4.0,
+        "falloff": 1.0,
+        "radial_impulse": 9.0,
+        "radial_lift": 3.0,
+        "priority": 20
+      }
+    },
+    {
+      "id": "ranged_shot",
+      "behavior": "projectile",
+      "animations": {
+        "attack": "Attack"
+      },
+      "parameters": {
+        "damage": 16.0,
+        "min_range": 7.0,
+        "max_range": 45.0,
+        "speed": 26.0,
+        "radius": 0.55,
+        "visual_size": 0.65,
+        "lifetime": 3.0,
+        "release": 0.4,
+        "recovery": 0.4,
+        "cooldown": 2.5,
+        "blocked_by_world": true,
+        "color": "#ff6a24",
+        "priority": 15
+      }
+    }
+  ],
+  "pretriggers": [
+    "arena_entry"
+  ],
+  "location": {
+    "mode": "planet_surface",
+    "direction": [
+      0.0,
+      1.0,
+      0.0
+    ],
+    "facing": 0.0,
+    "clearance": 0.0
+  },
+  "waypoint": {
+    "enabled": true,
+    "title": "New Boss",
+    "tint": "#f7b32b",
+    "show_beyond": 1600.0,
+    "aimed_beyond": 2600.0,
+    "hide_beyond": 4500.0
+  },
+  "tags": [
+    "boss"
+  ],
+  "extensions": {
+    "site_node_name": "NewBossSite",
+    "boss_node_name": "NewBoss",
+    "template_note": "site_script is optional for planet_surface locations. For world_space, site_node_name names the BossWorldAnchor. Use custom:<id> behaviors only with a custom controller."
+  }
+}

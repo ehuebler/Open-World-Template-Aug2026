@@ -30,6 +30,10 @@ enum Kind {
 	BUILD,
 	## Reserved: fell a tree or a bush and carry it home.
 	MINE,
+	## Append-only: add a safe vertical floor to an existing residence.
+	UPGRADE,
+	## Append-only regional infrastructure shared by two neighbouring cities.
+	SHARED_WALL,
 }
 
 
@@ -49,6 +53,10 @@ class Job extends RefCounted:
 	var worker_cap := 1
 	## How many are on it now.
 	var workers := 0
+	## A posted job may close its door while its current crew finishes or leaves. The
+	## cloner uses this when the bank drops below one use: deleting the job while
+	## Meeps are inside would also delete the only reference that lets them come out.
+	var enabled := true
 	## Job seconds of work left. Zero completes on arrival.
 	var remaining := 0.0
 	## Resources held back from the colony's bank when this was posted. Kept on the
@@ -64,11 +72,22 @@ class Job extends RefCounted:
 	var payout := 0.0
 
 	func open() -> bool:
-		return workers < worker_cap
+		return enabled and workers < worker_cap
 
 
 var _jobs: Dictionary = {}
 var _next_id := 1
+var _kind_jobs: Array[PackedInt32Array] = []
+var _revision := 0
+
+
+func _init() -> void:
+	_ensure_kind_index()
+
+
+func _ensure_kind_index() -> void:
+	while _kind_jobs.size() < Kind.size():
+		_kind_jobs.push_back(PackedInt32Array())
 
 
 ## Posts work and returns its id, or zero if the board refused it.
@@ -86,6 +105,9 @@ func post(kind: Kind, at: Vector2i, priority := 1.0, worker_cap := 1,
 	job.remaining = maxf(seconds, 0.0)
 	job.reserved = maxf(reserved, 0.0)
 	_jobs[job.id] = job
+	_ensure_kind_index()
+	_kind_jobs[kind].push_back(job.id)
+	_revision += 1
 	return job.id
 
 
@@ -146,11 +168,92 @@ func release(id: int) -> void:
 ## their job and being handed nothing, which is also what happens to a Meep whose
 ## work was cancelled from under it.
 func finish(id: int) -> void:
+	var entry := job(id)
+	if entry != null:
+		_ensure_kind_index()
+		_kind_jobs[entry.kind].erase(id)
 	_jobs.erase(id)
+	_revision += 1
 
 
 func clear() -> void:
 	_jobs.clear()
+	_kind_jobs.clear()
+	_ensure_kind_index()
+	_revision += 1
+
+
+func snapshot() -> Dictionary:
+	var rows: Array = []
+	var ids := _jobs.keys()
+	ids.sort()
+	for id_variant: Variant in ids:
+		var entry := job(int(id_variant))
+		if entry == null:
+			continue
+		rows.append({
+			"id": entry.id,
+			"kind": int(entry.kind),
+			"at": entry.at,
+			"priority": entry.priority,
+			"worker_cap": entry.worker_cap,
+			"workers": entry.workers,
+			"enabled": entry.enabled,
+			"remaining": entry.remaining,
+			"reserved": entry.reserved,
+			"subject": entry.subject,
+			"spot": entry.spot,
+			"payout": entry.payout,
+		})
+	return {
+		"next_id": _next_id,
+		"jobs": rows,
+	}
+
+
+func apply_snapshot(state: Dictionary) -> void:
+	_jobs.clear()
+	_kind_jobs.clear()
+	_ensure_kind_index()
+	_next_id = 1
+	var rows_value: Variant = state.get("jobs", [])
+	if not rows_value is Array:
+		return
+	for row_value: Variant in rows_value:
+		if not row_value is Dictionary:
+			continue
+		var row := row_value as Dictionary
+		var id := maxi(int(row.get("id", 0)), 0)
+		var kind := clampi(
+			int(row.get("kind", Kind.IDLE)), Kind.IDLE, Kind.SHARED_WALL)
+		if id <= 0 or kind == Kind.IDLE or _jobs.has(id):
+			continue
+		var entry := Job.new()
+		entry.id = id
+		entry.kind = kind as Kind
+		var at_value: Variant = row.get("at", Vector2i.ZERO)
+		entry.at = at_value as Vector2i \
+			if at_value is Vector2i else Vector2i.ZERO
+		entry.priority = float(row.get("priority", 1.0))
+		if not is_finite(entry.priority):
+			entry.priority = 1.0
+		entry.worker_cap = maxi(int(row.get("worker_cap", 1)), 1)
+		entry.workers = clampi(
+			int(row.get("workers", 0)), 0, entry.worker_cap)
+		entry.enabled = bool(row.get("enabled", true))
+		entry.remaining = maxf(float(row.get("remaining", 0.0)), 0.0)
+		entry.reserved = maxf(float(row.get("reserved", 0.0)), 0.0)
+		entry.subject = int(row.get("subject", -1))
+		var spot_value: Variant = row.get("spot", Vector3.ZERO)
+		entry.spot = spot_value as Vector3 \
+			if spot_value is Vector3 and (spot_value as Vector3).is_finite() \
+			else Vector3.ZERO
+		entry.payout = maxf(float(row.get("payout", 0.0)), 0.0)
+		_jobs[id] = entry
+		_kind_jobs[entry.kind].push_back(id)
+		_next_id = maxi(_next_id, id + 1)
+	_next_id = maxi(_next_id, int(state.get("next_id", _next_id)))
+	_revision += 1
 
 
 ## Progresses a job by one Meep's contribution, and reports whether that finished
@@ -170,18 +273,35 @@ func work(id: int, seconds: float) -> bool:
 ## town. The seed is what stops identical Meeps making identical choices — without
 ## it, ties break the same way every tick and crews arrive in lockstep.
 func best_for(from: Vector2i, cell_size: float, seed := 0) -> int:
+	var every_kind: Array[int] = []
+	for kind in range(Kind.WANDER, Kind.size()):
+		every_kind.push_back(kind)
+	return best_for_kinds(from, cell_size, seed, every_kind)
+
+
+## Role-filtered lookup walks only the indexed queues that role may perform.
+func best_for_kinds(from: Vector2i, cell_size: float, seed: int,
+		kinds: Array[int]) -> int:
 	var best := 0
 	var best_score := -INF
 	var jitter := float(absi(seed) % 1000) / 1000.0
-	for entry_variant: Variant in _jobs.values():
-		var entry := entry_variant as Job
-		if entry == null or not entry.open():
+	_ensure_kind_index()
+	for kind in kinds:
+		if kind <= Kind.IDLE or kind >= _kind_jobs.size():
 			continue
-		var away := Vector2(entry.at - from).length() * cell_size
-		# Distance in metres against priority in units of the same, so a job worth
-		# twice as much is worth walking a hundred metres further for.
-		var score := entry.priority * 100.0 - away + jitter * 12.0
-		if score > best_score:
-			best_score = score
-			best = entry.id
+		for id in _kind_jobs[kind]:
+			var entry := job(id)
+			if entry == null or not entry.open():
+				continue
+			var away := Vector2(entry.at - from).length() * cell_size
+			# Distance in metres against priority in units of the same, so a job worth
+			# twice as much is worth walking a hundred metres further for.
+			var score := entry.priority * 100.0 - away + jitter * 12.0
+			if score > best_score:
+				best_score = score
+				best = entry.id
 	return best
+
+
+func revision() -> int:
+	return _revision

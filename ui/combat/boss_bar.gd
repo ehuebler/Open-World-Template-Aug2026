@@ -1,9 +1,9 @@
 class_name BossBar
 extends Control
 
-## Top-centre boss title and health strip for one arena encounter.
+## Top-centre title and health strip for whichever arena encounter is active.
 
-const TITLE := "Bigfoot"
+const DEFAULT_TITLE := "Boss"
 const WIDTH := 360.0
 const TOP := 2.0
 const HEIGHT := 32.0
@@ -20,6 +20,7 @@ var _display_share := 1.0
 var _target_share := 1.0
 var _warning_elapsed := 0.0
 var _warning_active := false
+var _encounter_title := DEFAULT_TITLE
 
 
 func _init() -> void:
@@ -73,6 +74,18 @@ func warning_active() -> bool:
 	return _warning_active
 
 
+func set_title(title: String) -> void:
+	_encounter_title = title.strip_edges()
+	if _encounter_title.is_empty():
+		_encounter_title = DEFAULT_TITLE
+	if _title != null:
+		_title.text = _encounter_title
+
+
+func encounter_title() -> String:
+	return _encounter_title
+
+
 func _build() -> void:
 	var centre := CenterContainer.new()
 	centre.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -98,7 +111,7 @@ func _build() -> void:
 	_root.add_child(pad)
 
 	_title = Label.new()
-	_title.text = TITLE
+	_title.text = _encounter_title
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	RedHudTheme.label(_title, 12)
 	_title.mouse_filter = Control.MOUSE_FILTER_IGNORE

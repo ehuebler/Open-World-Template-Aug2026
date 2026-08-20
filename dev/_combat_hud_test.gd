@@ -46,6 +46,11 @@ class TestBoss extends Node3D:
 		boundary_visible = shown
 
 
+class SelfReportingTarget extends Node3D:
+	func combat_reports_own_damage_feedback() -> bool:
+		return true
+
+
 func _ready() -> void:
 	_snapshot_settings()
 	for item_id: String in ItemDB.ITEMS:
@@ -161,6 +166,8 @@ func _check_compact_player_hud() -> void:
 func _check_boss_bar() -> void:
 	var bar: BossBar = _hud.call("boss_bar")
 	_expect(bar != null, "boss bar exists")
+	# Titles are encounter data now that the world has more than one boss.
+	_hud.refresh(0.0)
 	var title_label: Label = null
 	for node: Node in bar.find_children("*", "Label", true, false):
 		if (node as Label).text == "Bigfoot":
@@ -353,6 +360,40 @@ func _check_local_feedback() -> void:
 	_player.combat_feedback().damage_taken(12.0, _player.global_position, 0)
 	await get_tree().process_frame
 	_expect(_count == 1, "local damage number signal fires once")
+	_player.combat_feedback().biomass_gained(7.0, _player.global_position)
+	await get_tree().process_frame
+	_expect(_count == 2, "a biomass gain uses the local number pipeline")
+	var witnessed := DamageNumberEvent.new()
+	witnessed.amount = 5.0
+	witnessed.world_position = _player.camera.global_position \
+		- _player.camera.global_basis.z * 5.0
+	witnessed.incoming = true
+	witnessed.target_key = "landing:0"
+	_player.combat_feedback().world_damage(witnessed)
+	_expect(_count == 3,
+		"damage to a visible world-owned Meep reaches the local number layer")
+	witnessed.world_position = _player.camera.global_position \
+		+ _player.camera.global_basis.z * 5.0
+	_player.combat_feedback().world_damage(witnessed)
+	_expect(_count == 3,
+		"damage behind the camera does not appear at the centre of the HUD")
+	var self_reporting := SelfReportingTarget.new()
+	_world.add_child(self_reporting)
+	var reported_hit := DamageHit.impact(witnessed.world_position, 0.1, 5.0)
+	_player.combat_damage_dealt(self_reporting, 5.0, reported_hit)
+	_expect(_count == 3,
+		"a self-reporting Meep target suppresses the aggregate city-centre number")
+	self_reporting.queue_free()
+	var reward := DamageNumberEvent.new()
+	reward.amount = 7.0
+	reward.reward = true
+	var wire_reward := DamageNumberEvent.from_wire(reward.to_wire())
+	var layer := DamageNumberLayer.new()
+	var reward_colour: Color = layer._colour(wire_reward)
+	_expect(wire_reward.reward and layer._text(wire_reward, 7.0) == "+7"
+		and reward_colour.g > reward_colour.r
+		and reward_colour.g > reward_colour.b,
+		"biomass numbers survive the wire as a green +X reward")
 	remote.queue_free()
 
 

@@ -63,6 +63,9 @@ static func equip(character: Node, slot: String, source := "") -> MeshInstance3D
 		push_error("Wardrobe: %s contains no MeshInstance3D" % source)
 		instance.free()
 		return null
+	var authored_transform := garment.transform
+	var preserve_transform := bool(garment.get_meta(
+		&"wardrobe_preserve_transform", false))
 
 	# Lift the garment out of its own imported scene, then discard the rest of
 	# that scene including its duplicate skeleton.
@@ -72,7 +75,8 @@ static func equip(character: Node, slot: String, source := "") -> MeshInstance3D
 	unequip(character, slot)
 	garment.name = NODE_PREFIX + slot
 	skeleton.add_child(garment)
-	garment.transform = Transform3D.IDENTITY
+	garment.transform = authored_transform if preserve_transform \
+		else Transform3D.IDENTITY
 	# Relative to the garment, so it resolves to the Skeleton3D it now sits under.
 	garment.skeleton = NodePath("..")
 	return garment

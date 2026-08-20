@@ -13,6 +13,9 @@ const DEFAULT_SKIN_REVISION := 1
 const LOADOUT_SCHEMA_REVISION := 1
 const HOTBAR_SLOTS := 3
 const ABILITY_SLOTS := 2
+## The authored camera-following outline. Stored as an ordinary sRGB Color for
+## the settings UI, then converted once before entering the linear-space shader.
+const DEFAULT_RIM_LIGHT_COLOR := Color(0.20, 1.0, 0.58, 1.0)
 const DEFAULTS := {
 	"graphics": {
 		"window_mode": 0,
@@ -52,6 +55,7 @@ const DEFAULTS := {
 		"mouse_sensitivity": 0.35,
 		"invert_y": false,
 		"fov": 75.0,
+		"rim_light_color": DEFAULT_RIM_LIGHT_COLOR,
 	},
 	## Who you are: the name and the look. Body and skin ids, sparse slot→item
 	## map, and sparse slot/"body"→HTML tint map. The home screen and the
@@ -70,6 +74,13 @@ const DEFAULTS := {
 		"hotbar": ["", "", ""],
 		"abilities": ["", ""],
 		"backpack": [],
+		## Private player progression mirrored authoritatively by the session host.
+		"gold": 0.0,
+		"ability_progress": {
+			"laser_eyes": 1,
+			"meteor_punch": 1,
+		},
+		"ability_stat_progress": {},
 		## CharacterDB raises this after giving a new save its finite starter
 		## wardrobe. Resetting defaults returns it to zero so the wardrobe is
 		## deliberately seeded again instead of leaving a fresh backpack empty.
@@ -256,6 +267,16 @@ func _apply_setting(section: StringName, key: StringName, value: Variant) -> voi
 				&"graphics", &"vsync", DEFAULTS["graphics"]["vsync"])) else int(value)
 		"graphics/render_scale":
 			get_tree().root.scaling_3d_scale = float(value)
+		"gameplay/rim_light_color":
+			var colour := value as Color \
+				if value is Color else DEFAULT_RIM_LIGHT_COLOR
+			# Use an explicitly linear vec3 rather than a color shader global so
+			# Godot cannot vary implicit conversion across renderers. Doing this
+			# once here also avoids an sRGB pow() in every outlined fragment.
+			var linear := colour.srgb_to_linear()
+			RenderingServer.global_shader_parameter_set(
+				&"camera_rim_user_color",
+				Vector3(linear.r, linear.g, linear.b))
 		"graphics/atmospheric_scattering":
 			# A global shader parameter rather than a uniform on each material,
 			# because the sky and the atmosphere shell draw two halves of one

@@ -17,6 +17,7 @@ const MISS_RETRACT := 0.16
 var source: OnlinePlayer
 var target: Node3D
 var definition: AbilityDefinition
+var stats: Dictionary = {}
 var target_path := NodePath()
 var simulates := false
 
@@ -44,11 +45,12 @@ static func create(world: Node, caster: OnlinePlayer, caught: Node3D,
 	tether.source = caster
 	tether.target = caught
 	tether.definition = record
+	tether.stats = caster.ability_stats(record.ability_id)
 	tether.target_path = path
 	tether.simulates = host_simulates
-	tether._left = maxf(float(record.stats.get("duration", 2.0)), 0.1)
+	tether._left = maxf(float(tether.stats.get("duration", 2.0)), 0.1)
 	tether._rope_length = maxf(float(
-		record.stats.get("rope_length", 10.0)), 1.0)
+		tether.stats.get("rope_length", 10.0)), 1.0)
 	var carried: Variant = caught.get("velocity")
 	if carried is Vector3 and (carried as Vector3).is_finite():
 		tether._velocity = carried as Vector3
@@ -63,9 +65,10 @@ static func create_miss(world: Node, caster: OnlinePlayer,
 	var tether := AbilityLassoTether.new()
 	tether.source = caster
 	tether.definition = record
+	tether.stats = caster.ability_stats(record.ability_id)
 	tether._miss = true
 	var from := caster.hand_point(false)
-	var reach := maxf(float(record.stats.get("range", 30.0)), 1.0)
+	var reach := maxf(float(tether.stats.get("range", 30.0)), 1.0)
 	var along := caster.aim_direction(from).normalized()
 	if along.length_squared() < 0.5:
 		along = caster.look_direction().normalized()
@@ -77,7 +80,7 @@ static func create_miss(world: Node, caster: OnlinePlayer,
 	var hit := caster.get_world_3d().direct_space_state.intersect_ray(query)
 	if not hit.is_empty():
 		tether._miss_to = hit.get("position", tether._miss_to)
-	var speed := maxf(float(record.stats.get("speed", 120.0)), 1.0)
+	var speed := maxf(float(tether.stats.get("speed", 120.0)), 1.0)
 	tether._miss_out = maxf(from.distance_to(tether._miss_to) / speed, 0.06)
 	world.add_child(tether)
 	return tether
@@ -176,7 +179,7 @@ func _simulate_target(delta: float) -> void:
 	if drive.length_squared() < 0.001:
 		drive = source.global_basis.x
 	var acceleration := maxf(float(
-		definition.stats.get("swing_acceleration", 70.0)), 0.0) / mass
+		stats.get("swing_acceleration", 70.0)), 0.0) / mass
 	_velocity += drive.normalized() * acceleration * delta
 	if movement_drive.length_squared() > 0.01:
 		# Running, flying, or strafing around the anchor adds bounded
@@ -187,7 +190,7 @@ func _simulate_target(delta: float) -> void:
 		_velocity += movement_drive.normalized() \
 			* acceleration * movement_share * 0.65 * delta
 	var maximum := maxf(float(
-		definition.stats.get("max_speed", 55.0)), 1.0) / sqrt(mass)
+		stats.get("max_speed", 55.0)), 1.0) / sqrt(mass)
 	_velocity = _velocity.limit_length(maximum)
 
 	# A far catch reels toward the authored swing radius instead of teleporting
@@ -218,7 +221,7 @@ func _simulate_target(delta: float) -> void:
 	if normal.length_squared() > 0.001:
 		_velocity = _velocity.bounce(normal.normalized()) * 0.32
 	if _collision_left > 0.0 or impact_speed < float(
-			definition.stats.get("impact_speed", 10.0)):
+			stats.get("impact_speed", 10.0)):
 		return
 	_collision_left = COLLISION_DEBOUNCE
 	var point_variant: Variant = collision.get(
@@ -237,14 +240,14 @@ func _damage_combatant(combatant: Node, at: Vector3,
 			or not combatant.has_method(&"combat_faction"):
 		return
 	var threshold := maxf(float(
-		definition.stats.get("impact_speed", 10.0)), 0.1)
+		stats.get("impact_speed", 10.0)), 0.1)
 	var maximum := maxf(float(
-		definition.stats.get("max_speed", 55.0)), threshold + 0.1)
+		stats.get("max_speed", 55.0)), threshold + 0.1)
 	var share := clampf(
 		(impact_speed - threshold) / (maximum - threshold), 0.2, 1.0)
 	var is_player := int(combatant.call(&"combat_faction")) \
 		== DamageHit.Faction.PLAYER
-	var quoted := float(definition.stats.get(
+	var quoted := float(stats.get(
 		"player_damage" if is_player else "damage", 0.0))
 	var hit := DamageHit.impact(
 		at, maxf(_combat_radius(combatant), 0.25), maxf(quoted, 0.0) * share)
@@ -282,7 +285,7 @@ func _update_rope(delta: float) -> void:
 		if target.has_method(&"combat_position") else target.global_position
 	var span := from.distance_to(to)
 	_visual_reach = minf(
-		_visual_reach + maxf(float(definition.stats.get("speed", 120.0)), 1.0)
+		_visual_reach + maxf(float(stats.get("speed", 120.0)), 1.0)
 			* delta,
 		span)
 	var shown_to := from + (to - from).normalized() * _visual_reach \
